@@ -1,0 +1,784 @@
+#include <ernativeui/ERNativeUI.hpp>
+
+#include "localization.hpp"
+
+#include <Windows.h>
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <string_view>
+
+namespace {
+
+HMODULE g_module{};
+std::atomic<std::uint8_t> g_enabled{1};
+std::atomic<std::uint8_t> g_intensity{50};
+std::atomic<std::uint8_t> g_inline_preset{1};
+std::atomic<std::uint8_t> g_popup_preset{1};
+std::atomic<std::uint8_t> g_popup_binary{0};
+std::atomic<std::uint8_t> g_popup_extended{3};
+std::array<std::uint32_t, 32> g_action_numbers{};
+erui::Registration g_registration{};
+erui::RowHandle g_enabled_row{};
+
+struct ShowcaseActionState {
+    explicit ShowcaseActionState(const wchar_t* name) noexcept
+        : debug_name(name) {}
+
+    const wchar_t* debug_name{};
+    std::atomic_uint32_t activation_count{};
+};
+
+// Binding callback state is client-owned and must retain a stable address for
+// the process lifetime. Static storage makes that contract explicit here.
+ShowcaseActionState g_native_dialog_action{L"show-native-ok-dialog"};
+ShowcaseActionState g_toggle_enabled_action{L"toggle-showcase-enabled"};
+ShowcaseActionState g_controller_dialog_action{L"controller-native-dialog"};
+
+struct ColorPickerState {
+    std::mutex mutex{};
+    erui::Color value{};
+};
+
+ColorPickerState g_root_color{{}, {171u, 125u, 99u}};
+ColorPickerState g_subpage_color{{}, {90u, 174u, 63u}};
+
+struct TextInputState {
+    std::mutex mutex{};
+    std::wstring value{};
+};
+
+TextInputState g_player_note{};
+TextInputState g_extended_note{};
+
+struct PopupVariant {
+    std::wstring label{};
+    std::wstring help{};
+    std::wstring message{};
+    erui::AlertOptions options{};
+};
+
+constexpr erui::AlertOptions popup_options(
+    erui::AlertPlacement placement,
+    erui::AlertButtons buttons) noexcept {
+    erui::AlertOptions options{};
+    options.buttons = buttons;
+    options.placement = placement;
+    return options;
+}
+
+std::array<PopupVariant, 14> g_popup_variants{};
+const showcase::Text* g_text{};
+const showcase::TextInputText* g_text_input{};
+const showcase::ColorPickerText* g_color_picker_text{};
+const showcase::SliderText* g_slider_text{};
+
+void initialize_popup_variants(const showcase::Text& text) {
+    constexpr std::array<erui::AlertButtons, 7> buttons{
+        erui::AlertButtons::dismiss_only, erui::AlertButtons::ok,
+        erui::AlertButtons::cancel, erui::AlertButtons::yes,
+        erui::AlertButtons::no, erui::AlertButtons::ok_cancel,
+        erui::AlertButtons::yes_no};
+    constexpr std::array<const wchar_t*, 7> names{
+        nullptr, L"OK", L"CANCEL", L"YES", L"NO",
+        L"OK + CANCEL", L"YES + NO"};
+    for (std::size_t placement = 0; placement < 2; ++placement) {
+        for (std::size_t index = 0; index < buttons.size(); ++index) {
+            PopupVariant& variant = g_popup_variants[placement * buttons.size() + index];
+            variant.label = placement == 0 ? text.bottom : text.center;
+            variant.label += L": ";
+            variant.label += index == 0 ? text.dismiss_only : names[index];
+            variant.help = text.popup_help;
+            variant.message = text.popup_message;
+            variant.options = popup_options(
+                placement == 0 ? erui::AlertPlacement::bottom
+                               : erui::AlertPlacement::center,
+                buttons[index]);
+        }
+    }
+}
+
+void debug(const wchar_t* message) noexcept {
+    OutputDebugStringW(L"[TarnishedUIShowcase] ");
+    OutputDebugStringW(message);
+    OutputDebugStringW(L"\n");
+}
+
+void record_binding_activation(
+    ShowcaseActionState& state,
+    const erui::ActionActivation& activation) noexcept {
+    const std::uint32_t count =
+        state.activation_count.fetch_add(
+            1, std::memory_order_relaxed) + 1;
+    wchar_t message[192]{};
+    _snwprintf_s(
+        message,
+        std::size(message),
+        _TRUNCATE,
+        L"Input binding %ls activated (%u).",
+        state.debug_name,
+        static_cast<unsigned>(count));
+    debug(message);
+
+    // The mask may contain more than one device when alternatives become
+    // active in the same sampled frame.
+    if (activation.includes(erui::InputDevice::controller)) {
+        debug(L"  device: controller");
+    }
+    if (activation.includes(erui::InputDevice::keyboard)) {
+        debug(L"  device: keyboard");
+    }
+    if (activation.includes(erui::InputDevice::mouse)) {
+        debug(L"  device: mouse");
+    }
+}
+
+void ERUI_CALL value_changed(void* context, std::uint8_t value) noexcept {
+    static_cast<std::atomic<std::uint8_t>*>(context)->store(
+        value, std::memory_order_release);
+}
+
+void numeric_slider_changed(
+    const erui::NumericSliderChange& change) noexcept {
+    wchar_t message[192]{};
+    _snwprintf_s(
+        message,
+        std::size(message),
+        _TRUNCATE,
+        L"Numeric slider changed: value=%g scaled=%lld index=%u/%u.",
+        change.value,
+        static_cast<long long>(change.scaled_value),
+        static_cast<unsigned>(change.index),
+        static_cast<unsigned>(change.value_count));
+    debug(message);
+}
+
+void custom_slider_changed(
+    const erui::CustomSliderChange& change) noexcept {
+    wchar_t message[128]{};
+    _snwprintf_s(
+        message,
+        std::size(message),
+        _TRUNCATE,
+        L"Custom slider changed: index=%u/%u.",
+        static_cast<unsigned>(change.index),
+        static_cast<unsigned>(change.value_count));
+    debug(message);
+}
+
+void text_input_changed(
+    TextInputState& state,
+    const erui::TextInputChange& change) noexcept {
+    // TextInputChange::value is borrowed for this callback only. A real mod
+    // should copy it into its own configuration before returning, as here.
+    try {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.value.assign(change.value);
+    } catch (...) {
+        debug(L"Could not copy a confirmed TextInput value.");
+    }
+}
+
+void ERUI_CALL action_pressed(void* context) noexcept {
+    const auto number = context ? *static_cast<std::uint32_t*>(context) : 0u;
+    wchar_t text[96]{};
+    wsprintfW(text, L"Large Settings action %u was pressed.", number);
+    debug(text);
+}
+
+const wchar_t* response_name(erui::AlertResponse response) noexcept {
+    switch (response) {
+    case erui::AlertResponse::none: return L"none";
+    case erui::AlertResponse::primary: return L"primary";
+    case erui::AlertResponse::secondary: return L"secondary";
+    case erui::AlertResponse::dismissed: return L"dismissed";
+    default: return L"unknown";
+    }
+}
+
+const wchar_t* result_name(ERUI_Result result) noexcept {
+    switch (result) {
+    case ERUI_OK: return L"success";
+    case ERUI_INVALID_ARGUMENT: return L"invalid argument";
+    case ERUI_HOST_NOT_READY: return L"host not ready";
+    case ERUI_HOST_FAILED: return L"host failed";
+    case ERUI_UNSUPPORTED_VERSION: return L"unsupported API version";
+    case ERUI_DUPLICATE_PROVIDER_ID: return L"duplicate provider ID";
+    case ERUI_INVALID_HANDLE: return L"invalid handle";
+    case ERUI_ALREADY_COMMITTED: return L"provider already committed";
+    case ERUI_REGISTRATION_CLOSED: return L"registration closed";
+    case ERUI_OUT_OF_MEMORY: return L"out of memory";
+    case ERUI_CALLBACK_REJECTED: return L"callback rejected";
+    case ERUI_INTERNAL_ERROR: return L"internal host error";
+    case ERUI_QUEUE_FULL: return L"alert queue full";
+    case ERUI_NOT_SUPPORTED: return L"not supported";
+    default: return L"unknown result";
+    }
+}
+
+void color_picker_changed(
+    ColorPickerState& state,
+    const erui::ColorPickerChange& change) noexcept {
+    try {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.value = change.value;
+    } catch (...) {
+        debug(L"Could not persist a confirmed ColorPicker value.");
+        return;
+    }
+
+    wchar_t message[128]{};
+    _snwprintf_s(
+        message,
+        std::size(message),
+        _TRUNCATE,
+        L"ColorPicker confirmed RGB(%u, %u, %u).",
+        static_cast<unsigned>(change.value.red),
+        static_cast<unsigned>(change.value.green),
+        static_cast<unsigned>(change.value.blue));
+    debug(message);
+}
+
+const wchar_t* selected_action_name(
+    erui::AlertButtons buttons,
+    erui::AlertResponse response) noexcept {
+    if (response == erui::AlertResponse::dismissed) return L"dismissed";
+    if (response == erui::AlertResponse::none) return L"none";
+    if (response == erui::AlertResponse::secondary) {
+        switch (buttons) {
+        case erui::AlertButtons::ok_cancel: return L"CANCEL";
+        case erui::AlertButtons::yes_no: return L"NO";
+        default: return L"unexpected secondary action";
+        }
+    }
+    if (response != erui::AlertResponse::primary) return L"unknown";
+    switch (buttons) {
+    case erui::AlertButtons::ok:
+    case erui::AlertButtons::ok_cancel:
+        return L"OK";
+    case erui::AlertButtons::cancel:
+        return L"CANCEL";
+    case erui::AlertButtons::yes:
+    case erui::AlertButtons::yes_no:
+        return L"YES";
+    case erui::AlertButtons::no:
+        return L"NO";
+    case erui::AlertButtons::dismiss_only:
+        return L"unexpected primary action";
+    default:
+        return L"unknown";
+    }
+}
+
+void log_alert_completion(
+    const wchar_t* label,
+    erui::AlertButtons buttons,
+    ERUI_Result result,
+    erui::AlertResponse response) noexcept {
+    try {
+        std::wstring text = L"Alert \"";
+        text += label ? label : L"<unknown>";
+        text += L"\" completed: result=";
+        text += result_name(result);
+        text += L", response=";
+        text += response_name(response);
+        text += L", action=";
+        text += selected_action_name(buttons, response);
+        text += L".";
+        debug(text.c_str());
+    } catch (...) {
+        debug(L"An alert completed, but its detailed log could not be allocated.");
+    }
+}
+
+void log_alert_rejection(
+    const wchar_t* label,
+    ERUI_Result result) noexcept {
+    try {
+        std::wstring text = L"Alert \"";
+        text += label ? label : L"<unknown>";
+        text += L"\" was rejected: result=";
+        text += result_name(result);
+        text += L".";
+        debug(text.c_str());
+    } catch (...) {
+        debug(L"An alert was rejected, but its detailed log could not be allocated.");
+    }
+}
+
+void ERUI_CALL alert_completed(
+    void*,
+    ERUI_Result result,
+    erui::AlertResponse response) noexcept {
+    log_alert_completion(
+        L"Normal OK Dialog", erui::AlertButtons::ok, result, response);
+}
+
+void show_native_alert() noexcept {
+    const ERUI_Result result = g_registration.alert(
+        g_text ? g_text->native_message : L"ERNativeUI",
+        &alert_completed);
+    if (result != ERUI_OK) {
+        log_alert_rejection(L"Normal OK Dialog", result);
+    }
+}
+
+void show_native_alert_from_binding(
+    ShowcaseActionState& state,
+    const erui::ActionActivation& activation) noexcept {
+    record_binding_activation(state, activation);
+    show_native_alert();
+}
+
+void ERUI_CALL popup_variant_completed(
+    void* context,
+    ERUI_Result result,
+    erui::AlertResponse response) noexcept {
+    const auto* const variant = static_cast<const PopupVariant*>(context);
+    log_alert_completion(
+        variant ? variant->label.c_str() : L"Popup Variant",
+        variant ? variant->options.buttons : erui::AlertButtons::ok,
+        result,
+        response);
+}
+
+void ERUI_CALL show_popup_variant(void* context) noexcept {
+    auto* const variant = static_cast<PopupVariant*>(context);
+    if (!variant) {
+        debug(L"ERNativeUI received an empty popup-variant context.");
+        return;
+    }
+    const ERUI_Result result = g_registration.alert(
+        variant->message,
+        variant->options,
+        &popup_variant_completed,
+        variant);
+    if (result != ERUI_OK) {
+        log_alert_rejection(variant->label.c_str(), result);
+    }
+}
+
+void toggle_from_code() noexcept {
+    const std::uint8_t next = g_enabled.load(std::memory_order_acquire) ? 0 : 1;
+    if (g_registration.set_value(g_enabled_row, next) == ERUI_OK) {
+        g_enabled.store(next, std::memory_order_release);
+        debug(L"Enabled was changed through Registration::set_value().");
+    }
+}
+
+void toggle_from_binding(
+    ShowcaseActionState& state,
+    const erui::ActionActivation& activation) noexcept {
+    record_binding_activation(state, activation);
+    toggle_from_code();
+}
+
+void persist_binding_changes(
+    erui::StorageSection& store,
+    const erui::AssignmentsChangedEvent& event) noexcept {
+    if (store.apply(event) == ERUI_OK) {
+        (void)store.config().save();
+    }
+}
+
+void restore_binding(
+    const erui::StorageSection& store,
+    std::string_view action_id,
+    const erui::InputAction& action) noexcept {
+    const auto saved = store.get<erui::ActionInputs>(action_id);
+    if (saved.found()) {
+        (void)action.bind(saved.value());
+    }
+}
+
+DWORD WINAPI initialize(void*) noexcept {
+    const auto connection = erui::connect();
+    if (!connection) {
+        debug(connection.error().message().c_str());
+        return 1;
+    }
+
+    const erui::LanguageInfo language =
+        connection.value().game_language();
+
+    g_text = &showcase::text(language);
+    g_text_input = &showcase::text_input_text(language);
+    g_color_picker_text = &showcase::color_picker_text(language);
+    g_slider_text = &showcase::slider_text(language);
+    initialize_popup_variants(*g_text);
+    g_player_note.value = L"Tarnished";
+
+    erui::ProviderOptions options{};
+    options.provider_id = "tarnished-showcase";
+    options.display_name = g_text->name;
+    options.owner_module = g_module;
+    options.root_priority = 100;
+
+    auto result = connection.value().register_menu(
+        options, [](erui::Menu& menu) {
+        auto root = menu.root();
+
+        // A built-in destination is still an ordinary provider-owned Page:
+        // only its native top-level heading belongs to Elden Ring. Register
+        // the same safe action on every supported settings tab so this one
+        // example exercises all seven production materializers through the
+        // public API (Game Options is the same destination as menu.root()).
+        if (menu.supports(erui::Capability::builtin_pages)) {
+            constexpr std::array destinations{
+                erui::BuiltinPage::game_options,
+                erui::BuiltinPage::camera_options,
+                erui::BuiltinPage::display,
+                erui::BuiltinPage::sound,
+                erui::BuiltinPage::network,
+                erui::BuiltinPage::keyboard_mouse,
+                erui::BuiltinPage::graphics,
+            };
+            for (const erui::BuiltinPage destination : destinations) {
+                menu.page(destination).add_button<&show_native_alert>(
+                    g_text->native_dialog,
+                    g_text->row_help);
+            }
+        }
+
+        // Device support is declared per action. A section appears in Button
+        // Settings, Keyboard/Mouse Settings, or both according to the union
+        // of devices supported by its actions. The three sections below make
+        // those placement rules visible without research-only probe rows.
+        if (menu.supports(erui::Capability::input_bindings)) {
+            auto bindings = menu.input_bindings();
+
+            auto all_devices = bindings.add_section(g_text->name);
+            auto dialog_action =
+                all_devices.add_action<&show_native_alert_from_binding>(
+                    "show-native-ok-dialog",
+                    g_text->native_dialog,
+                    erui::inputs::all(
+                        erui::KeyboardKey::key_q,
+                        erui::MouseButton::button4,
+                        erui::ControllerButton::right_trigger),
+                    g_native_dialog_action);
+
+            auto keyboard_mouse =
+                bindings.add_section(L"ERNativeUI - Keyboard / Mouse");
+            auto toggle_action =
+                keyboard_mouse.add_action<&toggle_from_binding>(
+                    "toggle-showcase-enabled",
+                    g_text->toggle_code,
+                    erui::inputs::keyboard_mouse(
+                        erui::KeyboardKey::key_t,
+                        erui::MouseButton::wheel_up),
+                    g_toggle_enabled_action);
+
+            auto controller =
+                bindings.add_section(L"ERNativeUI - Controller");
+            auto controller_action =
+                controller.add_action<&show_native_alert_from_binding>(
+                    "controller-native-dialog",
+                    g_text->native_dialog,
+                    erui::inputs::controller(
+                        erui::ControllerButton::dpad_left),
+                    g_controller_dialog_action);
+
+            // Storage is opt-in: load the in-memory document, overlay any
+            // saved assignments, then explicitly apply and save player events.
+            // Without this block, the actions remain valid but do not persist.
+            if (menu.supports(erui::Capability::storage)) {
+                auto config = menu.storage();
+                if (config.load() == ERUI_OK) {
+                    auto store = config.section("bindings");
+                    restore_binding(
+                        store, "show-native-ok-dialog", dialog_action);
+                    restore_binding(
+                        store, "toggle-showcase-enabled", toggle_action);
+                    restore_binding(
+                        store, "controller-native-dialog", controller_action);
+                    (void)bindings.on_assignments_changed<
+                        &persist_binding_changes>(store);
+                } else {
+                    debug(L"Could not load showcase binding storage.");
+                }
+            }
+        }
+
+        g_enabled_row = root.add_toggle(
+            g_text->enabled,
+            g_text->row_help,
+            g_enabled.load(std::memory_order_acquire),
+            &value_changed,
+            &g_enabled);
+
+        erui::SliderOptions slider{};
+        slider.minimum = 0;
+        slider.maximum = 100;
+        slider.step = 5;
+        slider.initial_value = g_intensity.load(std::memory_order_acquire);
+        root.add_slider(
+            g_text->intensity,
+            g_text->row_help,
+            slider,
+            &value_changed,
+            &g_intensity);
+
+        if (menu.supports(erui::Capability::numeric_slider) ||
+            menu.supports(erui::Capability::custom_slider)) {
+            erui::Page advanced_sliders = root.add_submenu(
+                g_slider_text->showcase,
+                g_slider_text->showcase_help,
+                g_slider_text->showcase,
+                g_slider_text->showcase_help);
+
+            if (menu.supports(erui::Capability::numeric_slider)) {
+                erui::NumericSliderOptions multiplier{};
+                multiplier.minimum = 0.1;
+                multiplier.maximum = 2.0;
+                multiplier.step = 0.1;
+                multiplier.initial_value = 0.6;
+                multiplier.decimal_places = 1;
+                multiplier.prefix = L"x";
+                advanced_sliders.add_slider<&numeric_slider_changed>(
+                    g_slider_text->numeric_multiplier,
+                    g_slider_text->multiplier_help,
+                    multiplier);
+
+                erui::NumericSliderOptions signed_value{};
+                signed_value.minimum = -1.0;
+                signed_value.maximum = 1.0;
+                signed_value.step = 0.1;
+                signed_value.initial_value = -0.5;
+                signed_value.decimal_places = 1;
+                advanced_sliders.add_slider<&numeric_slider_changed>(
+                    g_slider_text->numeric_signed,
+                    g_slider_text->signed_help,
+                    signed_value);
+
+                erui::NumericSliderOptions seconds{};
+                seconds.minimum = 0.1;
+                seconds.maximum = 10.0;
+                seconds.step = 0.1;
+                seconds.initial_value = 3.0;
+                seconds.decimal_places = 1;
+                seconds.suffix = L"s";
+                advanced_sliders.add_slider<&numeric_slider_changed>(
+                    g_slider_text->numeric_seconds,
+                    g_slider_text->seconds_help,
+                    seconds);
+            }
+
+            if (menu.supports(erui::Capability::custom_slider)) {
+                static constexpr std::array<std::wstring_view, 7> values{
+                    L"-7", L"3", L"7.8", L"1s", L"hello", L"18", L"x1.3"};
+
+                erui::CustomSliderOptions impossible_values{};
+                impossible_values.value_count =
+                    static_cast<std::uint32_t>(values.size());
+                impossible_values.initial_index = 4;
+                impossible_values.format_value =
+                    [](std::uint32_t index, std::uint32_t) -> std::wstring {
+                        return index < values.size()
+                            ? std::wstring(values[index])
+                            : std::wstring{};
+                    };
+                advanced_sliders.add_custom_slider<&custom_slider_changed>(
+                    g_slider_text->custom_mapping,
+                    g_slider_text->custom_help,
+                    impossible_values);
+            }
+        }
+
+        auto choice_rows = root.add_submenu(
+            g_text->choices,
+            g_text->choice_help,
+            g_text->choices,
+            g_text->choice_help);
+
+        const std::wstring_view preset_values[] = {
+            g_text->minimal, g_text->balanced, g_text->detailed, g_text->maximum
+        };
+        erui::ChoiceOptions preset{};
+        preset.values = preset_values;
+        preset.count = std::size(preset_values);
+        preset.initial_index =
+            g_inline_preset.load(std::memory_order_acquire);
+        choice_rows.add_inline_choice(
+            g_text->inline_preset,
+            g_text->choice_help,
+            preset,
+            &value_changed,
+            &g_inline_preset);
+
+        preset.initial_index =
+            g_popup_preset.load(std::memory_order_acquire);
+        choice_rows.add_popup_choice(
+            g_text->popup_preset,
+            g_text->choice_help,
+            preset,
+            &value_changed,
+            &g_popup_preset);
+
+        const std::wstring_view popup_two_values[] = {
+            g_text->disabled, g_text->enabled_value
+        };
+        erui::ChoiceOptions popup_two{};
+        popup_two.values = popup_two_values;
+        popup_two.count = std::size(popup_two_values);
+        popup_two.initial_index =
+            g_popup_binary.load(std::memory_order_acquire);
+        choice_rows.add_popup_choice(
+            g_text->binary_mode,
+            g_text->choice_help,
+            popup_two,
+            &value_changed,
+            &g_popup_binary);
+
+        std::array<std::wstring, 8> popup_eight_storage{};
+        std::array<std::wstring_view, 8> popup_eight_values{};
+        for (std::size_t index = 0; index < popup_eight_storage.size(); ++index) {
+            popup_eight_storage[index] = g_text->preset;
+            popup_eight_storage[index] += L" ";
+            popup_eight_storage[index] += std::to_wstring(index + 1);
+            popup_eight_values[index] = popup_eight_storage[index];
+        }
+        erui::ChoiceOptions popup_eight{};
+        popup_eight.values = popup_eight_values.data();
+        popup_eight.count = std::size(popup_eight_values);
+        popup_eight.initial_index =
+            g_popup_extended.load(std::memory_order_acquire);
+        choice_rows.add_popup_choice(
+            g_text->extended_preset,
+            g_text->choice_help,
+            popup_eight,
+            &value_changed,
+            &g_popup_extended);
+
+        root.add_button<&toggle_from_code>(
+            g_text->toggle_code,
+            g_text->row_help);
+
+        // TextInput was introduced in API 1.1 and remains part of the current
+        // API 1.2 table. The nearby capability check documents its dependency.
+        if (menu.supports(erui::Capability::text_input)) {
+            auto text_inputs = root.add_submenu(
+                g_text_input->showcase,
+                g_text->row_help,
+                g_text_input->showcase,
+                g_text->row_help);
+
+            erui::TextInputOptions normal{};
+            normal.initial_value = g_player_note.value;
+            normal.placeholder = g_text_input->note_placeholder;
+            text_inputs.add_text_input<&text_input_changed>(
+                g_text_input->note,
+                g_text->row_help,
+                normal,
+                g_player_note);
+
+            erui::TextInputOptions extended{};
+            extended.initial_value = g_extended_note.value;
+            extended.placeholder = g_text_input->extended_placeholder;
+            extended.maximum_length = 35;
+            text_inputs.add_text_input<&text_input_changed>(
+                g_text_input->extended_note,
+                g_text->row_help,
+                extended,
+                g_extended_note);
+        }
+
+        // ColorPicker is also additive in API 1.1. These two rows deliberately
+        // own independent values so the showcase exercises both root-page and
+        // subpage presentation without sharing client state.
+        if (menu.supports(erui::Capability::color_picker)) {
+            erui::ColorPickerOptions root_color{};
+            {
+                std::lock_guard<std::mutex> lock(g_root_color.mutex);
+                root_color.initial_value = g_root_color.value;
+            }
+            root.add_color_picker<&color_picker_changed>(
+                g_color_picker_text->root_accent,
+                g_text->row_help,
+                root_color,
+                g_root_color);
+
+            auto color_picker = root.add_submenu(
+                g_color_picker_text->showcase,
+                g_text->row_help,
+                g_color_picker_text->showcase,
+                g_text->row_help);
+            erui::ColorPickerOptions subpage_color{};
+            {
+                std::lock_guard<std::mutex> lock(g_subpage_color.mutex);
+                subpage_color.initial_value = g_subpage_color.value;
+            }
+            color_picker.add_color_picker<&color_picker_changed>(
+                g_color_picker_text->subpage_accent,
+                g_text->row_help,
+                subpage_color,
+                g_subpage_color);
+        }
+
+        auto large = root.add_submenu(
+            g_text->large,
+            g_text->large_help,
+            g_text->large,
+            g_text->large_help);
+
+        // The built-in formatter produces the language-neutral "Title (n/t)"
+        // form. Providers can still supply a custom formatter when needed.
+        large.set_presentation(g_text->name, g_text->large);
+
+        large.add_button<&show_native_alert>(
+            g_text->native_dialog,
+            g_text->row_help);
+
+        for (std::uint32_t index = 0; index < g_action_numbers.size(); ++index) {
+            g_action_numbers[index] = index + 1;
+            const std::wstring label = std::wstring(g_text->action) + L" " +
+                std::to_wstring(index + 1);
+            large.add_button(
+                label,
+                g_text->row_help,
+                &action_pressed,
+                &g_action_numbers[index]);
+        }
+
+        auto popup_variants = root.add_submenu(
+            g_text->popups,
+            g_text->popup_help,
+            g_text->popups,
+            g_text->popup_help);
+        popup_variants.set_presentation(
+            g_text->name,
+            g_text->popups);
+        for (PopupVariant& variant : g_popup_variants) {
+            popup_variants.add_button(
+                variant.label,
+                variant.help,
+                &show_popup_variant,
+                &variant);
+        }
+
+    });
+
+    if (!result) {
+        debug(result.error().message().c_str());
+        return 1;
+    }
+    g_registration = result.value();
+    debug(L"Menu registered successfully.");
+    return 0;
+}
+
+} // namespace
+
+BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        g_module = module;
+        DisableThreadLibraryCalls(module);
+        if (HANDLE thread = CreateThread(nullptr, 0, &initialize, nullptr, 0, nullptr)) {
+            CloseHandle(thread);
+        }
+    }
+    return TRUE;
+}

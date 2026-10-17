@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset windows-release
+
+      - name: Build
+        run: cmake --build --preset windows-release
+
+      - name: Test
+        run: ctest --preset windows-release
+
+      - name: Audit installation
+        run: cmake --install build/preset-release --config Release --prefix build/install-audit
+
+      - name: Configure installed-package C consumer
+        run: >-
+          cmake -S tests/package_c_consumer -B build/package-c-consumer -A x64
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/install-audit
+
+      - name: Build installed-package C consumer
+        run: cmake --build build/package-c-consumer --config Release
+
+      - name: Run installed-package C consumer
+        run: ./build/package-c-consumer/Release/ERNativeUICPackageConsumer.exe
+
+      - name: Upload install-tree artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ERNativeUI-ci-windows-x64
+          path: build/install-audit
+          if-no-files-found: error
