@@ -17,7 +17,9 @@ struct CoreUiAddressProfile {
     std::uintptr_t scaleform_result_destructor_rva{};
 };
 
-inline constexpr std::array<CoreUiAddressProfile, 2>
+// 2.7.1.1 entries repeat 2.7.1.0: every function body at these RVAs is
+// byte-identical between the two images (offline comparison).
+inline constexpr std::array<CoreUiAddressProfile, 3>
     kCoreUiAddressProfiles{{
         {
             EldenRingBuild::v2_7_0_0,
@@ -25,6 +27,10 @@ inline constexpr std::array<CoreUiAddressProfile, 2>
         },
         {
             EldenRingBuild::v2_7_1_0,
+            0xD81600,
+        },
+        {
+            EldenRingBuild::v2_7_1_1,
             0xD81600,
         },
     }};
@@ -39,7 +45,7 @@ struct TextInputAddressProfile {
     std::uintptr_t editor_factory_rva{};
 };
 
-inline constexpr std::array<TextInputAddressProfile, 2>
+inline constexpr std::array<TextInputAddressProfile, 3>
     kTextInputAddressProfiles{{
         {
             EldenRingBuild::v2_7_0_0,
@@ -52,6 +58,15 @@ inline constexpr std::array<TextInputAddressProfile, 2>
         },
         {
             EldenRingBuild::v2_7_1_0,
+            0x976EF0,
+            0x5EE0F0,
+            0x6766F0,
+            0x1BCC60,
+            0x915D70,
+            0x81D610,
+        },
+        {
+            EldenRingBuild::v2_7_1_1,
             0x976EF0,
             0x5EE0F0,
             0x6766F0,
@@ -81,7 +96,7 @@ struct ColorPickerAddressProfile {
     std::uintptr_t scaleform_color_transform_setter_rva{};
 };
 
-inline constexpr std::array<ColorPickerAddressProfile, 2>
+inline constexpr std::array<ColorPickerAddressProfile, 3>
     kColorPickerAddressProfiles{{
         {
             EldenRingBuild::v2_7_0_0,
@@ -104,6 +119,25 @@ inline constexpr std::array<ColorPickerAddressProfile, 2>
         },
         {
             EldenRingBuild::v2_7_1_0,
+            0x7AD980,
+            0x7AA0D0,
+            0x7A8120,
+            0x1EBBD40,
+            0x77C620,
+            0x77CA10,
+            0x77CF90,
+            0x7460D0,
+            0xD81600,
+            0x8B6F90,
+            0x2AB8DE8,
+            0x74B140,
+            0x86B940,
+            0x734190,
+            0x733FA0,
+            0xD85680,
+        },
+        {
+            EldenRingBuild::v2_7_1_1,
             0x7AD980,
             0x7AA0D0,
             0x7A8120,
@@ -151,7 +185,7 @@ struct InputBindingsAddressProfile {
     std::uintptr_t text_input_dialog_vtable_rva{};
 };
 
-inline constexpr std::array<InputBindingsAddressProfile, 2>
+inline constexpr std::array<InputBindingsAddressProfile, 3>
     kInputBindingsAddressProfiles{{
         {
             EldenRingBuild::v2_7_0_0,
@@ -182,6 +216,33 @@ inline constexpr std::array<InputBindingsAddressProfile, 2>
         },
         {
             EldenRingBuild::v2_7_1_0,
+            0x869580,
+            0x8696B0,
+            0x869FD0,
+            0x868000,
+            0x868C60,
+            0x8687D0,
+            0x868810,
+            0x867C60,
+            0x242960,
+            0x240220,
+            0x2403C0,
+            0x2413F0,
+            0x2667B40,
+            0x266A4F0,
+            0x4861D30,
+            0x81CCB0,
+            0x81CE40,
+            0x9B9E00,
+            0x9B9FC0,
+            0x2B0DCC0,
+            0x2AD6E70,
+            0x2AD68D0,
+            0x2AC5AD0,
+            0x2B2B908,
+        },
+        {
+            EldenRingBuild::v2_7_1_1,
             0x869580,
             0x8696B0,
             0x869FD0,

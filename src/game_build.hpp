@@ -13,6 +13,7 @@ enum class EldenRingBuild : std::uint8_t {
     unsupported,
     v2_7_0_0,
     v2_7_1_0,
+    v2_7_1_1,
 };
 
 struct EldenRingBuildIdentity {
@@ -22,7 +23,7 @@ struct EldenRingBuildIdentity {
     std::size_t image_size{};
 };
 
-inline constexpr std::array<EldenRingBuildIdentity, 2>
+inline constexpr std::array<EldenRingBuildIdentity, 3>
     kSupportedEldenRingBuilds{{
         {
             EldenRingBuild::v2_7_0_0,
@@ -34,6 +35,14 @@ inline constexpr std::array<EldenRingBuildIdentity, 2>
             EldenRingBuild::v2_7_1_0,
             "2.7.1.0",
             0x6A96B418,
+            0x5E0DA00,
+        },
+        // Rebuilt 28 minutes after 2.7.1.0 with the same section layout; only
+        // the protection layer and inter-function padding differ.
+        {
+            EldenRingBuild::v2_7_1_1,
+            "2.7.1.1",
+            0x6A96BA95,
             0x5E0DA00,
         },
     }};

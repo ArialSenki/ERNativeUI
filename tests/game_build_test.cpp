@@ -118,6 +118,10 @@ int main() {
         erui::native::identify_elden_ring_build(
             0x6A96B418, 0x5E0DA00) ==
         EldenRingBuild::v2_7_1_0);
+    static_assert(
+        erui::native::identify_elden_ring_build(
+            0x6A96BA95, 0x5E0DA00) ==
+        EldenRingBuild::v2_7_1_1);
 
     // A timestamp or image-size match by itself is not accepted. This keeps
     // an accidental hybrid profile from reaching any native call boundary.
@@ -130,6 +134,10 @@ int main() {
             0x6A96B418, 0x5E09600) ==
         EldenRingBuild::unsupported);
     ERUI_TEST_CHECK(
+        erui::native::identify_elden_ring_build(
+            0x6A96BA95, 0x5E09600) ==
+        EldenRingBuild::unsupported);
+    ERUI_TEST_CHECK(
         erui::native::identify_elden_ring_build(0, 0) ==
         EldenRingBuild::unsupported);
 
@@ -139,6 +147,9 @@ int main() {
     ERUI_TEST_CHECK(
         erui::native::elden_ring_build_name(
             EldenRingBuild::v2_7_1_0) == "2.7.1.0");
+    ERUI_TEST_CHECK(
+        erui::native::elden_ring_build_name(
+            EldenRingBuild::v2_7_1_1) == "2.7.1.1");
     ERUI_TEST_CHECK(
         erui::native::elden_ring_build_name(
             EldenRingBuild::unsupported) == "unsupported");
@@ -230,6 +241,29 @@ int main() {
             0x2667B40, 0x266A4F0, 0x4861D30, 0x81CCB0,
             0x81CE40, 0x9B9E00, 0x9B9FC0, 0x2B0DCC0,
             0x2AD6E70, 0x2AD68D0, 0x2AC5AD0, 0x2B2B908}));
+
+    // 2.7.1.1 reuses every 2.7.1.0 address: the function bodies are
+    // byte-identical between the two images.
+    const auto same_as_271 = [](const auto* profile, auto expected) {
+        expected.build = EldenRingBuild::v2_7_1_1;
+        return profile && same_profile(*profile, expected);
+    };
+    ERUI_TEST_CHECK(same_as_271(
+        erui::native::find_core_ui_address_profile(
+            EldenRingBuild::v2_7_1_1),
+        *core_271));
+    ERUI_TEST_CHECK(same_as_271(
+        erui::native::find_text_input_address_profile(
+            EldenRingBuild::v2_7_1_1),
+        *text_271));
+    ERUI_TEST_CHECK(same_as_271(
+        erui::native::find_color_picker_address_profile(
+            EldenRingBuild::v2_7_1_1),
+        *color_271));
+    ERUI_TEST_CHECK(same_as_271(
+        erui::native::find_input_bindings_address_profile(
+            EldenRingBuild::v2_7_1_1),
+        *input_271));
 
     ERUI_TEST_CHECK(
         erui::native::find_core_ui_address_profile(

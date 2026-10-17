@@ -40,12 +40,18 @@ A game compatibility patch can therefore keep the public API unchanged.
 Existing client DLLs compiled for ERUI API 1.0 or API 1.1 do not need to be
 rebuilt for the 1.2.0 host; players update the single host DLL.
 
-The two exact runtime identities are:
+The three exact runtime identities are:
 
 | Game version | SHA-256 | PE timestamp | Image size |
 |---|---|---:|---:|
 | `2.7.0.0` | `D1A84083C6C7C7902162FF098F7D86812839AA6B3575959398857E539C488134` | `0x69E9C9B9` | `0x5E09600` |
 | `2.7.1.0` | `1A3547101327F65D0C76DA2F9190AC0AA66871EA42BAE2AECC61E11A8B597891` | `0x6A96B418` | `0x5E0DA00` |
+| `2.7.1.1` | `EF4D79F25F28D91C5D27D261356C28F5DFB27537C997C5EA88FFC9C228C56B71` | `0x6A96BA95` | `0x5E0DA00` |
+
+`2.7.1.1` was built 28 minutes after `2.7.1.0` with the same section layout.
+Only the protection layer and inter-function padding differ; every function
+body at the 2.7.1.0 profile RVAs is byte-identical, so its profiles repeat the
+2.7.1.0 values.
 
 The host identifies the loaded image from the PE timestamp **and** image size,
 selects one private address profile, then validates every build-locked entry,
