@@ -36,6 +36,52 @@
 namespace erui::native {
 namespace {
 
+// [Diagnostics] PerfLog: per-hook call count and time. "game" is the time
+// inside the original function, so total - game is the hook's own cost.
+struct HookPerfCounter {
+    const char* name;
+    std::atomic<std::uint64_t> calls{};
+    std::atomic<std::uint64_t> total_ticks{};
+    std::atomic<std::uint64_t> game_ticks{};
+};
+
+std::atomic<bool> g_hook_perf{false};
+HookPerfCounter g_perf_text_setter{"ScaleformTextSetter"};
+HookPerfCounter g_perf_scaleform_path{"ScaleformPathObserver"};
+HookPerfCounter g_perf_text_resolver{"TextResolver"};
+
+std::uint64_t perf_now() noexcept {
+    LARGE_INTEGER value{};
+    QueryPerformanceCounter(&value);
+    return static_cast<std::uint64_t>(value.QuadPart);
+}
+
+// Times one hook call (scope) or the original function inside it (game).
+class HookPerfScope {
+public:
+    HookPerfScope(HookPerfCounter& counter, bool game = false) noexcept
+        : counter_(g_hook_perf.load(std::memory_order_relaxed) ? &counter : nullptr),
+          game_(game),
+          start_(counter_ ? perf_now() : 0) {}
+    ~HookPerfScope() {
+        if (!counter_) return;
+        const std::uint64_t elapsed = perf_now() - start_;
+        if (game_) {
+            counter_->game_ticks.fetch_add(elapsed, std::memory_order_relaxed);
+            return;
+        }
+        counter_->calls.fetch_add(1, std::memory_order_relaxed);
+        counter_->total_ticks.fetch_add(elapsed, std::memory_order_relaxed);
+    }
+    HookPerfScope(const HookPerfScope&) = delete;
+    HookPerfScope& operator=(const HookPerfScope&) = delete;
+
+private:
+    HookPerfCounter* counter_;
+    bool game_;
+    std::uint64_t start_;
+};
+
 constexpr std::uint32_t kCustomTextFallbackId = 0x1B20A;
 constexpr std::uint64_t kNativeBackAction = 3;
 constexpr std::uint64_t kSubmenuRequestTimeoutMs = 2000;
@@ -1888,6 +1934,7 @@ std::uint64_t diagnostic_scaleform_path_hash(
 }
 
 void observe_scaleform_path(safetyhook::Context& context) noexcept {
+    HookPerfScope perf_scope(g_perf_scaleform_path);
     if (context.r8 < 0x10000) {
         return;
     }
@@ -2638,11 +2685,16 @@ bool is_provider_help_text(const wchar_t* text) noexcept {
 }
 
 void __fastcall line_help_text_detour(void* value, const wchar_t* text) noexcept {
+    HookPerfScope perf_scope(g_perf_text_setter);
     const ScaleformTextSetterFn original =
         g_original_line_help_text_setter.load(std::memory_order_acquire);
     if (!original) return;
+    // This runs for every text of the whole UI: scan only the slots in use.
+    const std::size_t used_slots = (std::min)(
+        g_next_status_bar.load(std::memory_order_acquire), kStatusBarSlotCount);
     StatusBarSlot* match{};
-    for (StatusBarSlot& slot : g_status_bars) {
+    for (std::size_t index = 0; index < used_slots; ++index) {
+        StatusBarSlot& slot = g_status_bars[index];
         std::uint8_t* const bar = slot.bar.load(std::memory_order_acquire);
         if (bar && value == bar + kStatusBarLineHelpOffset +
                 scaleform_text_value_offset) {
@@ -2651,7 +2703,7 @@ void __fastcall line_help_text_detour(void* value, const wchar_t* text) noexcept
         }
     }
     if (!match) {
-        original(value, text);
+        { HookPerfScope game(g_perf_text_setter, true); original(value, text); }
         return;
     }
 
@@ -2668,7 +2720,7 @@ void __fastcall line_help_text_detour(void* value, const wchar_t* text) noexcept
     } else if (provider_text) {
         remember_help_text(text);
         (void)assign_wide_line_help(bar, L"", original, 0, nullptr, kTwoLineHelpPath);
-        original(value, text);
+        { HookPerfScope game(g_perf_text_setter, true); original(value, text); }
         set_native_line_help_visible(bar, false);
         match->wide_active.store(true, std::memory_order_relaxed);
         arm_marquee(bar);
@@ -2681,7 +2733,7 @@ void __fastcall line_help_text_detour(void* value, const wchar_t* text) noexcept
         }
         return;
     }
-    original(value, text);
+    { HookPerfScope game(g_perf_text_setter, true); original(value, text); }
     g_marquee_bar.store(nullptr, std::memory_order_release);
     // Pages own separate status bar objects that share the movie's fields, so
     // the wide state is global: any non-provider text restores the native line.
@@ -2868,6 +2920,7 @@ void* __fastcall text_resolver_detour(
     std::uint32_t message_id,
     std::uintptr_t argument4,
     std::uintptr_t argument5) noexcept {
+    HookPerfScope perf_scope(g_perf_text_resolver);
     TextResolverFn original = g_original_text_resolver.load(std::memory_order_acquire);
     if (!original) {
         // MH_CreateHook publishes the trampoline before the queued hook is
@@ -2901,12 +2954,16 @@ void* __fastcall text_resolver_detour(
     }
 
     if (!replacement) {
-        void* result = original(
-            text_result,
-            argument2,
-            message_id,
-            argument4,
-            argument5);
+        void* result{};
+        {
+            HookPerfScope game(g_perf_text_resolver, true);
+            result = original(
+                text_result,
+                argument2,
+                message_id,
+                argument4,
+                argument5);
+        }
 
         if (erui::detail::message_trace_logging()) {
             const std::uint32_t category = diagnostic_category();
@@ -2952,12 +3009,16 @@ void* __fastcall text_resolver_detour(
     // Ring to build a valid result object using a known vanilla message, then
     // replace the result object's UTF-16 pointer/storage/length with our
     // stable registry string.
-    void* result = original(
-        text_result,
-        argument2,
-        kCustomTextFallbackId,
-        argument4,
-        argument5);
+    void* result{};
+    {
+        HookPerfScope game(g_perf_text_resolver, true);
+        result = original(
+            text_result,
+            argument2,
+            kCustomTextFallbackId,
+            argument4,
+            argument5);
+    }
 
     const erui::detail::NativeTextPatchOutcome patch =
         erui::detail::patch_native_text_result(text_result, replacement);
@@ -4701,6 +4762,37 @@ void set_pending_menu_warning(std::wstring message) noexcept {
     g_menu_warning.swap(message);
     ReleaseSRWLockExclusive(&g_menu_warning_lock);
     g_menu_warning_pending.store(true, std::memory_order_release);
+}
+
+void set_hook_perf_enabled(bool enabled) noexcept {
+    g_hook_perf.store(enabled, std::memory_order_relaxed);
+}
+
+void log_hook_perf(std::uint64_t interval_ms) noexcept {
+    LARGE_INTEGER frequency{};
+    QueryPerformanceFrequency(&frequency);
+    const double us_per_tick = frequency.QuadPart > 0
+        ? 1000000.0 / static_cast<double>(frequency.QuadPart) : 0.0;
+    char line[768]{};
+    int used = std::snprintf(line, sizeof(line),
+        "Perf %llu s, hooks (calls / own us / game us):",
+        static_cast<unsigned long long>(interval_ms / 1000));
+    for (HookPerfCounter* counter :
+            {&g_perf_text_setter, &g_perf_scaleform_path, &g_perf_text_resolver}) {
+        const std::uint64_t calls = counter->calls.exchange(0, std::memory_order_relaxed);
+        const std::uint64_t total = counter->total_ticks.exchange(0, std::memory_order_relaxed);
+        const std::uint64_t game = counter->game_ticks.exchange(0, std::memory_order_relaxed);
+        const std::uint64_t own = total > game ? total - game : 0;
+        if (used <= 0 || static_cast<std::size_t>(used) >= sizeof(line)) break;
+        const int added = std::snprintf(line + used, sizeof(line) - used,
+            " %s %llu / %.0f / %.0f;", counter->name,
+            static_cast<unsigned long long>(calls),
+            static_cast<double>(own) * us_per_tick,
+            static_cast<double>(game) * us_per_tick);
+        if (added < 0) break;
+        used += added;
+    }
+    erui::detail::logf(erui::LogLevel::info, "%s", line);
 }
 
 void remove_native_menu_hooks() noexcept {

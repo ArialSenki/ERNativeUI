@@ -207,8 +207,11 @@ DWORD run_host() noexcept {
             OutputDebugStringA(
                 "ERNativeUI: failed to create the default ERNativeUI.ini\n");
         }
-        const bool logging_enabled = read_ini(
+        // [Diagnostics] PerfLog writes to the log, so it turns the log on too.
+        const bool perf_log = read_ini(ini, L"Diagnostics", L"PerfLog", 0) != 0;
+        const bool logging_enabled = perf_log || read_ini(
             ini, L"Logging", L"EnableLog", 0) != 0;
+        erui::native::set_hook_perf_enabled(perf_log);
         if (logging_enabled) {
             log::initialize(directory / L"ERNativeUI.log");
         }
@@ -668,11 +671,19 @@ DWORD run_host() noexcept {
                     ? runtime_gfx_ready(spanish)
                     : check_settings_gfx(module_directory(g_module), spanish));
         }
+        constexpr ULONGLONG kPerfLogIntervalMs = 30000;
+        ULONGLONG perf_logged_at = GetTickCount64();
+        if (perf_log) log::write("Perf log enabled ([Diagnostics] PerfLog = 1): hook report every 30 s");
         while (!g_stop.load(std::memory_order_acquire)) {
             registry().apply_pending_values();
             erui::poll_changes();
             erui::native::dispatch_native_dialog_callbacks();
             erui::native::dispatch_color_picker_callbacks();
+            if (perf_log && GetTickCount64() - perf_logged_at >= kPerfLogIntervalMs) {
+                const ULONGLONG now = GetTickCount64();
+                erui::native::log_hook_perf(now - perf_logged_at);
+                perf_logged_at = now;
+            }
             Sleep(50);
         }
         return 0;
