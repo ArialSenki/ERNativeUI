@@ -186,6 +186,15 @@ if(_ernativeui_need_native_core)
             src/steam_language.cpp
             src/ernativeui.rc)
         add_library(ERNativeUI::Host ALIAS ERNativeUIHost)
+
+        # Fork: offline address audit (maps eldenring.exe, runs no game code).
+        add_executable(ERNativeUIAudit tools/address_audit/main.cpp
+            src/runtime_gfx_locate.cpp)
+        target_include_directories(ERNativeUIAudit PRIVATE src include)
+        target_link_libraries(ERNativeUIAudit PRIVATE ERNativeUI::Core)
+        target_compile_features(ERNativeUIAudit PRIVATE cxx_std_20)
+        target_compile_definitions(ERNativeUIAudit PRIVATE
+            WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
         target_include_directories(ERNativeUIHost PRIVATE src include)
         target_link_libraries(ERNativeUIHost PRIVATE ERNativeUI::Core
             ERNativeUI::GfxPatch minhook)
