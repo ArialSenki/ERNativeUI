@@ -66,13 +66,16 @@ target_link_libraries(ERNativeUISDK INTERFACE ERNativeUI::CABI)
 target_compile_features(ERNativeUISDK INTERFACE cxx_std_17)
 
 set(_ernativeui_need_gfx_patch OFF)
-if(ERNATIVEUI_BUILD_GFX_PATCHER OR _ernativeui_enable_tests)
+# Fork: the host patches the settings movies in memory, so it needs the core.
+if(ERNATIVEUI_BUILD_GFX_PATCHER OR _ernativeui_enable_tests OR
+        (WIN32 AND ERNATIVEUI_BUILD_HOST))
     set(_ernativeui_need_gfx_patch ON)
 endif()
 
 if(_ernativeui_need_gfx_patch)
     # Portable, asset-free GFX transformation core.
-    add_library(ERNativeUIGfxPatch STATIC tools/gfx_patcher/gfx_patch.cpp)
+    add_library(ERNativeUIGfxPatch STATIC tools/gfx_patcher/gfx_patch.cpp
+        tools/gfx_patcher/settings_movie.cpp)
     add_library(ERNativeUI::GfxPatch ALIAS ERNativeUIGfxPatch)
     target_include_directories(ERNativeUIGfxPatch PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/tools/gfx_patcher>)
@@ -174,6 +177,8 @@ if(_ernativeui_need_native_core)
             src/host_api.cpp
             src/gfx_check.cpp
             src/host_dllmain.cpp
+            src/runtime_gfx.cpp
+            src/runtime_gfx_locate.cpp
             src/host_locale.cpp
             src/host_registry.cpp
             src/localization_config.cpp
@@ -182,7 +187,8 @@ if(_ernativeui_need_native_core)
             src/ernativeui.rc)
         add_library(ERNativeUI::Host ALIAS ERNativeUIHost)
         target_include_directories(ERNativeUIHost PRIVATE src include)
-        target_link_libraries(ERNativeUIHost PRIVATE ERNativeUI::Core)
+        target_link_libraries(ERNativeUIHost PRIVATE ERNativeUI::Core
+            ERNativeUI::GfxPatch minhook)
         target_compile_features(ERNativeUIHost PRIVATE cxx_std_20)
         target_compile_definitions(ERNativeUIHost PRIVATE
             ERUI_HOST_EXPORTS
@@ -355,6 +361,31 @@ if(_ernativeui_enable_tests)
         ERNATIVEUI_TEST_ADVANCED_GFX="${CMAKE_CURRENT_SOURCE_DIR}/assets/menu/win/02_042_pc_graphicsetting.gfx")
     target_compile_features(ERNativeUIGfxPatcherTests PRIVATE cxx_std_20)
     add_test(NAME ERNativeUI.GfxPatcher COMMAND ERNativeUIGfxPatcherTests)
+
+    # Fork: runtime GFX patching. Optional local fixtures (never committed).
+    set(ERNATIVEUI_TEST_VANILLA_GFX_DIR "" CACHE PATH
+        "Folder with the vanilla 02_040/02_042 movies")
+    set(ERNATIVEUI_TEST_EXPECTED_GFX_DIR "" CACHE PATH
+        "Folder with the reference patched 02_040/02_042 movies")
+    set(ERNATIVEUI_TEST_GAME_EXE "" CACHE FILEPATH
+        "eldenring.exe used to validate the RTTI lookup")
+    add_executable(ERNativeUIRuntimeGfxTests tests/runtime_gfx_test.cpp
+        src/runtime_gfx_locate.cpp src/module.cpp)
+    target_include_directories(ERNativeUIRuntimeGfxTests PRIVATE src)
+    target_link_libraries(ERNativeUIRuntimeGfxTests PRIVATE ERNativeUI::GfxPatch)
+    target_compile_features(ERNativeUIRuntimeGfxTests PRIVATE cxx_std_20)
+    target_compile_definitions(ERNativeUIRuntimeGfxTests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+    if(ERNATIVEUI_TEST_VANILLA_GFX_DIR AND ERNATIVEUI_TEST_EXPECTED_GFX_DIR)
+        target_compile_definitions(ERNativeUIRuntimeGfxTests PRIVATE
+            ERNATIVEUI_TEST_VANILLA_GFX_DIR="${ERNATIVEUI_TEST_VANILLA_GFX_DIR}"
+            ERNATIVEUI_TEST_EXPECTED_GFX_DIR="${ERNATIVEUI_TEST_EXPECTED_GFX_DIR}")
+    endif()
+    if(ERNATIVEUI_TEST_GAME_EXE)
+        target_compile_definitions(ERNativeUIRuntimeGfxTests PRIVATE
+            ERNATIVEUI_TEST_GAME_EXE="${ERNATIVEUI_TEST_GAME_EXE}")
+    endif()
+    add_test(NAME ERNativeUI.RuntimeGfx COMMAND ERNativeUIRuntimeGfxTests)
 
     add_executable(ERNativeUIPaginationTests tests/pagination_test.cpp src/pagination.cpp)
     target_include_directories(ERNativeUIPaginationTests PRIVATE src)

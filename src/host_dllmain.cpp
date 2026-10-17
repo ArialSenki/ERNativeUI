@@ -1,5 +1,6 @@
 #include "host_registry.hpp"
 #include "gfx_check.hpp"
+#include "runtime_gfx.hpp"
 #include "host_locale.hpp"
 #include "addresses.hpp"
 #include "hooks.hpp"
@@ -215,8 +216,18 @@ DWORD run_host() noexcept {
         erui::detail::set_log_filter(logging_enabled, false);
         log::write("============================================================");
         log::write("ERNativeUI host v%s starting", ER_NATIVE_UI_BUILD_VERSION);
-        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, ERUI 1.2.1) build=r116");
+        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ERUI 1.2.1) build=r122");
         log::write("Offline / EAC-disabled use only; hot unloading is unsupported");
+
+        // Before anything waits: Scaleform may open the settings movies early.
+        if (read_ini(ini, L"Gfx", L"RuntimePatch", 1) != 0) {
+            if (!install_runtime_gfx(
+                    read_ini(ini, L"Diagnostics", L"EnableDiagnostics", 0) != 0)) {
+                log::write("WARN: runtime GFX patching unavailable; the menu needs the patched GFX files installed");
+            }
+        } else {
+            log::write("Runtime GFX patching disabled by [Gfx] RuntimePatch = 0");
+        }
 
         HMODULE pinned_host{};
         if (!GetModuleHandleExW(
@@ -653,7 +664,9 @@ DWORD run_host() noexcept {
                 : std::string_view{};
             const bool spanish = identifier == "spanish" || identifier == "latam";
             erui::native::set_pending_menu_warning(
-                check_settings_gfx(module_directory(g_module), spanish));
+                runtime_gfx_installed()
+                    ? runtime_gfx_ready(spanish)
+                    : check_settings_gfx(module_directory(g_module), spanish));
         }
         while (!g_stop.load(std::memory_order_acquire)) {
             registry().apply_pending_values();
