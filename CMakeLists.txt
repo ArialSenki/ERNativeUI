@@ -11,6 +11,12 @@ if(WIN32 AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "ERNativeUI must be built for x64.")
 endif()
 
+# Fork: /Gw puts each global in its own COMDAT so /OPT:REF drops unused data
+# (mostly decoder tables of the fetched hook libraries): ~110 KB smaller host.
+if(MSVC)
+    add_compile_options("$<$<CONFIG:Release>:/Gw>")
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
