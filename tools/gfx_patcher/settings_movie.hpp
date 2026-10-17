@@ -32,6 +32,9 @@ struct SettingsMovieOptions {
     TextInputPresentation advanced_text_input{TextInputPresentation::character_name};
     ColorPickerPresentation advanced_color_picker{
         ColorPickerPresentation::character_creation};
+    // Both movies: opacity of the full-screen backdrop (MENU_BaseMain_01), in
+    // percent. 100 leaves the movie's backdrop untouched.
+    std::uint8_t menu_background_alpha_percent{100};
 };
 
 // Classifies a Scaleform URL or file path by its file name, ignoring case
@@ -46,5 +49,14 @@ struct SettingsMovieOptions {
     SettingsMovie movie,
     std::span<const std::uint8_t> input,
     const SettingsMovieOptions& options = {}) noexcept;
+
+// Sets the opacity of the settings movies' full-screen backdrop: root depth 1
+// is a one-frame sprite whose only child is the MENU_BaseMain_01 image. The
+// alpha goes on that child, so the root FadeIn/FadeOut color transforms still
+// multiply with it. 100 removes the child's color transform (vanilla bytes).
+// Fails with unsupported_gfx when the movie does not have that layout.
+[[nodiscard]] PatchResult set_menu_background_alpha(
+    std::span<const std::uint8_t> input,
+    std::uint8_t alpha_percent) noexcept;
 
 } // namespace erui::gfx

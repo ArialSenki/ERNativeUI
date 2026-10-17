@@ -78,6 +78,9 @@ struct PatchReport {
     Inspection after{};
     std::size_t bytes_added{};
     bool already_satisfied{};
+    // Fork: SettingsMovieOptions asked for a backdrop alpha but the movie has
+    // no recognizable backdrop; the rest of the patch still applies.
+    bool menu_background_skipped{};
 };
 
 struct PatchResult {

@@ -224,8 +224,13 @@ DWORD run_host() noexcept {
 
         // Before anything waits: Scaleform may open the settings movies early.
         if (read_ini(ini, L"Gfx", L"RuntimePatch", 1) != 0) {
+            const int background_alpha =
+                read_ini(ini, L"Gfx", L"MenuBackgroundAlpha", 100);
             if (!install_runtime_gfx(
-                    read_ini(ini, L"Diagnostics", L"EnableDiagnostics", 0) != 0)) {
+                    read_ini(ini, L"Diagnostics", L"EnableDiagnostics", 0) != 0,
+                    background_alpha < 0 ? 0u
+                        : background_alpha > 100 ? 100u
+                        : static_cast<unsigned>(background_alpha))) {
                 log::write("WARN: runtime GFX patching unavailable; the menu needs the patched GFX files installed");
             }
         } else {

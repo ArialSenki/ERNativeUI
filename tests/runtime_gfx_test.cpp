@@ -66,6 +66,58 @@ void test_movie(const char* name, erui::gfx::SettingsMovie movie) {
 #endif
 }
 
+void test_backdrop_alpha(const char* name, erui::gfx::SettingsMovie movie) {
+#if defined(ERNATIVEUI_TEST_VANILLA_GFX_DIR) && defined(ERNATIVEUI_TEST_EXPECTED_GFX_DIR)
+    const auto vanilla = read_file(std::filesystem::path(ERNATIVEUI_TEST_VANILLA_GFX_DIR) / name);
+    const auto expected = read_file(std::filesystem::path(ERNATIVEUI_TEST_EXPECTED_GFX_DIR) / name);
+    if (vanilla.empty() || expected.empty()) {
+        std::printf("skip %s backdrop fixtures missing\n", name);
+        return;
+    }
+    const std::string label(name);
+    const auto half = erui::gfx::set_menu_background_alpha(vanilla, 50);
+    if (!half.success()) std::printf("     failure: %s\n", half.message.c_str());
+    check(half.success() && !half.report.already_satisfied && half.report.bytes_added == 6,
+        (label + " backdrop alpha 50% adds one color transform").c_str());
+    const auto again = erui::gfx::set_menu_background_alpha(half.output, 50);
+    check(again.success() && again.report.already_satisfied && again.output == half.output,
+        (label + " backdrop alpha is idempotent").c_str());
+    const auto restored = erui::gfx::set_menu_background_alpha(half.output, 100);
+    check(restored.success() && restored.output == vanilla,
+        (label + " backdrop alpha 100% restores the vanilla bytes").c_str());
+    const auto untouched = erui::gfx::set_menu_background_alpha(vanilla, 100);
+    check(untouched.success() && untouched.report.already_satisfied,
+        (label + " backdrop alpha 100% leaves vanilla unchanged").c_str());
+
+    erui::gfx::SettingsMovieOptions options{};
+    options.menu_background_alpha_percent = 50;
+    const auto combined = erui::gfx::patch_settings_movie(movie, vanilla, options);
+    const auto expected_half = erui::gfx::set_menu_background_alpha(expected, 50);
+    check(combined.success() && !combined.report.menu_background_skipped &&
+            combined.output == expected_half.output,
+        (label + " runtime patch with backdrop alpha = r121 file + alpha").c_str());
+    const auto combined_again = erui::gfx::patch_settings_movie(movie, combined.output, options);
+    check(combined_again.success() && combined_again.report.already_satisfied &&
+            combined_again.output == combined.output,
+        (label + " runtime patch with backdrop alpha is idempotent").c_str());
+    const auto defaults = erui::gfx::patch_settings_movie(movie, vanilla);
+    check(defaults.success() && defaults.output == expected,
+        (label + " default options keep the backdrop untouched").c_str());
+#else
+    std::printf("skip %s backdrop (no fixture directories configured)\n", name);
+#endif
+}
+
+void test_backdrop_rejects_foreign_movie() {
+    std::vector<std::uint8_t> minimal = {
+        'G', 'F', 'X', 0x0B, 0, 0, 0, 0, 0x00, 0x00, 0x18, 0x01, 0x00, 0x00, 0x00};
+    minimal[4] = static_cast<std::uint8_t>(minimal.size());
+    const auto result = erui::gfx::set_menu_background_alpha(minimal, 50);
+    check(!result.success(), "backdrop alpha rejects a movie without MENU_BaseMain_01");
+    check(!erui::gfx::set_menu_background_alpha({}, 50).success(),
+        "backdrop alpha rejects empty input");
+}
+
 void test_locate() {
 #ifdef ERNATIVEUI_TEST_GAME_EXE
     HMODULE image = LoadLibraryExW(
@@ -105,6 +157,10 @@ int main() {
     test_classification();
     test_movie("02_040_optionsetting.gfx", erui::gfx::SettingsMovie::game_options);
     test_movie("02_042_pc_graphicsetting.gfx", erui::gfx::SettingsMovie::advanced_settings);
+    test_backdrop_alpha("02_040_optionsetting.gfx", erui::gfx::SettingsMovie::game_options);
+    test_backdrop_alpha("02_042_pc_graphicsetting.gfx",
+        erui::gfx::SettingsMovie::advanced_settings);
+    test_backdrop_rejects_foreign_movie();
     test_locate();
     std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
     return g_failures ? 1 : 0;

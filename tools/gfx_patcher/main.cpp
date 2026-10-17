@@ -1,4 +1,5 @@
 #include "gfx_patch.hpp"
+#include "settings_movie.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -38,6 +39,7 @@ struct Arguments {
     bool mod_settings_top_level_tab{};
     bool wide_slider_values{};
     bool line_help_only{};
+    std::optional<std::uint16_t> menu_background_alpha{};
     bool inspect_only{};
     bool overwrite{};
 };
@@ -60,6 +62,9 @@ void print_usage() {
            L"[--overwrite]\n\n"
         << L"Only add the LineHelpWide field to an already patched movie:\n"
         << L"  ERNativeUIGfxPatcher.exe --line-help-only --input <patched.gfx> "
+           L"--output <out.gfx> [--overwrite]\n\n"
+        << L"Only set the full-screen backdrop opacity (percent, 100 = vanilla):\n"
+        << L"  ERNativeUIGfxPatcher.exe --menu-background-alpha 60 --input <movie.gfx> "
            L"--output <out.gfx> [--overwrite]\n\n"
         << L"The input file is never modified. Game Options supports 6..13 rows; "
            L"Camera Options supports 7..13.\n"
@@ -118,6 +123,7 @@ void print_usage() {
             continue;
         }
         if (token == L"--input" || token == L"--output" ||
+            token == L"--menu-background-alpha" ||
             token == L"--game-options-rows" ||
             token == L"--controller-rows" ||
             token == L"--camera-options-rows" ||
@@ -160,7 +166,13 @@ void print_usage() {
                     error = std::wstring(token) + L" requires an integer";
                     return false;
                 }
-                if (token == L"--camera-options-rows") {
+                if (token == L"--menu-background-alpha") {
+                    if (*rows > 100) {
+                        error = L"--menu-background-alpha requires 0..100";
+                        return false;
+                    }
+                    parsed.menu_background_alpha = *rows;
+                } else if (token == L"--camera-options-rows") {
                     parsed.camera_options_rows = *rows;
                     parsed.camera_options_rows_explicit = true;
                 } else {
@@ -368,7 +380,8 @@ int run(const std::vector<std::wstring>& command_line) {
             erui::gfx::TextInputPresentation::character_name &&
         arguments.color_picker_presentation !=
             erui::gfx::ColorPickerPresentation::character_creation &&
-        !arguments.wide_slider_values && !arguments.line_help_only) {
+        !arguments.wide_slider_values && !arguments.line_help_only &&
+        !arguments.menu_background_alpha) {
         std::wcerr
             << L"ERROR: Advanced Settings has no Game Options rows to patch; "
                L"request a TextInput or ColorPicker presentation.\n";
@@ -381,7 +394,11 @@ int run(const std::vector<std::wstring>& command_line) {
     }
 
     erui::gfx::PatchResult patch{};
-    if (arguments.line_help_only) {
+    if (arguments.menu_background_alpha) {
+        patch = erui::gfx::set_menu_background_alpha(
+            input, static_cast<std::uint8_t>(*arguments.menu_background_alpha));
+        if (patch.success()) patch.report.after = inspection;
+    } else if (arguments.line_help_only) {
         patch = erui::gfx::patch_line_help_only(input);
         if (patch.success()) patch.report.after = inspection;
     } else if (inspection.host == erui::gfx::GfxHost::game_options) {

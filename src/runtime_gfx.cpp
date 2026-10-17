@@ -57,6 +57,7 @@ std::atomic<bool> g_ready{false};
 std::atomic<bool> g_spanish{false};
 std::atomic<bool> g_trace_urls{false};
 std::atomic<unsigned> g_traced_urls{0};
+std::atomic<unsigned> g_menu_background_alpha{100};
 
 // Patched buffers live for the whole process: MemoryFile does not own its
 // buffer and the game may keep a MovieDef that still points into it.
@@ -156,8 +157,19 @@ const std::vector<std::uint8_t>* patched_bytes(
         }
         ReleaseSRWLockShared(&g_cache_lock);
 
+        erui::gfx::SettingsMovieOptions options{};
+        options.menu_background_alpha_percent = static_cast<std::uint8_t>(
+            g_menu_background_alpha.load(std::memory_order_relaxed));
         const erui::gfx::PatchResult result = erui::gfx::patch_settings_movie(
-            movie, std::span<const std::uint8_t>(input, size));
+            movie, std::span<const std::uint8_t>(input, size), options);
+        if (result.success() && options.menu_background_alpha_percent < 100) {
+            log::write(
+                result.report.menu_background_skipped
+                    ? "WARN: Runtime GFX: %s has no MENU_BaseMain_01 backdrop; MenuBackgroundAlpha = %u ignored"
+                    : "Runtime GFX: %s backdrop alpha %u%%",
+                erui::gfx::settings_movie_name(movie),
+                static_cast<unsigned>(options.menu_background_alpha_percent));
+        }
         auto entry = std::make_unique<CachedMovie>();
         entry->input_hash = hash;
         entry->input_size = size;
@@ -335,7 +347,10 @@ void* __fastcall open_file_detour(void* opener, const char* url, int flags, int 
 
 } // namespace
 
-bool install_runtime_gfx(bool trace_urls) noexcept {
+bool install_runtime_gfx(bool trace_urls, unsigned menu_background_alpha_percent) noexcept {
+    g_menu_background_alpha.store(
+        menu_background_alpha_percent > 100 ? 100u : menu_background_alpha_percent,
+        std::memory_order_relaxed);
     g_trace_urls.store(trace_urls, std::memory_order_relaxed);
     if (g_installed.load(std::memory_order_acquire)) return true;
     try {

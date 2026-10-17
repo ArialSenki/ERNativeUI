@@ -13,7 +13,10 @@ namespace erui::host {
 // Installs the OpenFile hook. Call as early as possible: a movie opened
 // before installation is not patched. Returns false when the game's
 // Scaleform types could not be validated (nothing is hooked then).
-bool install_runtime_gfx(bool trace_urls = false) noexcept;
+// menu_background_alpha_percent < 100 makes the full-screen backdrop of both
+// movies translucent ([Gfx] MenuBackgroundAlpha).
+bool install_runtime_gfx(
+    bool trace_urls = false, unsigned menu_background_alpha_percent = 100) noexcept;
 
 [[nodiscard]] bool runtime_gfx_installed() noexcept;
 
