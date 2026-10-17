@@ -499,33 +499,6 @@ std::uint8_t* resolve_optional_direct(
     return nullptr;
 }
 
-std::uint8_t* resolve_optional_call_target(
-    const ModuleView& game,
-    const char* name,
-    std::string_view callsite_pattern,
-    std::size_t call_offset) noexcept {
-    const ScanResult scan = game.scan_executable(callsite_pattern);
-    if (scan.address && scan.matches == 1) {
-        if (auto* target = resolve_rel32_call(
-                game, scan.address + call_offset)) {
-            erui::detail::logf(
-                erui::LogLevel::info,
-                "Optional address %-13s = %p (AOB call target, RVA 0x%" PRIXPTR ")",
-                name,
-                static_cast<void*>(target),
-                reinterpret_cast<std::uintptr_t>(target) -
-                    reinterpret_cast<std::uintptr_t>(game.base()));
-            return target;
-        }
-    }
-    erui::detail::logf(
-        erui::LogLevel::warning,
-        "Optional address %-13s unavailable (callsite AOB matches=%zu)",
-        name,
-        scan.matches);
-    return nullptr;
-}
-
 std::uint8_t* resolve_text_resolver(const ModuleView& game) noexcept {
     return resolve_direct(
         game,
