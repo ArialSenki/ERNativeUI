@@ -34,6 +34,11 @@ public:
 
     void open_registration() noexcept;
     void set_host_locale(erui::MenuLocalization pagination);
+    // Fork: host texts (menu title/help, pagination) picked by a client at
+    // runtime. Before the freeze they feed the menu build; once the menu is
+    // published they replace the compiled texts in place. Wins over the
+    // startup Steam-language locale from set_host_locale.
+    ERUI_Result set_client_host_locale(erui::MenuLocalization locale) noexcept;
     [[nodiscard]] std::unique_ptr<erui::Menu> freeze_and_build();
     [[nodiscard]] std::unique_ptr<erui::Menu> try_freeze_and_build(
         std::uint64_t opened_at,
@@ -441,6 +446,7 @@ private:
     std::uint64_t next_ordinal_{};
     std::unordered_map<ERUI_ProviderHandle, std::unique_ptr<Provider>> providers_{};
     erui::MenuLocalization pagination_locale_{};
+    bool client_host_locale_{};
 };
 
 Registry& registry() noexcept;

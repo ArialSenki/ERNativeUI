@@ -734,6 +734,37 @@ DWORD WINAPI host_thread(void*) noexcept {
 } // namespace
 } // namespace erui::host
 
+// Fork extension (not part of the official ERUI_Api table): switches the
+// host's own texts (tab title and help, Previous/Next Page) to a Steam
+// language identifier such as "english" or "spanish", from the built-in table
+// plus an optional locales\<identifier>.ini. Before the menu freezes it sets
+// what the build uses; afterwards it relabels the published menu at once.
+// ERUI_HOST_NOT_READY in between, while the menu compiles.
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetHostLanguage(
+    const char* identifier) {
+    namespace host = erui::host;
+    if (!identifier) return ERUI_INVALID_ARGUMENT;
+    const std::string_view language(identifier);
+    if (language.empty() || !host::is_safe_locale_identifier(language)) {
+        return ERUI_INVALID_ARGUMENT;
+    }
+    if (host::api_state() == host::ApiState::failed) return ERUI_HOST_FAILED;
+    try {
+        host::HostLocale locale = host::load_host_locale(
+            host::module_directory(host::g_module), language);
+        const ERUI_Result result = host::registry().set_client_host_locale(
+            std::move(locale.pagination));
+        host::log::write("Host locale (client): identifier='%.*s' external=%d result=%d",
+            static_cast<int>(language.size()), language.data(),
+            locale.loaded ? 1 : 0, static_cast<int>(result));
+        return result;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
+
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         erui::host::g_module = module;

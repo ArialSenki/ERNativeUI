@@ -518,6 +518,8 @@ void Registry::set_host_locale(erui::MenuLocalization pagination) {
     if (frozen_) {
         throw std::logic_error("host locale must be set before registration freezes");
     }
+    // A client that already picked its menu language keeps it.
+    if (client_host_locale_) return;
     pagination_locale_ = std::move(pagination);
 }
 
@@ -2385,6 +2387,51 @@ ERUI_Result Registry::set_submenu_text(
                         numbered_title(title_text, slice + 1, count));
                 }
             }
+        }
+        return ERUI_OK;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
+
+ERUI_Result Registry::set_client_host_locale(erui::MenuLocalization locale) noexcept {
+    try {
+        std::lock_guard lock(mutex_);
+        client_host_locale_ = true;
+        pagination_locale_ = locale;
+        erui::detail::CompiledMenu* menu{};
+        if (const ERUI_Result state = text_target(frozen_, menu); state != ERUI_OK) return state;
+        if (!menu) return ERUI_OK;
+        menu->texts.replace(menu->title_id, locale.menu_title);
+        menu->texts.replace(menu->help_id, locale.menu_help);
+        menu->texts.replace(menu->previous_page_label_id, locale.previous_label);
+        menu->texts.replace(menu->previous_page_help_id, locale.previous_help);
+        menu->texts.replace(menu->next_page_label_id, locale.next_label);
+        menu->texts.replace(menu->next_page_help_id, locale.next_help);
+        // Built-in pages are root pages titled with the host title; only
+        // their continuation slices show it, as "Title (n/m)".
+        for (auto& page : menu->pages) {
+            if (page.kind != erui::PageKind::root) continue;
+            menu->texts.replace(page.title_id, locale.menu_title);
+            menu->texts.replace(page.help_id, locale.menu_help);
+            const auto retitle = [&](const std::vector<erui::TextId>& ids) {
+                for (std::size_t slice = 0; slice < ids.size(); ++slice) {
+                    if (ids[slice] == page.title_id) continue;
+                    menu->texts.replace(ids[slice],
+                        numbered_title(locale.menu_title, slice + 1, ids.size()));
+                }
+            };
+            retitle(page.physical_title_ids);
+            if (page.builtin_physical_title_plan) {
+                for (const auto& variant : page.builtin_physical_title_plan->variants) {
+                    retitle(variant.title_ids);
+                }
+            }
+            // Game Options keeps one title vector per visible capacity.
+            if (&page != &menu->root_page()) continue;
+            for (const auto& ids : menu->root_physical_title_ids) retitle(ids);
         }
         return ERUI_OK;
     } catch (const std::bad_alloc&) {
