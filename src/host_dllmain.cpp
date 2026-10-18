@@ -670,6 +670,12 @@ DWORD run_host() noexcept {
 
         set_api_state(ApiState::runtime_ready);
         log::write("ERNativeUI host ready");
+        // A client language (ERNativeUIFork_SetHostLanguage) that arrived
+        // while the menu was compiling goes on the published menu now.
+        if (const ERUI_Result pending = registry().apply_pending_client_host_locale(); pending != ERUI_OK) {
+            log::write("WARN: Host locale (client): pending texts not applied (result=%d)",
+                static_cast<int>(pending));
+        }
         ERUI_GameLanguageInfo language{};
         language.size = sizeof(language);
         const ERUI_Result language_result = get_cached_steam_language(&language);
@@ -739,7 +745,8 @@ DWORD WINAPI host_thread(void*) noexcept {
 // language identifier such as "english" or "spanish", from the built-in table
 // plus an optional locales\<identifier>.ini. Before the menu freezes it sets
 // what the build uses; afterwards it relabels the published menu at once.
-// ERUI_HOST_NOT_READY in between, while the menu compiles.
+// In between, while the menu compiles, it is kept and applied as soon as the
+// menu is published (ERUI_OK).
 extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetHostLanguage(
     const char* identifier) {
     namespace host = erui::host;

@@ -735,7 +735,7 @@ struct Target {
     float parent_x{};
     float parent_y{};
     Horizontal horizontal{};  // rule.horizontal with side resolved
-    float parent_scale_x{1.0f};  // only != 1 when resolved with scaled_parents
+    float parent_scale_x{1.0f};  // product of the path levels' scales
     float parent_scale_y{1.0f};
     Matrix original{};
 };
@@ -764,10 +764,11 @@ const NamedPlacement* find_unnamed(
     return nullptr;
 }
 
-// scaled_parents: accept path levels with a scale (no skew). Only used to
-// find the elements again in a patched movie, where a parent target (Gauge)
-// may carry the HUD scale; the stage maths need plain translations.
-Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& named, bool scaled_parents = false) {
+// Path levels may carry a scale (no skew): a mod can scale a parent such as
+// PlayerHUD.Gauge, and a patched movie carries the HUD scale on its parent
+// targets. The patch and its verification must find the same elements, so
+// both accept them and transform() converts through the parent scale.
+Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& named) {
     Resolution resolution{};
     for (const AnchorRule& rule : kRules) {
         if (std::strcmp(rule.movie, movie->file) != 0) continue;
@@ -790,10 +791,10 @@ Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& na
                     ? find_unnamed(named, sprite,
                         static_cast<std::uint16_t>(std::atoi(std::string(segment.substr(1)).c_str())))
                     : find_named(named, sprite, segment);
-                // Every level must be a plain translation for the stage maths below.
+                // Every level must be a translation and a non-zero scale (no
+                // skew) for the stage maths below.
                 if (!parent || !parent->placement.has_character || !parent->placement.has_matrix ||
-                    (!scaled_parents && (parent->placement.matrix.scale_x != kFixedOne ||
-                        parent->placement.matrix.scale_y != kFixedOne)) ||
+                    parent->placement.matrix.scale_x == 0 || parent->placement.matrix.scale_y == 0 ||
                     parent->placement.matrix.skew0 != 0 || parent->placement.matrix.skew1 != 0) {
                     found = false;
                     break;
@@ -855,27 +856,31 @@ std::int32_t round_to_int(double value) noexcept {
 
 Matrix transform(const Matrix& matrix, const Target& target, const HudLayout& layout) noexcept {
     const AnchorRule& rule = *target.rule;
+    // Stage position of the element and back: the parents translate and scale.
+    const double parent_sx = target.parent_scale_x;
+    const double parent_sy = target.parent_scale_y;
+    const double stage_x = target.parent_x + parent_sx * matrix.translate_x / 20.0;
+    const double stage_y = target.parent_y + parent_sy * matrix.translate_y / 20.0;
+    const auto local_x = [&](double x) { return round_to_int((x - target.parent_x) / parent_sx * 20.0); };
+    const auto local_y = [&](double y) { return round_to_int((y - target.parent_y) / parent_sy * 20.0); };
     if (rule.horizontal == Horizontal::bar_fit) {
         // The parent (Gauge) is anchored left/top: its content moves by -dx and
         // scales by s around x 0, so the bar origin lands at -dx + s * x.
         const double s = layout.scale;
-        const double stage_x = target.parent_x + matrix.translate_x / 20.0;
-        const double right = stage_x + kBarArtRight * (matrix.scale_x / 65536.0);
+        const double right = stage_x + kBarArtRight * parent_sx * (matrix.scale_x / 65536.0);
         if (right < kBarFitThreshold) return matrix;
         const double margin = kStageWidth - right;
         const double origin = -layout.edge_offset + s * stage_x;
         const double target_right = kStageWidth + layout.edge_offset - margin * s;
         Matrix result = matrix;
-        result.scale_x = round_to_int((target_right - origin) / (kBarArtRight * s) * 65536.0);
+        result.scale_x = round_to_int((target_right - origin) / (kBarArtRight * s * parent_sx) * 65536.0);
         return result;
     }
     if (rule.horizontal == Horizontal::cover) {
         const double factor = (kStageWidth / 2.0 + layout.edge_offset) / (kStageWidth / 2.0);
-        const double stage_x = target.parent_x + matrix.translate_x / 20.0;
-        const double stage_y = target.parent_y + matrix.translate_y / 20.0;
         Matrix result = matrix;
-        result.translate_x = round_to_int((kStageWidth / 2.0 + (stage_x - kStageWidth / 2.0) * factor - target.parent_x) * 20.0);
-        result.translate_y = round_to_int((kStageHeight / 2.0 + (stage_y - kStageHeight / 2.0) * factor - target.parent_y) * 20.0);
+        result.translate_x = local_x(kStageWidth / 2.0 + (stage_x - kStageWidth / 2.0) * factor);
+        result.translate_y = local_y(kStageHeight / 2.0 + (stage_y - kStageHeight / 2.0) * factor);
         result.scale_x = round_to_int(matrix.scale_x * factor);
         result.scale_y = round_to_int(matrix.scale_y * factor);
         result.skew0 = round_to_int(matrix.skew0 * factor);
@@ -886,10 +891,9 @@ Matrix transform(const Matrix& matrix, const Target& target, const HudLayout& la
         // Widen around the stage centre so a full-width backdrop reaches the
         // screen edges: the visible stage is 1920 + 2 * edge_offset wide.
         const double factor = (kStageWidth / 2.0 + layout.edge_offset) / (kStageWidth / 2.0);
-        const double stage_x = target.parent_x + matrix.translate_x / 20.0;
         const double new_x = kStageWidth / 2.0 + (stage_x - kStageWidth / 2.0) * factor;
         Matrix result = matrix;
-        result.translate_x = round_to_int((new_x - target.parent_x) * 20.0);
+        result.translate_x = local_x(new_x);
         result.scale_x = round_to_int(matrix.scale_x * factor);
         result.skew1 = round_to_int(matrix.skew1 * factor);  // y contribution to x
         return result;
@@ -898,13 +902,11 @@ Matrix transform(const Matrix& matrix, const Target& target, const HudLayout& la
     const float ay = anchor_y(rule.vertical);
     const float shift = target.horizontal == Horizontal::left ? -layout.edge_offset
         : target.horizontal == Horizontal::right ? layout.edge_offset : 0.0f;
-    const double stage_x = target.parent_x + matrix.translate_x / 20.0;
-    const double stage_y = target.parent_y + matrix.translate_y / 20.0;
     const double new_x = ax + shift + (stage_x - ax) * layout.scale;
     const double new_y = ay + (stage_y - ay) * layout.scale;
     Matrix result = matrix;
-    result.translate_x = round_to_int((new_x - target.parent_x) * 20.0);
-    result.translate_y = round_to_int((new_y - target.parent_y) * 20.0);
+    result.translate_x = local_x(new_x);
+    result.translate_y = local_y(new_y);
     result.scale_x = round_to_int(matrix.scale_x * static_cast<double>(layout.scale));
     result.scale_y = round_to_int(matrix.scale_y * static_cast<double>(layout.scale));
     result.skew0 = round_to_int(matrix.skew0 * static_cast<double>(layout.scale));
@@ -994,14 +996,13 @@ bool analyse(
     Header& header,
     std::vector<NamedPlacement>& named,
     Resolution& resolution,
-    std::string& message,
-    bool scaled_parents = false) {
+    std::string& message) {
     if (!read_header(input, header, message)) return false;
     if (!collect_named(input, header.body_start, header.declared, 0, 0, named)) {
         message = "malformed tag structure";
         return false;
     }
-    resolution = resolve_targets(movie, named, scaled_parents);
+    resolution = resolve_targets(movie, named);
     return true;
 }
 
@@ -1036,7 +1037,7 @@ HudInspection inspect_hud_movie(HudMovie movie, std::span<const std::uint8_t> in
         Header header{};
         std::vector<NamedPlacement> named{};
         Resolution resolution{};
-        if (!analyse(movie, input, header, named, resolution, inspection.message, true)) {
+        if (!analyse(movie, input, header, named, resolution, inspection.message)) {
             inspection.error = ErrorCode::invalid_gfx;
             return inspection;
         }
@@ -1123,7 +1124,7 @@ PatchResult patch_hud_movie(
         std::vector<NamedPlacement> check_named{};
         Resolution check{};
         std::string check_message{};
-        if (!analyse(movie, output, check_header, check_named, check, check_message, true) ||
+        if (!analyse(movie, output, check_header, check_named, check, check_message) ||
             check.targets.size() != resolution.targets.size()) {
             return failure(ErrorCode::output_verification_failed, "patched movie does not parse back");
         }
@@ -1131,7 +1132,8 @@ PatchResult patch_hud_movie(
         for (std::size_t index = 0; index < resolution.targets.size(); ++index) {
             const Matrix expected = transform(resolution.targets[index].original, resolution.targets[index], layout);
             const Matrix& actual = check.targets[index].original;
-            if (std::memcmp(&expected, &actual, sizeof(Matrix)) != 0 || state.rewritten[index] == 0) {
+            if (check.targets[index].rule != resolution.targets[index].rule ||
+                std::memcmp(&expected, &actual, sizeof(Matrix)) != 0 || state.rewritten[index] == 0) {
                 return failure(ErrorCode::output_verification_failed,
                     std::string("unexpected placement after patching: ") + resolution.targets[index].rule->name);
             }

@@ -1521,16 +1521,23 @@ int main() {
         root_continuation_presentation.page_title_id)) ==
         L"NativeTweaks (2/2)");
     {
-        // ERNativeUIFork_SetHostLanguage after the freeze: waits for the
-        // published menu, then relabels the host texts in place.
+        // ERNativeUIFork_SetHostLanguage after the freeze, while the menu is
+        // still compiling: kept and applied once the menu is published.
         const erui::MenuLocalization spanish = spanish_host_locale();
-        ERUI_TEST_CHECK(registry.set_client_host_locale(spanish) == ERUI_HOST_NOT_READY);
+        ERUI_TEST_CHECK(registry.set_client_host_locale(spanish) == ERUI_OK);
         auto& runtime = erui::detail::runtime_state();
         runtime.menu = std::move(compiled);
+        ERUI_TEST_CHECK(registry.apply_pending_client_host_locale() == ERUI_HOST_NOT_READY);
         runtime.menu_published.store(true, std::memory_order_release);
-        ERUI_TEST_CHECK(registry.set_client_host_locale(spanish) == ERUI_OK);
         const auto& live = *runtime.menu;
         const auto text = [&](erui::TextId id) { return std::wstring(live.texts.lookup(id)); };
+        ERUI_TEST_CHECK(text(live.title_id) == L"NativeTweaks");  // not applied before publishing
+        ERUI_TEST_CHECK(registry.apply_pending_client_host_locale() == ERUI_OK);
+        ERUI_TEST_CHECK(text(live.title_id) == L"Ajustes de mods");
+        // Nothing pending any more: applying again changes nothing.
+        ERUI_TEST_CHECK(registry.apply_pending_client_host_locale() == ERUI_OK);
+        // And a call on the published menu relabels it at once.
+        ERUI_TEST_CHECK(registry.set_client_host_locale(spanish) == ERUI_OK);
         ERUI_TEST_CHECK(text(live.title_id) == L"Ajustes de mods");
         ERUI_TEST_CHECK(text(live.help_id) == L"Ayuda del host.");
         ERUI_TEST_CHECK(text(live.previous_page_label_id) == L"P\u00e1gina anterior");

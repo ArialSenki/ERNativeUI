@@ -2396,43 +2396,77 @@ ERUI_Result Registry::set_submenu_text(
     }
 }
 
+namespace {
+
+// Host texts (menu title/help, pagination) of a published menu, in place.
+void relabel_host_texts(erui::detail::CompiledMenu& menu, const erui::MenuLocalization& locale) {
+    menu.texts.replace(menu.title_id, locale.menu_title);
+    menu.texts.replace(menu.help_id, locale.menu_help);
+    menu.texts.replace(menu.previous_page_label_id, locale.previous_label);
+    menu.texts.replace(menu.previous_page_help_id, locale.previous_help);
+    menu.texts.replace(menu.next_page_label_id, locale.next_label);
+    menu.texts.replace(menu.next_page_help_id, locale.next_help);
+    // Built-in pages are root pages titled with the host title; only
+    // their continuation slices show it, as "Title (n/m)".
+    for (auto& page : menu.pages) {
+        if (page.kind != erui::PageKind::root) continue;
+        menu.texts.replace(page.title_id, locale.menu_title);
+        menu.texts.replace(page.help_id, locale.menu_help);
+        const auto retitle = [&](const std::vector<erui::TextId>& ids) {
+            for (std::size_t slice = 0; slice < ids.size(); ++slice) {
+                if (ids[slice] == page.title_id) continue;
+                menu.texts.replace(ids[slice],
+                    numbered_title(locale.menu_title, slice + 1, ids.size()));
+            }
+        };
+        retitle(page.physical_title_ids);
+        if (page.builtin_physical_title_plan) {
+            for (const auto& variant : page.builtin_physical_title_plan->variants) {
+                retitle(variant.title_ids);
+            }
+        }
+        // Game Options keeps one title vector per visible capacity.
+        if (&page != &menu.root_page()) continue;
+        for (const auto& ids : menu.root_physical_title_ids) retitle(ids);
+    }
+}
+
+} // namespace
+
 ERUI_Result Registry::set_client_host_locale(erui::MenuLocalization locale) noexcept {
     try {
         std::lock_guard lock(mutex_);
         client_host_locale_ = true;
         pagination_locale_ = locale;
         erui::detail::CompiledMenu* menu{};
-        if (const ERUI_Result state = text_target(frozen_, menu); state != ERUI_OK) return state;
-        if (!menu) return ERUI_OK;
-        menu->texts.replace(menu->title_id, locale.menu_title);
-        menu->texts.replace(menu->help_id, locale.menu_help);
-        menu->texts.replace(menu->previous_page_label_id, locale.previous_label);
-        menu->texts.replace(menu->previous_page_help_id, locale.previous_help);
-        menu->texts.replace(menu->next_page_label_id, locale.next_label);
-        menu->texts.replace(menu->next_page_help_id, locale.next_help);
-        // Built-in pages are root pages titled with the host title; only
-        // their continuation slices show it, as "Title (n/m)".
-        for (auto& page : menu->pages) {
-            if (page.kind != erui::PageKind::root) continue;
-            menu->texts.replace(page.title_id, locale.menu_title);
-            menu->texts.replace(page.help_id, locale.menu_help);
-            const auto retitle = [&](const std::vector<erui::TextId>& ids) {
-                for (std::size_t slice = 0; slice < ids.size(); ++slice) {
-                    if (ids[slice] == page.title_id) continue;
-                    menu->texts.replace(ids[slice],
-                        numbered_title(locale.menu_title, slice + 1, ids.size()));
-                }
-            };
-            retitle(page.physical_title_ids);
-            if (page.builtin_physical_title_plan) {
-                for (const auto& variant : page.builtin_physical_title_plan->variants) {
-                    retitle(variant.title_ids);
-                }
-            }
-            // Game Options keeps one title vector per visible capacity.
-            if (&page != &menu->root_page()) continue;
-            for (const auto& ids : menu->root_physical_title_ids) retitle(ids);
+        const ERUI_Result state = text_target(frozen_, menu);
+        if (state == ERUI_HOST_NOT_READY) {
+            // Frozen but not published yet (the menu is compiling): the host
+            // applies it right after publishing (apply_pending_client_host_locale).
+            client_host_locale_pending_ = true;
+            return ERUI_OK;
         }
+        if (state != ERUI_OK) return state;
+        client_host_locale_pending_ = false;
+        if (!menu) return ERUI_OK;
+        relabel_host_texts(*menu, locale);
+        return ERUI_OK;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
+
+ERUI_Result Registry::apply_pending_client_host_locale() noexcept {
+    try {
+        std::lock_guard lock(mutex_);
+        if (!client_host_locale_pending_) return ERUI_OK;
+        erui::detail::CompiledMenu* menu{};
+        if (const ERUI_Result state = text_target(frozen_, menu); state != ERUI_OK) return state;
+        if (!menu) return ERUI_HOST_NOT_READY;
+        relabel_host_texts(*menu, pagination_locale_);
+        client_host_locale_pending_ = false;
         return ERUI_OK;
     } catch (const std::bad_alloc&) {
         return ERUI_OUT_OF_MEMORY;

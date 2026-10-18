@@ -364,7 +364,7 @@ void* replace_with_patched(
         } else {
             // Keep the original bytes alive with the same lifetime rule.
             input.resize(static_cast<std::size_t>(total));
-            const std::vector<std::uint8_t>* kept = g_cache.keep_alive(std::move(input));
+            const std::vector<std::uint8_t>* kept = g_cache.keep_alive(fnv1a(input.data(), input.size()), std::move(input));
             wrapper->buffer = kept->data();
             wrapper->size = static_cast<std::int32_t>(kept->size());
         }
@@ -593,12 +593,18 @@ std::wstring runtime_gfx_ready(bool spanish) noexcept {
 // for the menus with a layout table (never scaled); scale_percent
 // (50-150) resizes them around their corner. Applies the next time the game
 // loads the HUD. Callable at any time, also before the API is ready.
+// ERUI_NOT_SUPPORTED while the OpenFile hook is not installed ([Gfx]
+// RuntimePatch = 0, a failed installation, or a call before the host thread
+// installs it): nothing would apply the layout, so it is not stored. The hook
+// is installed before the host API becomes ready, so a client that connected
+// gets the definitive answer.
 extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetHudLayout(
     std::uint32_t flags,
     std::uint32_t scale_percent) {
     if (scale_percent < 50u || scale_percent > 150u || (flags & ~3u) != 0) {
         return ERUI_INVALID_ARGUMENT;
     }
+    if (!erui::host::runtime_gfx_installed()) return ERUI_NOT_SUPPORTED;
     erui::host::set_hud_layout((flags & 1u) != 0, scale_percent, (flags & 2u) != 0);
     return ERUI_OK;
 }

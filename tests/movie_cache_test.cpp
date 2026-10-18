@@ -68,8 +68,13 @@ void test_unbounded() {
     const auto lookup = cache.find(999999, 10, 0);
     check(!unchanged && lookup.found && !lookup.output, "an unpatched result is remembered and served unchanged");
 
-    const auto* kept = cache.keep_alive(std::vector<std::uint8_t>(5, 1));
+    const auto* kept = cache.keep_alive(42, std::vector<std::uint8_t>(5, 1));
     check(kept && kept->size() == 5 && cache.size() == kEntries + 2, "keep_alive does not use lookup entries");
+    // A movie reopened with the same bytes reuses its kept copy.
+    check(cache.keep_alive(42, std::vector<std::uint8_t>(5, 1)) == kept, "keep_alive reuses the same bytes");
+    const auto* other = cache.keep_alive(42, std::vector<std::uint8_t>(5, 2));
+    check(other && other != kept && (*other)[0] == 2 && (*kept)[0] == 1,
+        "keep_alive keeps different bytes apart even with the same hash");
 }
 
 // Mirrors the runtime with the real movies: every layout movie and the

@@ -9,6 +9,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -63,14 +64,24 @@ public:
     }
 
     // Keeps bytes alive for the process (original bytes read from a
-    // non-MemoryFile that are served through the wrapper file).
-    const std::vector<std::uint8_t>* keep_alive(std::vector<std::uint8_t> bytes) {
+    // non-MemoryFile that are served through the wrapper file). A movie
+    // opened again with the same bytes reuses the kept copy.
+    const std::vector<std::uint8_t>* keep_alive(std::uint64_t hash, std::vector<std::uint8_t> bytes) {
         auto entry = std::make_unique<Entry>();
+        entry->hash = hash;
+        entry->size = bytes.size();
         entry->output = std::move(bytes);
         const std::vector<std::uint8_t>* result = &entry->output;
         AcquireSRWLockExclusive(&lock_);
         try {
-            kept_.push_back(std::move(entry));
+            const auto existing = std::find_if(kept_.begin(), kept_.end(), [&](const auto& kept) {
+                return kept->hash == hash && kept->output == entry->output;
+            });
+            if (existing != kept_.end()) {
+                result = &(*existing)->output;
+            } else {
+                kept_.push_back(std::move(entry));
+            }
         } catch (...) {
             ReleaseSRWLockExclusive(&lock_);
             throw;

@@ -275,6 +275,52 @@ void test_settings_chain(const std::filesystem::path& folder, const char* file) 
         std::string("chained output keeps every anchored element: ") + file);
 }
 
+// A HUD mod may scale a rule's parent (here PlayerHUD.Gauge, scaled by a first
+// patch at 125 %). The bars under it must still be found and the movie patched,
+// not rejected by the verification.
+void test_scaled_parent(const std::filesystem::path& folder) {
+    using namespace erui::gfx;
+    const HudMovie movie = classify_hud_movie("01_000_fe.gfx");
+    const std::filesystem::path path = folder / "01_000_fe.gfx";
+    if (!std::filesystem::exists(path)) {
+        std::printf("skip scaled parent test (missing %s)\n", path.string().c_str());
+        return;
+    }
+    const auto input = read_file(path);
+    const auto scaled = patch_hud_movie(movie, input, {0.0f, 1.25f});
+    check(scaled.success() && !scaled.output.empty(), "scaled parent: build a movie with PlayerHUD.Gauge at 125%");
+    if (!scaled.success()) return;
+    const HudInspection source = inspect_hud_movie(movie, scaled.output);
+    const auto patched = patch_hud_movie(movie, scaled.output, {320.0f, 1.0f});
+    check(patched.success(), "scaled parent: movie is patched, not rejected: " + patched.message);
+    if (!patched.success()) return;
+    const HudInspection after = inspect_hud_movie(movie, patched.output);
+    // Same placements as vanilla patched at offset 320 and scale 1.25 (the
+    // bars aside: drawn past the 16:9 edge here, so they get fitted).
+    const auto reference = patch_hud_movie(movie, input, {320.0f, 1.25f});
+    const HudInspection expected = inspect_hud_movie(movie, reference.output);
+    check(after.success() && after.missing.empty() && after.found.size() == expected.found.size(),
+        "scaled parent: every anchored element found");
+    std::size_t bars = 0;
+    for (const auto& want : expected.found) {
+        const HudPlacement* got = find(after, want.name);
+        const HudPlacement* was = find(source, want.name);
+        if (!got || !was) {
+            check(false, "scaled parent: element survives: " + want.name);
+            continue;
+        }
+        if (want.horizontal == 'f') {
+            ++bars;
+            check(near(got->x, was->x - 320.0f), "scaled parent: bar follows the Gauge: " + want.name);
+            continue;
+        }
+        check(near(got->x, want.x) && near(got->y, want.y) && near(got->scale_x, want.scale_x) &&
+                near(got->scale_y, want.scale_y),
+            "scaled parent: " + want.name);
+    }
+    check(bars == 4, "scaled parent: HP/MP/SP/HPRegain found under the scaled Gauge");
+}
+
 std::vector<std::filesystem::path> fixture_folders() {
     std::vector<std::filesystem::path> folders{};
 #ifdef ERNATIVEUI_TEST_HUD_GFX_DIRS
@@ -305,6 +351,7 @@ int main() {
         if (index == 0) {
             test_settings_chain(folders[index], "02_040_optionsetting.gfx");
             test_settings_chain(folders[index], "02_042_pc_graphicsetting.gfx");
+            test_scaled_parent(folders[index]);
         }
     }
     std::printf(g_failures ? "FAILED (%d)\n" : "PASSED\n", g_failures);
