@@ -139,6 +139,15 @@ void test_movie(const std::filesystem::path& folder, erui::gfx::HudMovie movie, 
         }
     }
     for (const auto& name : before.missing) std::printf("     missing %s\n", name.c_str());
+    // Side anchors follow the half of the stage the loaded movie uses
+    // (Convergence puts the save icon top-left).
+    for (const auto& placement : before.found) {
+        if (placement.name == "AutoSaveIcon" || placement.name == "Soul") {
+            check(placement.horizontal == (placement.x < 960.0f ? 'l' : 'r'),
+                "side anchor of " + placement.name + " follows its position (" +
+                    std::string(1, placement.horizontal) + "): " + label);
+        }
+    }
 
     const auto identity = patch_hud_movie(movie, input, {});
     check(identity.success() && identity.report.already_satisfied && identity.output.empty(),

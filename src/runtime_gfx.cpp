@@ -65,6 +65,16 @@ std::atomic<unsigned> g_menu_background_alpha{100};
 std::atomic<bool> g_hud_screen_edges{false};
 std::atomic<bool> g_menu_edges{false};
 std::atomic<unsigned> g_hud_scale_percent{100};
+// Layout (layout_key) in force when the first HUD/menu movie was opened; the
+// game opens them all once at startup, so later changes need a restart.
+constexpr std::uint32_t kLayoutUnset = 0xFFFFFFFFu;
+std::atomic<std::uint32_t> g_layout_used{kLayoutUnset};
+
+std::uint32_t layout_key() noexcept {
+    return (g_hud_screen_edges.load(std::memory_order_relaxed) ? 1u : 0u) |
+        (g_menu_edges.load(std::memory_order_relaxed) ? 2u : 0u) |
+        (g_hud_scale_percent.load(std::memory_order_relaxed) << 8);
+}
 // The game's back-buffer size (width, height): the same globals the movie
 // player passes to Scaleform's SetViewport (2.7.1.0 RVA 0x3B43CF8).
 const std::uint32_t* g_screen_size{};
@@ -393,8 +403,13 @@ void* route_settings_movie(SettingsMovie movie, const char* url, void* file) noe
 
 void* route_hud_movie(erui::gfx::HudMovie movie, const char* url, void* file) noexcept {
     try {
+        std::uint32_t unset = kLayoutUnset;
+        g_layout_used.compare_exchange_strong(unset, layout_key(), std::memory_order_acq_rel);
         const erui::gfx::HudLayout layout = current_hud_layout(movie);
-        if (layout.identity()) return file;
+        if (layout.identity()) {
+            status_for(movie).opened.fetch_add(1, std::memory_order_acq_rel);
+            return file;
+        }
         return replace_with_patched(erui::gfx::hud_movie_name(movie), status_for(movie),
             [movie, layout](const std::uint8_t* input, std::size_t size) {
                 return hud_patched_bytes(movie, layout, input, size);
@@ -471,11 +486,12 @@ void set_hud_layout(bool screen_edges, unsigned scale_percent, bool menu_edges) 
     if (edges_changed || scale_changed || pause_changed) {
         log::write("Runtime GFX: HUD layout set (screen edges %s, scale %u%%, menu edges %s); applies when the movies reload",
             screen_edges ? "on" : "off", scale_percent, menu_edges ? "on" : "off");
-        // The game opens every movie once at startup: a change after that
-        // only shows after a restart.
+        // The game opens every movie once at startup: only a layout that differs
+        // from the one those movies were opened with needs a restart.
+        const std::uint32_t used = g_layout_used.load(std::memory_order_acquire);
         unsigned opened = 0;
         for (const MovieStatus& status : g_hud_status) opened += status.opened.load(std::memory_order_acquire);
-        if (opened) {
+        if (used != kLayoutUnset && used != layout_key() && opened) {
             log::write("WARN: Runtime GFX: %u HUD/menu movies were already loaded with the previous layout; restart the game to apply",
                 opened);
         }

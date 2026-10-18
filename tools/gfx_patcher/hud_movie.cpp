@@ -28,7 +28,9 @@ constexpr std::int32_t kFixedOne = 0x10000;
 // bar_fit: gauge bars a mod drew up to the 16:9 right edge (Tarnished HUD,
 // Adaptive Bar Scaling) get their X scale recomputed so they end at the real
 // screen edge; vanilla-length bars are left as they are.
-enum class Horizontal : std::uint8_t { left, center, right, stretch, cover, bar_fit };
+// side: left or right, whichever half of the stage the loaded movie puts the
+// element in (mods move some corner elements to the other side).
+enum class Horizontal : std::uint8_t { left, center, right, stretch, cover, bar_fit, side };
 enum class Vertical : std::uint8_t { top, middle, bottom };
 
 struct AnchorRule {
@@ -61,8 +63,8 @@ constexpr AnchorRule kRules[] = {
     {"01_000_fe.gfx", nullptr, "BossList", Horizontal::center, Vertical::bottom},      // 947,908
     {"01_000_fe.gfx", nullptr, "ActionGuide", Horizontal::right, Vertical::bottom},    // 1902,920
     {"01_000_fe.gfx", nullptr, "GetItemLog", Horizontal::right, Vertical::bottom},     // 1409,820
-    {"01_001_fe_soul.gfx", nullptr, "Soul", Horizontal::right, Vertical::bottom},          // 1762,1034
-    {"01_002_fe_saveicon.gfx", nullptr, "AutoSaveIcon", Horizontal::right, Vertical::top}, // 1800,96
+    {"01_001_fe_soul.gfx", nullptr, "Soul", Horizontal::side, Vertical::bottom},          // 1762,1034
+    {"01_002_fe_saveicon.gfx", nullptr, "AutoSaveIcon", Horizontal::side, Vertical::top},  // 1800,96 (Convergence: 56,130)
     // Big notices ("LOST GRACE DISCOVERED", "YOU DIED", "ENEMY FELLED"...):
     // every TextEffect_N reuses sprite 602, whose only child is the
     // MENU_KUROOBI band (-64..1984), so widening it inside 602 covers all of
@@ -337,6 +339,8 @@ constexpr AnchorRule kRules[] = {
     // name inside are placed by the game (scroll/zoom) and stay untouched. ----
     {"02_120_worldmap.gfx", nullptr, "backdrop", Horizontal::stretch, Vertical::middle, 1},     // 0..1920
     {"02_120_worldmap.gfx", "Body", "Mask", Horizontal::stretch, Vertical::middle},
+    // Opening fade over the map area (-117..2031), same in vanilla and Convergence.
+    {"02_120_worldmap.gfx", "Body._.Screen", "map fade", Horizontal::stretch, Vertical::middle, 1},
     {"02_120_worldmap.gfx", "Body", "bottom bar", Horizontal::stretch, Vertical::bottom, 84},    // -78..1985
     {"02_120_worldmap.gfx", "Body", "bottom bar 2", Horizontal::stretch, Vertical::bottom, 86},
     {"02_120_worldmap.gfx", "Body", "Time", Horizontal::right, Vertical::bottom},                // 1493..2094
@@ -730,6 +734,7 @@ struct Target {
     bool character_known{};
     float parent_x{};
     float parent_y{};
+    Horizontal horizontal{};  // rule.horizontal with side resolved
     float parent_scale_x{1.0f};  // only != 1 when resolved with scaled_parents
     float parent_scale_y{1.0f};
     Matrix original{};
@@ -822,6 +827,11 @@ Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& na
         target.parent_x = parent_x;
         target.parent_y = parent_y;
         target.parent_scale_x = parent_scale_x;
+        target.horizontal = rule.horizontal;
+        if (rule.horizontal == Horizontal::side) {
+            const float stage_x = parent_x + parent_scale_x * element->placement.matrix.translate_x / 20.0f;
+            target.horizontal = stage_x < kStageWidth / 2.0f ? Horizontal::left : Horizontal::right;
+        }
         target.parent_scale_y = parent_scale_y;
         target.original = element->placement.matrix;
         resolution.targets.push_back(target);
@@ -884,10 +894,10 @@ Matrix transform(const Matrix& matrix, const Target& target, const HudLayout& la
         result.skew1 = round_to_int(matrix.skew1 * factor);  // y contribution to x
         return result;
     }
-    const float ax = anchor_x(rule.horizontal);
+    const float ax = anchor_x(target.horizontal);
     const float ay = anchor_y(rule.vertical);
-    const float shift = rule.horizontal == Horizontal::left ? -layout.edge_offset
-        : rule.horizontal == Horizontal::right ? layout.edge_offset : 0.0f;
+    const float shift = target.horizontal == Horizontal::left ? -layout.edge_offset
+        : target.horizontal == Horizontal::right ? layout.edge_offset : 0.0f;
     const double stage_x = target.parent_x + matrix.translate_x / 20.0;
     const double stage_y = target.parent_y + matrix.translate_y / 20.0;
     const double new_x = ax + shift + (stage_x - ax) * layout.scale;
@@ -1038,8 +1048,8 @@ HudInspection inspect_hud_movie(HudMovie movie, std::span<const std::uint8_t> in
             placement.y = target.parent_y + target.parent_scale_y * target.original.translate_y / 20.0f;
             placement.scale_x = target.original.scale_x / static_cast<float>(kFixedOne);
             placement.scale_y = target.original.scale_y / static_cast<float>(kFixedOne);
-            placement.horizontal = target.rule->horizontal == Horizontal::left ? 'l'
-                : target.rule->horizontal == Horizontal::right ? 'r'
+            placement.horizontal = target.horizontal == Horizontal::left ? 'l'
+                : target.horizontal == Horizontal::right ? 'r'
                 : target.rule->horizontal == Horizontal::stretch ? 's'
                 : target.rule->horizontal == Horizontal::cover ? 'v'
                 : target.rule->horizontal == Horizontal::bar_fit ? 'f' : 'c';
