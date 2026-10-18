@@ -81,7 +81,8 @@ endif()
 if(_ernativeui_need_gfx_patch)
     # Portable, asset-free GFX transformation core.
     add_library(ERNativeUIGfxPatch STATIC tools/gfx_patcher/gfx_patch.cpp
-        tools/gfx_patcher/settings_movie.cpp)
+        tools/gfx_patcher/settings_movie.cpp
+        tools/gfx_patcher/hud_movie.cpp)
     add_library(ERNativeUI::GfxPatch ALIAS ERNativeUIGfxPatch)
     target_include_directories(ERNativeUIGfxPatch PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/tools/gfx_patcher>)
@@ -401,6 +402,32 @@ if(_ernativeui_enable_tests)
             ERNATIVEUI_TEST_GAME_EXE="${ERNATIVEUI_TEST_GAME_EXE}")
     endif()
     add_test(NAME ERNativeUI.RuntimeGfx COMMAND ERNativeUIRuntimeGfxTests)
+
+    # Fork: HUD layout patch. Optional local fixtures: "|"-separated folders
+    # with 01_000_fe.gfx / 01_001_fe_soul.gfx / 01_002_fe_saveicon.gfx, the
+    # vanilla folder first.
+    set(ERNATIVEUI_TEST_HUD_GFX_DIRS "" CACHE STRING
+        "Folders with HUD movies (vanilla first, then other mods' copies)")
+    add_executable(ERNativeUIHudMovieTests tests/hud_movie_test.cpp)
+    target_link_libraries(ERNativeUIHudMovieTests PRIVATE ERNativeUI::GfxPatch)
+    target_compile_features(ERNativeUIHudMovieTests PRIVATE cxx_std_20)
+    if(ERNATIVEUI_TEST_HUD_GFX_DIRS)
+        target_compile_definitions(ERNativeUIHudMovieTests PRIVATE
+            "ERNATIVEUI_TEST_HUD_GFX_DIRS=\"${ERNATIVEUI_TEST_HUD_GFX_DIRS}\"")
+    endif()
+    add_test(NAME ERNativeUI.HudMovie COMMAND ERNativeUIHudMovieTests)
+
+    # Fork: runtime GFX cache (no entry limit; settings movies never fall back).
+    add_executable(ERNativeUIMovieCacheTests tests/movie_cache_test.cpp)
+    target_include_directories(ERNativeUIMovieCacheTests PRIVATE src)
+    target_link_libraries(ERNativeUIMovieCacheTests PRIVATE ERNativeUI::GfxPatch)
+    target_compile_features(ERNativeUIMovieCacheTests PRIVATE cxx_std_20)
+    target_compile_definitions(ERNativeUIMovieCacheTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    if(ERNATIVEUI_TEST_HUD_GFX_DIRS)
+        target_compile_definitions(ERNativeUIMovieCacheTests PRIVATE
+            "ERNATIVEUI_TEST_HUD_GFX_DIRS=\"${ERNATIVEUI_TEST_HUD_GFX_DIRS}\"")
+    endif()
+    add_test(NAME ERNativeUI.MovieCache COMMAND ERNativeUIMovieCacheTests)
 
     add_executable(ERNativeUIPaginationTests tests/pagination_test.cpp src/pagination.cpp)
     target_include_directories(ERNativeUIPaginationTests PRIVATE src)

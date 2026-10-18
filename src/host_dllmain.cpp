@@ -224,6 +224,14 @@ DWORD run_host() noexcept {
 
         // Before anything waits: Scaleform may open the settings movies early.
         if (read_ini(ini, L"Gfx", L"RuntimePatch", 1) != 0) {
+            // HUD layout defaults; a client (NativeTweaks) can change them
+            // later with ERNativeUIFork_SetHudLayout.
+            const int hud_scale = read_ini(ini, L"Gfx", L"HudScale", 100);
+            set_hud_layout(read_ini(ini, L"Gfx", L"HudToScreenEdges", 0) != 0,
+                hud_scale < 0 ? 0u : static_cast<unsigned>(hud_scale),
+                // PauseMenuToScreenEdges: name used by the first test builds.
+                read_ini(ini, L"Gfx", L"MenusToScreenEdges",
+                    read_ini(ini, L"Gfx", L"PauseMenuToScreenEdges", 0)) != 0);
             const int background_alpha =
                 read_ini(ini, L"Gfx", L"MenuBackgroundAlpha", 100);
             if (!install_runtime_gfx(
