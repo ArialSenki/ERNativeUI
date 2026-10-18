@@ -62,7 +62,7 @@ struct PagePresentationSpec {
 };
 
 struct MenuLocalization {
-    std::wstring menu_title{L"Mod Forge"};
+    std::wstring menu_title{L"NativeTweaks"};
     std::wstring menu_help{L"Settings provided by installed mods."};
     std::wstring previous_label{L"Previous Page"};
     std::wstring previous_help{L"Return to the preceding settings page."};
