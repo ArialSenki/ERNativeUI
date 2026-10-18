@@ -471,6 +471,14 @@ void set_hud_layout(bool screen_edges, unsigned scale_percent, bool menu_edges) 
     if (edges_changed || scale_changed || pause_changed) {
         log::write("Runtime GFX: HUD layout set (screen edges %s, scale %u%%, menu edges %s); applies when the movies reload",
             screen_edges ? "on" : "off", scale_percent, menu_edges ? "on" : "off");
+        // The game opens every movie once at startup: a change after that
+        // only shows after a restart.
+        unsigned opened = 0;
+        for (const MovieStatus& status : g_hud_status) opened += status.opened.load(std::memory_order_acquire);
+        if (opened) {
+            log::write("WARN: Runtime GFX: %u HUD/menu movies were already loaded with the previous layout; restart the game to apply",
+                opened);
+        }
     }
 }
 

@@ -16,11 +16,19 @@ constexpr std::uint16_t kTagDefineSprite = 39;
 constexpr std::uint16_t kTagPlaceObject3 = 70;
 constexpr float kStageWidth = 1920.0f;
 constexpr float kStageHeight = 1080.0f;
+// Vanilla gauge bar art spans 1452.7 stage px right of the bar origin at
+// scale 1 (HP/MP/SP 136..1607 with origin 154.3). Tarnished HUD sets the
+// placements to sx 1.21, so the art ends at 1912.
+constexpr double kBarArtRight = 1452.7;
+constexpr double kBarFitThreshold = kStageWidth - 70.0;  // ends at or near the 16:9 edge
 constexpr std::int32_t kFixedOne = 0x10000;
 
 // stretch: widen in X around the stage centre (one-piece backdrops);
 // cover: scale X and Y around the centre (full-screen pictures, crops top/bottom).
-enum class Horizontal : std::uint8_t { left, center, right, stretch, cover };
+// bar_fit: gauge bars a mod drew up to the 16:9 right edge (Tarnished HUD,
+// Adaptive Bar Scaling) get their X scale recomputed so they end at the real
+// screen edge; vanilla-length bars are left as they are.
+enum class Horizontal : std::uint8_t { left, center, right, stretch, cover, bar_fit };
 enum class Vertical : std::uint8_t { top, middle, bottom };
 
 struct AnchorRule {
@@ -62,6 +70,11 @@ constexpr AnchorRule kRules[] = {
     // stays centred and unscaled.
     {"01_000_fe.gfx", "TextEffect.TextEffect_100.#1", "notice band", Horizontal::stretch, Vertical::middle, 1},
     {"01_000_fe.gfx", "TextEffect.TextEffect_50", "notice dimmer", Horizontal::stretch, Vertical::middle, 1},
+    // Gauge bars drawn to the 16:9 edge by a bar mod reach the real edge.
+    {"01_000_fe.gfx", "PlayerHUD.Gauge", "HP", Horizontal::bar_fit, Vertical::top},
+    {"01_000_fe.gfx", "PlayerHUD.Gauge", "MP", Horizontal::bar_fit, Vertical::top},
+    {"01_000_fe.gfx", "PlayerHUD.Gauge", "SP", Horizontal::bar_fit, Vertical::top},
+    {"01_000_fe.gfx", "PlayerHUD.Gauge", "HPRegain", Horizontal::bar_fit, Vertical::top},
 
     // Pause menu: everything lives in ItemList (580,636). Left column of
     // entries + key guide; right column with the pouch and gesture slots.
@@ -717,6 +730,8 @@ struct Target {
     bool character_known{};
     float parent_x{};
     float parent_y{};
+    float parent_scale_x{1.0f};  // only != 1 when resolved with scaled_parents
+    float parent_scale_y{1.0f};
     Matrix original{};
 };
 
@@ -744,13 +759,18 @@ const NamedPlacement* find_unnamed(
     return nullptr;
 }
 
-Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& named) {
+// scaled_parents: accept path levels with a scale (no skew). Only used to
+// find the elements again in a patched movie, where a parent target (Gauge)
+// may carry the HUD scale; the stage maths need plain translations.
+Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& named, bool scaled_parents = false) {
     Resolution resolution{};
     for (const AnchorRule& rule : kRules) {
         if (std::strcmp(rule.movie, movie->file) != 0) continue;
         std::uint16_t sprite = 0;
         float parent_x = 0.0f;
         float parent_y = 0.0f;
+        float parent_scale_x = 1.0f;
+        float parent_scale_y = 1.0f;
         if (rule.parent) {
             // A path from the root: "A", "#3" or "A.B.#1"; each segment is a
             // named placement or "#N", an unnamed one by its depth.
@@ -767,15 +787,17 @@ Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& na
                     : find_named(named, sprite, segment);
                 // Every level must be a plain translation for the stage maths below.
                 if (!parent || !parent->placement.has_character || !parent->placement.has_matrix ||
-                    parent->placement.matrix.scale_x != kFixedOne ||
-                    parent->placement.matrix.scale_y != kFixedOne ||
+                    (!scaled_parents && (parent->placement.matrix.scale_x != kFixedOne ||
+                        parent->placement.matrix.scale_y != kFixedOne)) ||
                     parent->placement.matrix.skew0 != 0 || parent->placement.matrix.skew1 != 0) {
                     found = false;
                     break;
                 }
                 sprite = parent->placement.character;
-                parent_x += parent->placement.matrix.translate_x / 20.0f;
-                parent_y += parent->placement.matrix.translate_y / 20.0f;
+                parent_x += parent_scale_x * parent->placement.matrix.translate_x / 20.0f;
+                parent_y += parent_scale_y * parent->placement.matrix.translate_y / 20.0f;
+                parent_scale_x *= parent->placement.matrix.scale_x / static_cast<float>(kFixedOne);
+                parent_scale_y *= parent->placement.matrix.scale_y / static_cast<float>(kFixedOne);
                 if (dot == std::string_view::npos) break;
                 begin = dot + 1;
             }
@@ -799,6 +821,8 @@ Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& na
         target.character_known = element->placement.has_character;
         target.parent_x = parent_x;
         target.parent_y = parent_y;
+        target.parent_scale_x = parent_scale_x;
+        target.parent_scale_y = parent_scale_y;
         target.original = element->placement.matrix;
         resolution.targets.push_back(target);
     }
@@ -821,6 +845,20 @@ std::int32_t round_to_int(double value) noexcept {
 
 Matrix transform(const Matrix& matrix, const Target& target, const HudLayout& layout) noexcept {
     const AnchorRule& rule = *target.rule;
+    if (rule.horizontal == Horizontal::bar_fit) {
+        // The parent (Gauge) is anchored left/top: its content moves by -dx and
+        // scales by s around x 0, so the bar origin lands at -dx + s * x.
+        const double s = layout.scale;
+        const double stage_x = target.parent_x + matrix.translate_x / 20.0;
+        const double right = stage_x + kBarArtRight * (matrix.scale_x / 65536.0);
+        if (right < kBarFitThreshold) return matrix;
+        const double margin = kStageWidth - right;
+        const double origin = -layout.edge_offset + s * stage_x;
+        const double target_right = kStageWidth + layout.edge_offset - margin * s;
+        Matrix result = matrix;
+        result.scale_x = round_to_int((target_right - origin) / (kBarArtRight * s) * 65536.0);
+        return result;
+    }
     if (rule.horizontal == Horizontal::cover) {
         const double factor = (kStageWidth / 2.0 + layout.edge_offset) / (kStageWidth / 2.0);
         const double stage_x = target.parent_x + matrix.translate_x / 20.0;
@@ -946,13 +984,14 @@ bool analyse(
     Header& header,
     std::vector<NamedPlacement>& named,
     Resolution& resolution,
-    std::string& message) {
+    std::string& message,
+    bool scaled_parents = false) {
     if (!read_header(input, header, message)) return false;
     if (!collect_named(input, header.body_start, header.declared, 0, 0, named)) {
         message = "malformed tag structure";
         return false;
     }
-    resolution = resolve_targets(movie, named);
+    resolution = resolve_targets(movie, named, scaled_parents);
     return true;
 }
 
@@ -987,7 +1026,7 @@ HudInspection inspect_hud_movie(HudMovie movie, std::span<const std::uint8_t> in
         Header header{};
         std::vector<NamedPlacement> named{};
         Resolution resolution{};
-        if (!analyse(movie, input, header, named, resolution, inspection.message)) {
+        if (!analyse(movie, input, header, named, resolution, inspection.message, true)) {
             inspection.error = ErrorCode::invalid_gfx;
             return inspection;
         }
@@ -995,14 +1034,15 @@ HudInspection inspect_hud_movie(HudMovie movie, std::span<const std::uint8_t> in
             HudPlacement placement{};
             placement.name = target.rule->parent
                 ? std::string(target.rule->parent) + "." + target.rule->name : target.rule->name;
-            placement.x = target.parent_x + target.original.translate_x / 20.0f;
-            placement.y = target.parent_y + target.original.translate_y / 20.0f;
+            placement.x = target.parent_x + target.parent_scale_x * target.original.translate_x / 20.0f;
+            placement.y = target.parent_y + target.parent_scale_y * target.original.translate_y / 20.0f;
             placement.scale_x = target.original.scale_x / static_cast<float>(kFixedOne);
             placement.scale_y = target.original.scale_y / static_cast<float>(kFixedOne);
             placement.horizontal = target.rule->horizontal == Horizontal::left ? 'l'
                 : target.rule->horizontal == Horizontal::right ? 'r'
                 : target.rule->horizontal == Horizontal::stretch ? 's'
-                : target.rule->horizontal == Horizontal::cover ? 'v' : 'c';
+                : target.rule->horizontal == Horizontal::cover ? 'v'
+                : target.rule->horizontal == Horizontal::bar_fit ? 'f' : 'c';
             placement.vertical = target.rule->vertical == Vertical::top ? 't'
                 : target.rule->vertical == Vertical::bottom ? 'b' : 'm';
             inspection.found.push_back(std::move(placement));
@@ -1073,7 +1113,7 @@ PatchResult patch_hud_movie(
         std::vector<NamedPlacement> check_named{};
         Resolution check{};
         std::string check_message{};
-        if (!analyse(movie, output, check_header, check_named, check, check_message) ||
+        if (!analyse(movie, output, check_header, check_named, check, check_message, true) ||
             check.targets.size() != resolution.targets.size()) {
             return failure(ErrorCode::output_verification_failed, "patched movie does not parse back");
         }

@@ -89,7 +89,7 @@ void test_movie(const std::filesystem::path& folder, erui::gfx::HudMovie movie, 
     if (!before.success()) return;
     if (vanilla) {
         check(before.missing.empty(), "vanilla has every anchored element: " + label);
-        const std::size_t expected = file == "01_000_fe.gfx" ? 16u
+        const std::size_t expected = file == "01_000_fe.gfx" ? 20u
             : file == "02_000_ingametop.gfx" ? 33u
             : file == "02_010_equiptop.gfx" ? 11u
             : file == "02_011_equip.gfx" ? 9u
@@ -184,6 +184,21 @@ void test_movie(const std::filesystem::path& folder, erui::gfx::HudMovie movie, 
             const HudPlacement* moved = find(after, original.name);
             if (!moved) {
                 check(false, "element survives: " + original.name);
+                continue;
+            }
+            if (original.horizontal == 'f') {
+                // Gauge bar: the origin follows the Gauge (left/top, scaled); a bar
+                // drawn to the 16:9 edge ends at the real edge with the same margin.
+                const float s = layout.scale;
+                const float right = original.x + 1452.7f * original.scale_x;
+                const bool fits = right >= 1850.0f;
+                const float expected_right = fits ? 1920.0f + layout.edge_offset - (1920.0f - right) * s
+                                                  : -layout.edge_offset + s * right;
+                const float actual_right = moved->x + 1452.7f * moved->scale_x * s;
+                check(near(moved->x, -layout.edge_offset + s * original.x) &&
+                        std::fabs(actual_right - expected_right) < 0.5f &&
+                        (fits || near(moved->scale_x, original.scale_x)),
+                    "  " + original.name + (fits ? " bar reaches the screen edge" : " vanilla bar unchanged") + suffix);
                 continue;
             }
             if (original.horizontal == 'v') {
