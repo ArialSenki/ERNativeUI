@@ -308,6 +308,68 @@ void verify_text_input_length_contract() {
     }
 }
 
+// Mod Settings lists NativeTweaks' rows first, whatever the priorities; other
+// built-in pages keep the plain priority order.
+void verify_mod_settings_lists_hub_first() {
+    erui::host::Registry registry{};
+    registry.open_registration();
+    unsigned presses = 0;
+    const auto add = [&](const char* id, const wchar_t* label, std::int32_t priority) {
+        ERUI_ProviderDesc desc{};
+        desc.size = sizeof(desc);
+        desc.api_version = ERUI_API_VERSION_CURRENT;
+        desc.owner_module = GetModuleHandleW(nullptr);
+        desc.provider_id = ascii(id);
+        desc.display_name = utf16(label);
+        desc.root_priority = priority;
+        ERUI_ProviderHandle handle{};
+        ERUI_PageHandle root{};
+        ERUI_TEST_CHECK(registry.register_provider(
+            ERUI_API_VERSION_CURRENT, &desc, &handle, &root) == ERUI_OK);
+        ERUI_ButtonDesc button{};
+        button.size = sizeof(button);
+        button.label = utf16(label);
+        button.help = utf16(L"help");
+        button.enabled = 1;
+        button.callback = &pressed;
+        button.user_data = &presses;
+        for (const ERUI_BuiltinPage page :
+            {ERUI_BUILTIN_PAGE_MOD_SETTINGS, ERUI_BUILTIN_PAGE_CAMERA_OPTIONS}) {
+            ERUI_PageHandle builtin{};
+            ERUI_TEST_CHECK(registry.get_builtin_page(handle, page, &builtin) == ERUI_OK);
+            ERUI_TEST_CHECK(registry.add_button(handle, builtin, &button, nullptr) == ERUI_OK);
+        }
+        const std::wstring root_label = std::wstring(label) + L" root";
+        button.label = utf16(root_label);
+        ERUI_TEST_CHECK(registry.add_button(handle, root, &button, nullptr) == ERUI_OK);
+        ERUI_TEST_CHECK(registry.commit_provider(handle) == ERUI_OK);
+    };
+    add("spirit-multiplier", L"Other mod", 100);
+    add("er-mod-settings-hub", L"Hub", 1000);
+
+    auto menu = registry.freeze_and_build();
+    ERUI_TEST_CHECK(menu != nullptr);
+    auto compiled = erui::detail::MenuCompiler::compile(*menu);
+    ERUI_TEST_CHECK(compiled != nullptr);
+    const auto labels = [&](erui::detail::BuiltinPage page) {
+        std::vector<std::wstring> result;
+        const auto* compiled_page = compiled->builtin_page(
+            erui::detail::builtin_native_category_ids[static_cast<std::size_t>(page)]);
+        ERUI_TEST_CHECK(compiled_page != nullptr);
+        if (!compiled_page) return result;
+        for (const auto& row : compiled_page->rows)
+            result.emplace_back(compiled->texts.lookup(row.label_id));
+        return result;
+    };
+    ERUI_TEST_CHECK((labels(erui::detail::BuiltinPage::mod_settings) ==
+        std::vector<std::wstring>{L"Hub", L"Other mod", L"Other mod root"}));
+    // The other provider's root rows moved; NativeTweaks' stay on Game Options.
+    ERUI_TEST_CHECK((labels(erui::detail::BuiltinPage::game_options) ==
+        std::vector<std::wstring>{L"Hub root"}));
+    ERUI_TEST_CHECK((labels(erui::detail::BuiltinPage::camera_options) ==
+        std::vector<std::wstring>{L"Other mod", L"Hub"}));
+}
+
 void verify_programmatic_value_writes_are_silent() {
     erui::host::Registry registry{};
     registry.open_registration();
@@ -607,6 +669,7 @@ int main() {
 
     verify_text_input_length_contract();
     verify_programmatic_value_writes_are_silent();
+    verify_mod_settings_lists_hub_first();
 
     ERUI_Api short_table{};
     short_table.size = ERUI_API_V1_0_SIZE - 1u;
@@ -1180,6 +1243,11 @@ int main() {
     };
     add_provider("late-priority", L"Last Provider", 20, 5);
     add_provider("first-priority", L"First Provider", 5, 1);
+    // Quiet and draft-free, but an awaited provider that never registered
+    // keeps registration open until maxWait.
+    ERUI_TEST_CHECK(!registry.try_freeze_and_build(
+        GetTickCount64(), 0, (std::numeric_limits<std::uint64_t>::max)(),
+        "er-mod-settings-hub"));
 
     ERUI_ProviderDesc active_draft = provider;
     active_draft.provider_id = ascii("active-draft");

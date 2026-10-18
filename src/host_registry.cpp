@@ -3005,28 +3005,58 @@ std::unique_ptr<erui::Menu> Registry::freeze_and_build_locked() {
         if (left->id != right->id) return left->id < right->id;
         return left->ordinal < right->ordinal;
     });
+    // With NativeTweaks registered, every other provider's menu goes to Mod
+    // Settings after NativeTweaks' own rows: its Game Options rows (the
+    // provider root, where e.g. Spirit Multiplier puts its submenu) move there
+    // too, so such mods read as more pages of NativeTweaks. Other built-in
+    // pages keep the plain priority order.
+    constexpr std::string_view hub_id = "er-mod-settings-hub";
+    const bool hub_present = std::any_of(ordered.begin(), ordered.end(),
+        [&](const Provider* provider) { return provider->id == hub_id; });
+    std::vector<const Provider*> mod_settings_order = ordered;
+    std::stable_partition(mod_settings_order.begin(), mod_settings_order.end(),
+        [&](const Provider* provider) { return provider->id == hub_id; });
+    const auto append_builtin = [&](const Provider& provider,
+                                    erui::detail::BuiltinPage source_page,
+                                    erui::Page*& destination,
+                                    erui::detail::BuiltinPage destination_page) {
+        const ERUI_PageHandle source_handle = provider.builtin_pages[
+            static_cast<std::size_t>(source_page)];
+        if (source_handle == ERUI_INVALID_PAGE) return;
+        const auto source = provider.page_lookup.find(source_handle);
+        if (source == provider.page_lookup.end()) {
+            throw std::logic_error("provider built-in page missing");
+        }
+        if (source->second->builtin_page != source_page) {
+            throw std::logic_error(
+                "provider built-in page destination mismatch");
+        }
+        if (source->second->rows.empty() && source_page != destination_page) return;
+        if (!destination) {
+            destination = &menu->builtin_page(destination_page);
+        }
+        append_page_locked(provider, *source->second, *destination);
+    };
     for (std::size_t destination_index = 0;
          destination_index < erui::detail::builtin_page_count;
          ++destination_index) {
         erui::Page* destination{};
+        const auto builtin_page =
+            static_cast<erui::detail::BuiltinPage>(destination_index);
+        if (builtin_page == erui::detail::BuiltinPage::mod_settings) {
+            for (const Provider* provider : mod_settings_order) {
+                append_builtin(*provider, builtin_page, destination, builtin_page);
+                if (hub_present && provider->id != hub_id) {
+                    append_builtin(*provider, erui::detail::BuiltinPage::game_options,
+                        destination, builtin_page);
+                }
+            }
+            continue;
+        }
         for (const Provider* provider : ordered) {
-            const ERUI_PageHandle source_handle =
-                provider->builtin_pages[destination_index];
-            if (source_handle == ERUI_INVALID_PAGE) continue;
-            const auto source = provider->page_lookup.find(source_handle);
-            if (source == provider->page_lookup.end()) {
-                throw std::logic_error("provider built-in page missing");
-            }
-            const auto builtin_page =
-                static_cast<erui::detail::BuiltinPage>(destination_index);
-            if (source->second->builtin_page != builtin_page) {
-                throw std::logic_error(
-                    "provider built-in page destination mismatch");
-            }
-            if (!destination) {
-                destination = &menu->builtin_page(builtin_page);
-            }
-            append_page_locked(*provider, *source->second, *destination);
+            if (hub_present && provider->id != hub_id &&
+                builtin_page == erui::detail::BuiltinPage::game_options) continue;
+            append_builtin(*provider, builtin_page, destination, builtin_page);
         }
     }
     for (const Provider* provider : ordered) {
@@ -3068,18 +3098,22 @@ std::unique_ptr<erui::Menu> Registry::freeze_and_build() {
 std::unique_ptr<erui::Menu> Registry::try_freeze_and_build(
     std::uint64_t opened_at,
     std::uint64_t quiet_ms,
-    std::uint64_t maximum_wait_ms) {
+    std::uint64_t maximum_wait_ms,
+    std::string_view awaited_provider_id) {
     std::lock_guard lock(mutex_);
     if (!open_) throw std::logic_error("registration is not open");
 
     std::size_t committed = 0;
+    bool awaited_committed = awaited_provider_id.empty();
     for (const auto& item : providers_) {
-        if (item.second->committed) ++committed;
+        if (!item.second->committed) continue;
+        ++committed;
+        if (item.second->id == awaited_provider_id) awaited_committed = true;
     }
     const std::size_t drafts = providers_.size() - committed;
     const std::uint64_t now = GetTickCount64();
     const bool maximum_reached = now - opened_at >= maximum_wait_ms;
-    const bool quiet = committed != 0 && drafts == 0 &&
+    const bool quiet = committed != 0 && drafts == 0 && awaited_committed &&
         now - opened_at >= quiet_ms &&
         now - last_activity_tick_ >= quiet_ms;
     if (!maximum_reached && !quiet) return {};

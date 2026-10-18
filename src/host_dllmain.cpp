@@ -461,9 +461,20 @@ DWORD run_host() noexcept {
             static_cast<unsigned long long>(quiet_ms),
             static_cast<unsigned long long>(max_wait_ms));
 
+        // NativeTweaks registers only after scanning other mods' INIs (~2-3 s).
+        // A mod with its own early provider (e.g. Spirit Multiplier) would
+        // otherwise end the quiet window first and lock NativeTweaks out, so
+        // while NativeTweaks.dll is loaded wait for it (still capped by maxWait).
+        bool awaiting_logged = false;
         while (!g_stop.load(std::memory_order_acquire)) {
+            const bool await_hub = GetModuleHandleW(L"NativeTweaks.dll") != nullptr;
+            if (await_hub && !awaiting_logged) {
+                log::write("NativeTweaks.dll is loaded: registration stays open until it registers (maxWait still applies)");
+                awaiting_logged = true;
+            }
             if (auto menu = registry().try_freeze_and_build(
-                    opened_at, quiet_ms, max_wait_ms)) {
+                    opened_at, quiet_ms, max_wait_ms,
+                    await_hub ? std::string_view("er-mod-settings-hub") : std::string_view())) {
                 g_menu = std::move(menu);
                 break;
             }

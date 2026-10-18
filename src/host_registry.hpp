@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -37,7 +38,8 @@ public:
     [[nodiscard]] std::unique_ptr<erui::Menu> try_freeze_and_build(
         std::uint64_t opened_at,
         std::uint64_t quiet_ms,
-        std::uint64_t maximum_wait_ms);
+        std::uint64_t maximum_wait_ms,
+        std::string_view awaited_provider_id = {});
     [[nodiscard]] bool registration_open() const noexcept;
     [[nodiscard]] std::uint64_t generation() const noexcept;
     [[nodiscard]] std::size_t committed_provider_count() const noexcept;
