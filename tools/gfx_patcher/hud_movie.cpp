@@ -55,6 +55,13 @@ constexpr AnchorRule kRules[] = {
     {"01_000_fe.gfx", nullptr, "GetItemLog", Horizontal::right, Vertical::bottom},     // 1409,820
     {"01_001_fe_soul.gfx", nullptr, "Soul", Horizontal::right, Vertical::bottom},          // 1762,1034
     {"01_002_fe_saveicon.gfx", nullptr, "AutoSaveIcon", Horizontal::right, Vertical::top}, // 1800,96
+    // Big notices ("LOST GRACE DISCOVERED", "YOU DIED", "ENEMY FELLED"...):
+    // every TextEffect_N reuses sprite 602, whose only child is the
+    // MENU_KUROOBI band (-64..1984), so widening it inside 602 covers all of
+    // them; TextEffect_50 also has a full-screen dimmer (0..1920). The text
+    // stays centred and unscaled.
+    {"01_000_fe.gfx", "TextEffect.TextEffect_100.#1", "notice band", Horizontal::stretch, Vertical::middle, 1},
+    {"01_000_fe.gfx", "TextEffect.TextEffect_50", "notice dimmer", Horizontal::stretch, Vertical::middle, 1},
 
     // Pause menu: everything lives in ItemList (580,636). Left column of
     // entries + key guide; right column with the pouch and gesture slots.
@@ -327,6 +334,9 @@ constexpr AnchorRule kRules[] = {
     {"02_120_worldmap.gfx", nullptr, "StatusBar", Horizontal::left, Vertical::bottom},           // 75
     {"02_120_worldmap.gfx", nullptr, "MenuTitle", Horizontal::left, Vertical::top},
     {"02_120_worldmap.gfx", nullptr, "title base", Horizontal::left, Vertical::top, 113},
+
+    // NPC subtitles: Caption_0.#1 only holds the dark gradient band (-48..1968).
+    {"01_060_caption.gfx", "Caption_0", "subtitle band", Horizontal::stretch, Vertical::bottom, 1},
 };
 
 constexpr LayoutMovie kMovies[] = {
@@ -382,6 +392,7 @@ constexpr LayoutMovie kMovies[] = {
     {"05_903_warn_illegalcopy.gfx", LayoutGroup::menu},
     {"05_905_logo_copyright.gfx", LayoutGroup::menu},
     {"02_120_worldmap.gfx", LayoutGroup::menu},
+    {"01_060_caption.gfx", LayoutGroup::menu},
 };
 
 bool equals_ignore_case(std::string_view left, std::string_view right) noexcept {
@@ -741,21 +752,37 @@ Resolution resolve_targets(HudMovie movie, const std::vector<NamedPlacement>& na
         float parent_x = 0.0f;
         float parent_y = 0.0f;
         if (rule.parent) {
-            // "#N" names an unnamed root placement by its depth.
-            const NamedPlacement* parent = rule.parent[0] == '#'
-                ? find_unnamed(named, 0, static_cast<std::uint16_t>(std::atoi(rule.parent + 1)))
-                : find_named(named, 0, rule.parent);
-            // The parent must be a plain translation for the stage maths below.
-            if (!parent || !parent->placement.has_character || !parent->placement.has_matrix ||
-                parent->placement.matrix.scale_x != kFixedOne ||
-                parent->placement.matrix.scale_y != kFixedOne ||
-                parent->placement.matrix.skew0 != 0 || parent->placement.matrix.skew1 != 0) {
+            // A path from the root: "A", "#3" or "A.B.#1"; each segment is a
+            // named placement or "#N", an unnamed one by its depth.
+            bool found = true;
+            const std::string_view path = rule.parent;
+            std::size_t begin = 0;
+            while (found && begin <= path.size()) {
+                const std::size_t dot = path.find('.', begin);
+                const std::string_view segment =
+                    path.substr(begin, dot == std::string_view::npos ? std::string_view::npos : dot - begin);
+                const NamedPlacement* parent = !segment.empty() && segment[0] == '#'
+                    ? find_unnamed(named, sprite,
+                        static_cast<std::uint16_t>(std::atoi(std::string(segment.substr(1)).c_str())))
+                    : find_named(named, sprite, segment);
+                // Every level must be a plain translation for the stage maths below.
+                if (!parent || !parent->placement.has_character || !parent->placement.has_matrix ||
+                    parent->placement.matrix.scale_x != kFixedOne ||
+                    parent->placement.matrix.scale_y != kFixedOne ||
+                    parent->placement.matrix.skew0 != 0 || parent->placement.matrix.skew1 != 0) {
+                    found = false;
+                    break;
+                }
+                sprite = parent->placement.character;
+                parent_x += parent->placement.matrix.translate_x / 20.0f;
+                parent_y += parent->placement.matrix.translate_y / 20.0f;
+                if (dot == std::string_view::npos) break;
+                begin = dot + 1;
+            }
+            if (!found) {
                 resolution.missing.push_back(std::string(rule.parent) + "." + rule.name);
                 continue;
             }
-            sprite = parent->placement.character;
-            parent_x = parent->placement.matrix.translate_x / 20.0f;
-            parent_y = parent->placement.matrix.translate_y / 20.0f;
         }
         const NamedPlacement* element = rule.depth >= 0
             ? find_unnamed(named, sprite, static_cast<std::uint16_t>(rule.depth))

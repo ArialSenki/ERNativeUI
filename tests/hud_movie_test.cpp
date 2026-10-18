@@ -89,7 +89,7 @@ void test_movie(const std::filesystem::path& folder, erui::gfx::HudMovie movie, 
     if (!before.success()) return;
     if (vanilla) {
         check(before.missing.empty(), "vanilla has every anchored element: " + label);
-        const std::size_t expected = file == "01_000_fe.gfx" ? 14u
+        const std::size_t expected = file == "01_000_fe.gfx" ? 16u
             : file == "02_000_ingametop.gfx" ? 33u
             : file == "02_010_equiptop.gfx" ? 11u
             : file == "02_011_equip.gfx" ? 9u
@@ -111,6 +111,7 @@ void test_movie(const std::filesystem::path& folder, erui::gfx::HudMovie movie, 
         if (file == "01_000_fe.gfx") {
             anchored("PlayerHUD.Gauge", 'l', 't', 7.0f);
             anchored("ActionGuide", 'r', 'b', 1901.6f);
+            anchored("TextEffect.TextEffect_100.#1.notice band", 's', 'm', -64.0f);
         } else if (file == "01_001_fe_soul.gfx") {
             anchored("Soul", 'r', 'b', 1762.0f);
         } else if (file == "01_002_fe_saveicon.gfx") {
