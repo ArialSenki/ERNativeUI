@@ -22,30 +22,41 @@ called compatible or incompatible merely because its features look unrelated.
   host or a committed client is unsupported.
 
 The completed analysis and live regression matrix cover Windows
-`eldenring.exe` product versions `2.7.0.0` and `2.7.1.0`. Release notes remain
-the authority for the exact game builds supported by a packaged host.
+`eldenring.exe` product versions `2.7.0.0`, `2.7.1.0`, and `2.7.2.0`. Release
+notes remain the authority for the exact game builds supported by a packaged
+host.
 
 ## Elden Ring executable support
 
 The ERUI API version and the Elden Ring executable version are independent.
 A game compatibility patch can therefore keep the public API unchanged.
 
-| ERNativeUI host | Public APIs | Elden Ring 2.7.0.0 | Elden Ring 2.7.1.0 |
-|---|---|---|---|
-| `1.0.0` | API 1.0 | Supported | No declared support; use the current host |
-| `1.1.0` | APIs 1.0 and 1.1 | Supported | No declared support; use the current host |
-| `1.1.1` | APIs 1.0 and 1.1 | Live-validated | Live-validated |
-| `1.2.0` | APIs 1.0, 1.1, and 1.2 | Live-validated | Live-validated |
+| ERNativeUI host | Public APIs | Elden Ring 2.7.0.0 | Elden Ring 2.7.1.0 | Elden Ring 2.7.2.0 |
+|---|---|---|---|---|
+| `1.0.0` | API 1.0 | Supported | No declared support; use the current host | No declared support; use the current host |
+| `1.1.0` | APIs 1.0 and 1.1 | Supported | No declared support; use the current host | No declared support; use the current host |
+| `1.1.1` | APIs 1.0 and 1.1 | Live-validated | Live-validated | No declared support; use the current host |
+| `1.2.0` | APIs 1.0, 1.1, and 1.2 | Live-validated | Live-validated | No declared support; use the current host |
+| `1.2.1` | APIs 1.0, 1.1, and 1.2 | Live-validated | Live-validated | No declared support; use the current host |
+| `1.3.0` | APIs 1.0 through 1.3 | Existing API 1.0–1.2 paths retained; the build profile is retained, but build-locked API 1.3 capabilities such as custom tabs are unavailable | Live-validated, including Solid Uncapper 2.3 | Live-validated without Solid Uncapper |
 
-Existing client DLLs compiled for ERUI API 1.0 or API 1.1 do not need to be
-rebuilt for the 1.2.0 host; players update the single host DLL.
+Existing client DLLs compiled for an earlier ERUI API do not need to be
+rebuilt for a host that retains that API; players update the single host DLL.
 
-The two exact runtime identities are:
+The three exact runtime identities are:
 
 | Game version | SHA-256 | PE timestamp | Image size |
 |---|---|---:|---:|
 | `2.7.0.0` | `D1A84083C6C7C7902162FF098F7D86812839AA6B3575959398857E539C488134` | `0x69E9C9B9` | `0x5E09600` |
 | `2.7.1.0` | `1A3547101327F65D0C76DA2F9190AC0AA66871EA42BAE2AECC61E11A8B597891` | `0x6A96B418` | `0x5E0DA00` |
+| `2.7.2.0` | `F9118FEA2CFD8FA3901E8060BFADB1552CB2471771DED8A5B662C4E298FFB328` | `0x6AABF7E7` | `0x5DFD600` |
+
+The live-tested 2.7.2.0 / App 1.17.2 executable had a file size of 86,973,008
+bytes. The 1.3.0 release candidate exposing ERUI API 1.3 selected its exact
+profile, installed all required backends, completed the settings GFX at
+runtime, and successfully exercised 50 custom tabs with 1,000 rows (58
+logical tabs in total), controller and mouse navigation, Back, and menu
+reopening. The run produced no `WARN`, `ERROR`, or `FATAL` log entries.
 
 The host identifies the loaded image from the PE timestamp **and** image size,
 selects one private address profile, then validates every build-locked entry,
@@ -53,8 +64,9 @@ vtable, and data anchor before use. A timestamp-only or size-only match is not
 accepted. Unknown future builds continue to fail closed for features that
 depend on exact native layouts.
 
-The [2.7.1.0 update record](research/game-updates/elden-ring-2.7.1.0.md)
-documents what moved and how the new profile was derived.
+The [2.7.1.0 update record](research/game-updates/elden-ring-2.7.1.0.md) and
+[2.7.2.0 update record](research/game-updates/elden-ring-2.7.2.0.md) document
+what moved and how each exact profile was derived.
 
 ## Several ERNativeUI client mods
 
@@ -129,7 +141,7 @@ more independent overlap while installing ColorPicker. Solid Uncapper also
 detours the Scaleform visibility setter at game RVA `0x734190`, which
 ERNativeUI calls when preflighting and presenting the standalone color swatch.
 This is not a 2.7.1.0 relocation: the same RVA and pristine entry pattern are
-present in both supported game profiles.
+present in both Solid-Uncapper-tested profiles (2.7.0.0 and 2.7.1.0).
 
 ERNativeUI now captures that one pristine entry before Solid Uncapper's worker
 can modify it. After the existing stabilization wait, the entry must either
@@ -147,30 +159,51 @@ Input Bindings, and ColorPicker chains remained operational when Solid
 Uncapper was present, while the same entries followed their pristine paths
 when it was absent.
 
-The same patch also accounts for Solid Uncapper's already-materialized
-Game Options row when selecting the root pagination plan. With the vanilla
-six-row movie, four game rows plus Solid Uncapper leave one slot: an
-overflowing ERNativeUI menu places only Next there. With the optional 13-row
-movie, the same five existing rows leave eight slots. This prevents a provider
-or navigation row from being appended beyond the movie's actual placements.
-Both the original six-row layout and optional 13-row layout were
-live-validated with and without Solid Uncapper.
+Solid Uncapper has not yet been regression-tested with the 2.7.2.0 profile.
+Its 2.7.2.0-compatible update was not available during API 1.3 release
+preparation, so no compatibility claim is made for that combination.
+
+The same integration also accounts for Solid Uncapper's already-materialized
+Game Options row when selecting the root pagination plan. With default runtime
+GFX patching enabled, ERNativeUI completes the supported Game Options panel to
+13 rows before Scaleform consumes it. Four game rows plus Solid Uncapper then
+leave eight slots. This prevents a provider or navigation row from being
+appended beyond the completed movie's actual placements.
 
 Report the exact game and Solid Uncapper versions when describing a
 compatibility result.
 
-## Optional loose GFX and other asset mods
+## Modified GFX and other asset mods
 
-ERNativeUI's two `menu/win/*.gfx` files are optional presentation assets. Mod
-Engine 2 can expose only one final loose replacement for a given game path, so
-another mod shipping the same GFX may override ERNativeUI's capacity or custom
-widget presentation depending on the configured directories.
+With the default `[GFX] EnableRuntimePatching = 1`, ERNativeUI transforms the
+effective supported settings and title movies in memory after the game or mod
+loader selects them. No ERNativeUI loose GFX replacement is normally required.
+A third-party replacement remains compatible when its relevant panel, widget,
+or title-information structure can be validated; ERNativeUI adds only the
+missing supported rows and presentation.
 
-The DLL still uses live native capacity and documented control fallbacks when
-the ERNativeUI asset is absent. To combine two edits to the same movie, start
-from the same game-version original and reproduce both structural changes in
-one reviewed output; do not rely on load order to merge binary GFX files. See
-[Presentation and optional GFX](guides/presentation-and-gfx.md).
+The same structural policy applies to the System tab strip. With patching
+enabled, `[Tabs] MinimumTabSlots` requests a minimum of 8, 9, or 10 physical
+slots without shrinking a compatible larger input. Ten is the hard native
+ceiling; there is no `MaximumTabSlots` setting. This physical limit is
+independent of the 1,024 logical custom-tab catalogue, whose overflow remains
+reachable through the shifting viewport.
+
+Mod Engine 2 can still expose only one loose replacement for a given path.
+Load order does not merge two independent binary edits. If the winning movie
+is malformed or its relevant structure is unrecognized, ERNativeUI leaves its
+bytes unchanged instead of guessing. See
+[Runtime GFX completion and presentation](guides/presentation-and-gfx.md).
+
+For a strict pass-through compatibility test, set
+`[GFX] EnableRuntimePatching = 0` and restart. ERNativeUI then does not install
+the Scaleform file-opening hook and leaves the selected GFX bytes untouched.
+Pages continue to paginate against the live capacity and custom tabs remain
+available. ERNativeUI adds no rows or TextInput/ColorPicker presentation;
+compatible structures already authored into the effective movie remain
+available, and otherwise those controls use functional fallbacks.
+`MinimumTabSlots` cannot grow the movie, and API 1.3 title-screen text is
+unavailable.
 
 ## Seamless Co-op
 
@@ -185,11 +218,25 @@ an older matrix.
 
 ## Shadow of the Erdtree
 
-The project was developed without a separate live DLC compatibility run.
-Owning Shadow of the Erdtree normally uses the same executable line, but that
-is not sufficient evidence by itself: optional resources, menu states, or a
-later executable can differ. Use a release that names the running game build
-and report DLC ownership when describing a reproducible issue.
+The Elden Ring 2.7.1.0 title movie and API 1.3's adaptive provider-text
+placement were live-tested in both content states. In the DLC-absent run, the
+native `DLCVersion_0` field was empty and its authored spacer remained. In the
+DLC-present run, the field displayed `Shadow of the Erdtree`, followed by the
+authored blank row and then `OFFLINE`.
+
+API 1.3 uses that distinction when placing bottom-right provider text. Known
+absence may reuse the empty DLC placement and spacer only when the effective
+`05_000_title.gfx` exactly matches the validated Elden Ring 2.7.1.0 / App
+1.17.1 native profile. Installed or unknown state reserves them. A
+structurally compatible modified or otherwise unrecognized movie also keeps
+the DLC row and spacer reserved, while an unsupported title hierarchy remains
+unchanged. The adaptive branch has structural and unit coverage and was
+live-validated through separate DLC-absent and DLC-present runs on Elden Ring
+2.7.1.0.
+
+These title-screen observations do not establish compatibility for every DLC
+resource or menu state. Use a release that names the running game build and
+report DLC ownership and installation state with a reproducible issue.
 
 ## After an Elden Ring update
 

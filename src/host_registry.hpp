@@ -3,6 +3,7 @@
 #include <ernativeui/erui.h>
 #include "host_storage.hpp"
 #include "menu.hpp"
+#include "tab_configuration.hpp"
 
 #include <Windows.h>
 
@@ -31,8 +32,22 @@ public:
     Registry(const Registry&) = delete;
     Registry& operator=(const Registry&) = delete;
 
+    // Custom tabs are advertised only after an authoritative native backend
+    // has completed its compatibility checks. Availability is immutable once
+    // provider registration opens, so every negotiated table observes one
+    // stable contract for the lifetime of that registration epoch.
+    [[nodiscard]] bool enable_custom_tabs_backend() noexcept;
+    [[nodiscard]] bool custom_tabs_backend_available() const noexcept;
+    // Title-screen text follows the same publication rule: advertise it only
+    // after the validated GFX transform/open seam is ready, and never change
+    // availability once registration has opened.
+    [[nodiscard]] bool enable_title_screen_text_backend() noexcept;
+    [[nodiscard]] bool title_screen_text_backend_available() const noexcept;
     void open_registration() noexcept;
     void set_host_locale(erui::MenuLocalization pagination);
+    void set_tab_configuration(erui::detail::TabConfiguration configuration);
+    [[nodiscard]] erui::detail::TabDiagnosticsReport
+        tab_diagnostics_report() const;
     [[nodiscard]] std::unique_ptr<erui::Menu> freeze_and_build();
     [[nodiscard]] std::unique_ptr<erui::Menu> try_freeze_and_build(
         std::uint64_t opened_at,
@@ -52,6 +67,13 @@ public:
         ERUI_ProviderHandle provider,
         ERUI_BuiltinPage builtin_page,
         ERUI_PageHandle* out_page) noexcept;
+    ERUI_Result add_tab(
+        ERUI_ProviderHandle provider,
+        const ERUI_TabDesc* description,
+        ERUI_PageHandle* out_page) noexcept;
+    ERUI_Result add_title_screen_text(
+        ERUI_ProviderHandle provider,
+        const ERUI_TitleScreenTextDesc* description) noexcept;
     ERUI_Result add_input_section(
         ERUI_ProviderHandle provider,
         const ERUI_InputSectionDesc* description,
@@ -292,6 +314,10 @@ private:
         std::atomic_bool formatter_fallback_logged{false};
         erui::detail::BuiltinPage builtin_page{
             erui::detail::BuiltinPage::count};
+        bool custom_tab{};
+        std::string tab_id{};
+        std::int32_t preferred_tab_order{};
+        erui::TabIconSpec tab_icon{};
         std::vector<Row*> rows{};
     };
 
@@ -337,7 +363,9 @@ private:
         std::vector<std::unique_ptr<Row>> rows{};
         std::vector<std::unique_ptr<BindingSection>> binding_sections{};
         std::vector<std::unique_ptr<Binding>> bindings{};
+        std::vector<erui::TitleScreenTextSpec> title_screen_texts{};
         std::unordered_map<ERUI_PageHandle, Page*> page_lookup{};
+        std::unordered_map<std::string, Page*> tab_id_lookup{};
         std::unordered_map<ERUI_RowHandle, Row*> row_lookup{};
         std::unordered_map<ERUI_InputSectionHandle, BindingSection*>
             binding_section_lookup{};
@@ -398,6 +426,8 @@ private:
     void note_activity_locked() noexcept;
 
     mutable std::mutex mutex_{};
+    bool custom_tabs_backend_available_{};
+    bool title_screen_text_backend_available_{};
     bool open_{};
     bool frozen_{};
     std::uint64_t generation_{};
@@ -406,6 +436,8 @@ private:
     std::uint64_t next_ordinal_{};
     std::unordered_map<ERUI_ProviderHandle, std::unique_ptr<Provider>> providers_{};
     erui::MenuLocalization pagination_locale_{};
+    erui::detail::TabConfiguration tab_configuration_{};
+    erui::detail::TabDiagnosticsReport tab_diagnostics_report_{};
 };
 
 Registry& registry() noexcept;

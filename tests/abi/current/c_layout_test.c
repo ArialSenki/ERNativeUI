@@ -7,6 +7,31 @@
 _Static_assert(sizeof(ERUI_StringView) == 16u, "ERUI_StringView ABI drift");
 _Static_assert(sizeof(ERUI_Utf16View) == 16u, "ERUI_Utf16View ABI drift");
 _Static_assert(sizeof(ERUI_ProviderDesc) == 56u, "v1.0 provider prefix drift");
+_Static_assert(sizeof(ERUI_TabIconDesc) == 32u,
+    "tab-icon descriptor drift");
+_Static_assert(offsetof(ERUI_TabIconDesc, pixels) == 16u,
+    "tab-icon pixel-pointer offset drift");
+_Static_assert(sizeof(ERUI_TabDesc) == 64u, "tab descriptor drift");
+_Static_assert(offsetof(ERUI_TabDesc, tab_id) == 8u,
+    "tab ID offset drift");
+_Static_assert(offsetof(ERUI_TabDesc, title) == 24u,
+    "tab title offset drift");
+_Static_assert(offsetof(ERUI_TabDesc, preferred_order) == 40u,
+    "tab preferred-order offset drift");
+_Static_assert(offsetof(ERUI_TabDesc, reserved0) == 44u,
+    "tab reserved0 offset drift");
+_Static_assert(offsetof(ERUI_TabDesc, icon) == 48u,
+    "tab icon offset drift");
+_Static_assert(offsetof(ERUI_TabDesc, reserved) == 56u,
+    "tab reserved offset drift");
+_Static_assert(ERUI_CUSTOM_TAB_MAX_COUNT == 1024u,
+    "custom-tab count limit drift");
+_Static_assert(ERUI_CUSTOM_TAB_TITLE_MAX_CODE_UNITS == 95u,
+    "custom-tab title limit drift");
+_Static_assert(ERUI_TAB_LIMIT_REACHED == 22u,
+    "custom-tab limit result drift");
+_Static_assert(ERUI_TAB_ICON_FORMAT_RGBA8 == 1u,
+    "RGBA8 tab-icon format drift");
 _Static_assert(sizeof(ERUI_ButtonDesc) == 64u, "v1.0 button prefix drift");
 _Static_assert(sizeof(ERUI_ToggleDesc) == 64u, "v1.0 toggle prefix drift");
 _Static_assert(sizeof(ERUI_SliderDesc) == 80u, "v1.0 slider prefix drift");
@@ -44,7 +69,10 @@ _Static_assert(offsetof(ERUI_Api, get_game_language) == 120u,
     "v1.0 final function moved");
 
 #if defined(ERUI_API_VERSION_1_1)
-#if defined(ERUI_API_VERSION_1_2)
+#if defined(ERUI_API_VERSION_1_3)
+_Static_assert(ERUI_API_VERSION_CURRENT == ERUI_API_VERSION_1_3,
+    "unexpected current API version");
+#elif defined(ERUI_API_VERSION_1_2)
 _Static_assert(ERUI_API_VERSION_CURRENT == ERUI_API_VERSION_1_2,
     "unexpected current API version");
 #else
@@ -354,9 +382,45 @@ _Static_assert(offsetof(ERUI_Api, get_custom_slider_index) == 360u,
     "custom-slider getter offset drift");
 _Static_assert(ERUI_API_V1_2_SIZE == 368u,
     "API 1.2 prefix size drift");
-_Static_assert(ERUI_API_CURRENT_SIZE == ERUI_API_V1_2_SIZE,
-    "current API size does not select API 1.2");
-_Static_assert(sizeof(ERUI_Api) == ERUI_API_V1_2_SIZE,
+_Static_assert(offsetof(ERUI_Api, add_tab) == 368u,
+    "custom-tab block is not append-only");
+_Static_assert(offsetof(ERUI_Api, add_title_screen_text) == 376u,
+    "title-screen text block is not append-only");
+_Static_assert(ERUI_TITLE_SCREEN_TEXT_LIMIT_REACHED == 23u,
+    "title-screen text limit result drift");
+_Static_assert(ERUI_CAP_TITLE_SCREEN_TEXT == (UINT64_C(1) << 19),
+    "title-screen text capability bit drift");
+_Static_assert(ERUI_TITLE_SCREEN_TEXT_USE_CUSTOM_COLOR == (1u << 0),
+    "title-screen text custom-color flag drift");
+_Static_assert(ERUI_TITLE_SCREEN_TEXT_MAX_CODE_UNITS == 255u,
+    "title-screen text length limit drift");
+_Static_assert(ERUI_TITLE_SCREEN_TEXT_MAX_LINES == 16u,
+    "title-screen text line limit drift");
+_Static_assert(sizeof(ERUI_TitleScreenTextDesc) == 40u,
+    "title-screen text descriptor size drift");
+_Static_assert(offsetof(ERUI_TitleScreenTextDesc, flags) == 4u,
+    "title-screen text flags offset drift");
+_Static_assert(offsetof(ERUI_TitleScreenTextDesc, text) == 8u,
+    "title-screen text view offset drift");
+_Static_assert(offsetof(ERUI_TitleScreenTextDesc, color) == 24u,
+    "title-screen text color offset drift");
+_Static_assert(offsetof(ERUI_TitleScreenTextDesc, corner) == 28u,
+    "title-screen text corner offset drift");
+_Static_assert(offsetof(ERUI_TitleScreenTextDesc, reserved) == 32u,
+    "title-screen text reserved offset drift");
+_Static_assert(ERUI_TITLE_SCREEN_CORNER_TOP_LEFT == 1u,
+    "top-left title-screen corner drift");
+_Static_assert(ERUI_TITLE_SCREEN_CORNER_TOP_RIGHT == 2u,
+    "top-right title-screen corner drift");
+_Static_assert(ERUI_TITLE_SCREEN_CORNER_BOTTOM_LEFT == 3u,
+    "bottom-left title-screen corner drift");
+_Static_assert(ERUI_TITLE_SCREEN_CORNER_BOTTOM_RIGHT == 4u,
+    "bottom-right title-screen corner drift");
+_Static_assert(ERUI_API_V1_3_SIZE == 384u,
+    "API 1.3 prefix size drift");
+_Static_assert(ERUI_API_CURRENT_SIZE == ERUI_API_V1_3_SIZE,
+    "current API size does not select API 1.3");
+_Static_assert(sizeof(ERUI_Api) == ERUI_API_V1_3_SIZE,
     "current API structure has an unexpected tail");
 #endif
 #else

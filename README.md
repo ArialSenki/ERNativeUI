@@ -170,6 +170,15 @@ options, screenshots, and links to its native implementation research.
 
 ## More than controls
 
+- Give a mod its own top-level Configuration tab with a localized title and
+  custom RGBA8 icon. The physical strip defaults to eight slots and can be
+  configured up to Elden Ring's hard ceiling of ten, while overflow keeps up
+  to 1,024 logical custom tabs reachable.
+  [Learn about custom tabs](docs/guides/custom-tabs.md).
+- Add copied version or status lines to any title-screen corner, using Elden
+  Ring's native text color or an explicit RGB color.
+  [Learn about title-screen text](docs/guides/title-screen-text.md), then see
+  the [buildable example](examples/title_screen_text/README.md).
 - Add ordinary rows to supported built-in Configuration pages, including
   Game Options, Camera Options, Display, Sound, Network, Keyboard/Mouse, and
   Graphics. [Learn about menus and pages](docs/guides/menus-and-pages.md).
@@ -185,9 +194,11 @@ options, screenshots, and links to its native implementation research.
 - Load, mutate, and explicitly save provider-owned configuration, or use the
   header-only input-assignment codec with another storage system.
   [Learn about storage](docs/guides/storage.md).
-- Optionally install reproducible GFX presentation patches for expanded page
-  capacity and enhanced TextInput and ColorPicker presentation.
-  [Learn about GFX presentation](docs/guides/presentation-and-gfx.md).
+- Let the host complete supported settings GFX at runtime for expanded page
+  capacity and native TextInput and ColorPicker presentation. This default-on
+  behavior can be disabled globally when a player needs untouched effective
+  GFX; structurally compatible GFX supplied by other mods remains supported.
+  [Learn about runtime GFX completion](docs/guides/presentation-and-gfx.md).
 
 The complete supported surface, minimum API versions, capabilities, and limits
 live in the [feature matrix](docs/features.md).
@@ -217,7 +228,10 @@ link an ERNativeUI import library.
 3. Continue from the [commented template](examples/template/README.md) or
    browse the [buildable examples](examples/README.md).
 
-MSVC, clang-cl, and MinGW-w64 client mods can use the same stable host ABI.
+The public ABI is designed for compiler-neutral Windows x64 clients. API 1.3
+passes strict MinGW-w64 C11/C++17 compilation and isolated
+MinGW-client/MSVC-host fixtures; full in-game MinGW-w64 runtime validation is
+not part of the 1.3.0 tested compatibility matrix.
 
 ## Compatibility at a glance
 
@@ -229,12 +243,14 @@ MSVC, clang-cl, and MinGW-w64 client mods can use the same stable host ABI.
 - Solid Uncapper coexistence has a documented load order and tested matrix.
 - Seamless Co-op 2.0.1 was live-tested with the Elden Ring 2.7.0.0 reference
   executable, with no incompatibility observed for that exact combination.
-- Shadow of the Erdtree remains explicitly unverified until its live matrix
-  is completed.
+- Elden Ring 2.7.1.0 title layouts and API 1.3's adaptive title spacing were
+  live-tested with Shadow of the Erdtree both absent and present; see the
+  compatibility guide for the exact scope.
 - Host and committed client DLLs must remain loaded until process exit.
 
 See [Game and mod compatibility](docs/COMPATIBILITY.md) for exact tested
-versions, optional GFX conflicts, Solid Uncapper setup, and useful bug reports.
+versions, modified-GFX compatibility, Solid Uncapper setup, and useful bug
+reports.
 
 <p align="center">
   <img src="assets/ernativeui-separator-2.png" alt="">
