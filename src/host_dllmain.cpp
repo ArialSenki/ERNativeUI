@@ -1,4 +1,6 @@
 #include "host_registry.hpp"
+#include "gfx_check.hpp"
+#include "runtime_gfx.hpp"
 #include "host_locale.hpp"
 #include "addresses.hpp"
 #include "hooks.hpp"
@@ -182,7 +184,14 @@ const void* absolute_indirect_jump_target(const unsigned char* entry) noexcept {
     return target;
 }
 
+// TRACE lines are written only when [Diagnostics] EnableDiagnostics=1.
+std::atomic<bool> g_trace_logging{false};
+
 void runtime_log_sink(erui::LogLevel level, const char* message) noexcept {
+    if (level == erui::LogLevel::trace &&
+        !g_trace_logging.load(std::memory_order_relaxed)) {
+        return;
+    }
     const char* name = "INFO";
     if (level == erui::LogLevel::warning) name = "WARN";
     else if (level == erui::LogLevel::error) name = "ERROR";
@@ -198,15 +207,43 @@ DWORD run_host() noexcept {
             OutputDebugStringA(
                 "ERNativeUI: failed to create the default ERNativeUI.ini\n");
         }
-        const bool logging_enabled = read_ini(
+        // [Diagnostics] PerfLog writes to the log, so it turns the log on too.
+        const bool perf_log = read_ini(ini, L"Diagnostics", L"PerfLog", 0) != 0;
+        const bool logging_enabled = perf_log || read_ini(
             ini, L"Logging", L"EnableLog", 0) != 0;
+        erui::native::set_hook_perf_enabled(perf_log);
         if (logging_enabled) {
             log::initialize(directory / L"ERNativeUI.log");
         }
         erui::detail::set_log_sink(&runtime_log_sink);
+        erui::detail::set_log_filter(logging_enabled, false);
         log::write("============================================================");
         log::write("ERNativeUI host v%s starting", ER_NATIVE_UI_BUILD_VERSION);
+        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.2.1) build=r133");
         log::write("Offline / EAC-disabled use only; hot unloading is unsupported");
+
+        // Before anything waits: Scaleform may open the settings movies early.
+        if (read_ini(ini, L"Gfx", L"RuntimePatch", 1) != 0) {
+            // HUD layout defaults; a client (NativeTweaks) can change them
+            // later with ERNativeUIFork_SetHudLayout.
+            const int hud_scale = read_ini(ini, L"Gfx", L"HudScale", 100);
+            set_hud_layout(read_ini(ini, L"Gfx", L"HudToScreenEdges", 0) != 0,
+                hud_scale < 0 ? 0u : static_cast<unsigned>(hud_scale),
+                // PauseMenuToScreenEdges: name used by the first test builds.
+                read_ini(ini, L"Gfx", L"MenusToScreenEdges",
+                    read_ini(ini, L"Gfx", L"PauseMenuToScreenEdges", 0)) != 0);
+            const int background_alpha =
+                read_ini(ini, L"Gfx", L"MenuBackgroundAlpha", 100);
+            if (!install_runtime_gfx(
+                    read_ini(ini, L"Diagnostics", L"EnableDiagnostics", 0) != 0,
+                    background_alpha < 0 ? 0u
+                        : background_alpha > 100 ? 100u
+                        : static_cast<unsigned>(background_alpha))) {
+                log::write("WARN: runtime GFX patching unavailable; the menu needs the patched GFX files installed");
+            }
+        } else {
+            log::write("Runtime GFX patching disabled by [Gfx] RuntimePatch = 0");
+        }
 
         HMODULE pinned_host{};
         if (!GetModuleHandleExW(
@@ -292,7 +329,7 @@ DWORD run_host() noexcept {
         }
 
         const auto quiet_ms = static_cast<std::uint64_t>(std::clamp(
-            read_ini(ini, L"Runtime", L"RegistrationQuietMs", 750), 100, 5000));
+            read_ini(ini, L"Runtime", L"RegistrationQuietMs", 750), 100, 15000));
         const auto max_wait_ms = static_cast<std::uint64_t>(std::clamp(
             read_ini(ini, L"Runtime", L"RegistrationMaxWaitMs", 5000),
             static_cast<int>(quiet_ms), 15000));
@@ -317,6 +354,8 @@ DWORD run_host() noexcept {
         const bool language_overridden =
             language_setting.mode ==
             LocalizationLanguageMode::explicit_identifier;
+        g_trace_logging.store(diagnostics, std::memory_order_relaxed);
+        erui::detail::set_log_filter(logging_enabled, logging_enabled && diagnostics);
 
         // Preserve the released API 1.0 lifecycle: its table and provider
         // registration become available before Steam finishes initializing.
@@ -430,9 +469,20 @@ DWORD run_host() noexcept {
             static_cast<unsigned long long>(quiet_ms),
             static_cast<unsigned long long>(max_wait_ms));
 
+        // NativeTweaks registers only after scanning other mods' INIs (~2-3 s).
+        // A mod with its own early provider (e.g. Spirit Multiplier) would
+        // otherwise end the quiet window first and lock NativeTweaks out, so
+        // while NativeTweaks.dll is loaded wait for it (still capped by maxWait).
+        bool awaiting_logged = false;
         while (!g_stop.load(std::memory_order_acquire)) {
+            const bool await_hub = GetModuleHandleW(L"NativeTweaks.dll") != nullptr;
+            if (await_hub && !awaiting_logged) {
+                log::write("NativeTweaks.dll is loaded: registration stays open until it registers (maxWait still applies)");
+                awaiting_logged = true;
+            }
             if (auto menu = registry().try_freeze_and_build(
-                    opened_at, quiet_ms, max_wait_ms)) {
+                    opened_at, quiet_ms, max_wait_ms,
+                    await_hub ? std::string_view("er-mod-settings-hub") : std::string_view())) {
                 g_menu = std::move(menu);
                 break;
             }
@@ -620,6 +670,12 @@ DWORD run_host() noexcept {
 
         set_api_state(ApiState::runtime_ready);
         log::write("ERNativeUI host ready");
+        // A client language (ERNativeUIFork_SetHostLanguage) that arrived
+        // while the menu was compiling goes on the published menu now.
+        if (const ERUI_Result pending = registry().apply_pending_client_host_locale(); pending != ERUI_OK) {
+            log::write("WARN: Host locale (client): pending texts not applied (result=%d)",
+                static_cast<int>(pending));
+        }
         ERUI_GameLanguageInfo language{};
         language.size = sizeof(language);
         const ERUI_Result language_result = get_cached_steam_language(&language);
@@ -635,11 +691,29 @@ DWORD run_host() noexcept {
                 "Localization language unavailable: result=%u source=steam",
                 static_cast<unsigned>(language_result));
         }
+        {
+            const std::string_view identifier = language_result == ERUI_OK
+                ? std::string_view(language.identifier.data, language.identifier.length)
+                : std::string_view{};
+            const bool spanish = identifier == "spanish" || identifier == "latam";
+            erui::native::set_pending_menu_warning(
+                runtime_gfx_installed()
+                    ? runtime_gfx_ready(spanish)
+                    : check_settings_gfx(module_directory(g_module), spanish));
+        }
+        constexpr ULONGLONG kPerfLogIntervalMs = 30000;
+        ULONGLONG perf_logged_at = GetTickCount64();
+        if (perf_log) log::write("Perf log enabled ([Diagnostics] PerfLog = 1): hook report every 30 s");
         while (!g_stop.load(std::memory_order_acquire)) {
             registry().apply_pending_values();
             erui::poll_changes();
             erui::native::dispatch_native_dialog_callbacks();
             erui::native::dispatch_color_picker_callbacks();
+            if (perf_log && GetTickCount64() - perf_logged_at >= kPerfLogIntervalMs) {
+                const ULONGLONG now = GetTickCount64();
+                erui::native::log_hook_perf(now - perf_logged_at);
+                perf_logged_at = now;
+            }
             Sleep(50);
         }
         return 0;
@@ -665,6 +739,38 @@ DWORD WINAPI host_thread(void*) noexcept {
 
 } // namespace
 } // namespace erui::host
+
+// Fork extension (not part of the official ERUI_Api table): switches the
+// host's own texts (tab title and help, Previous/Next Page) to a Steam
+// language identifier such as "english" or "spanish", from the built-in table
+// plus an optional locales\<identifier>.ini. Before the menu freezes it sets
+// what the build uses; afterwards it relabels the published menu at once.
+// In between, while the menu compiles, it is kept and applied as soon as the
+// menu is published (ERUI_OK).
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetHostLanguage(
+    const char* identifier) {
+    namespace host = erui::host;
+    if (!identifier) return ERUI_INVALID_ARGUMENT;
+    const std::string_view language(identifier);
+    if (language.empty() || !host::is_safe_locale_identifier(language)) {
+        return ERUI_INVALID_ARGUMENT;
+    }
+    if (host::api_state() == host::ApiState::failed) return ERUI_HOST_FAILED;
+    try {
+        host::HostLocale locale = host::load_host_locale(
+            host::module_directory(host::g_module), language);
+        const ERUI_Result result = host::registry().set_client_host_locale(
+            std::move(locale.pagination));
+        host::log::write("Host locale (client): identifier='%.*s' external=%d result=%d",
+            static_cast<int>(language.size()), language.data(),
+            locale.loaded ? 1 : 0, static_cast<int>(result));
+        return result;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {

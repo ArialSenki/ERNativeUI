@@ -22,6 +22,8 @@ using GameOptionsHandlerFn = void(__fastcall*)(
 using BuiltinPanelMaterializerFn = void(__fastcall*)(
     void* page,
     void* menu_option_data);
+using BuiltinCategoryBuilderFn = void*(__fastcall*)(void* destination);
+using BuiltinCategoryDestructorFn = void*(__fastcall*)(void* value);
 using SubHandlerFn = void(__fastcall*)(
     void* page,
     std::uintptr_t argument2,
@@ -31,6 +33,7 @@ using OpenSubPageFn = void(__fastcall*)(void** parent_page_slot);
 using NativeBackFn = void(__fastcall*)(
     void* page,
     std::uint64_t action);
+using TabSelectionIndexFn = std::uint32_t(__fastcall*)(void* selector);
 // Concrete Game Options page frame dispatcher. MS x64 places the page in
 // RCX, the elapsed/frame scalar in XMM1, and an input-enabled byte in R8.
 using PageFrameFn = void(__fastcall*)(
@@ -116,6 +119,14 @@ using ScaleformTextSetterFn = void(__fastcall*)(
     void* scaleform_value,
     const wchar_t* text);
 using ScaleformResultDestructorFn = void(__fastcall*)(void* nested_member);
+using ScaleformValueExistsFn = bool(__fastcall*)(void* scene_obj_proxy);
+// TextField horizontal scroll in pixels (same value argument as the setter).
+using ScaleformMaxHScrollFn = int(__fastcall*)(void* scaleform_value);
+using ScaleformSetHScrollFn = void(__fastcall*)(void* scaleform_value, int pixels);
+// Fork: binds a status bar's three persistent proxies (base, LineHelp at
+// +0x60, KeyGuide at +0xC0) from a source movie value. Returns the bar.
+using StatusBarBinderFn = void*(__fastcall*)(
+    void* status_bar, void* source, void* arg3, void* arg4);
 
 // Exact-build native TextInput interfaces. These remain private implementation
 // details behind the stable C ABI.
@@ -148,12 +159,20 @@ struct GameAddresses {
     std::uint8_t* game_image_base{};
     std::size_t game_image_size{};
     GameOptionsHandlerFn game_options_handler{};
+    void* option_setting_tab_frame_dispatch{};
+    TabSelectionIndexFn option_setting_tab_selected_index{};
     BuiltinPanelMaterializerFn camera_panel_materializer{};
     BuiltinPanelMaterializerFn display_panel_materializer{};
     BuiltinPanelMaterializerFn sound_panel_materializer{};
     BuiltinPanelMaterializerFn network_panel_materializer{};
     BuiltinPanelMaterializerFn keyboard_mouse_panel_materializer{};
     BuiltinPanelMaterializerFn graphics_panel_materializer{};
+    BuiltinPanelMaterializerFn mod_settings_panel_materializer{};
+    BuiltinCategoryBuilderFn mod_settings_category_builder{};
+    BuiltinCategoryDestructorFn mod_settings_category_destructor{};
+    void* configuration_category_append{};
+    void* mod_settings_panel_route_site{};
+    void* mod_settings_panel_route_return_site{};
     SubHandlerFn sub_handler{};
     OpenSubPageFn open_sub_page{};
     NativeBackFn native_back{};
@@ -179,11 +198,20 @@ struct GameAddresses {
     AddSliderFn add_slider{};
     SliderRefreshFn slider_refresh{};
     AddButtonFn add_button{};
+    // Unclassified row builder observed on Keyboard/Graphics; diagnostic only.
+    void* add_unclassified_row_builder_diagnostic{};
     DestroyTextReferencesFn destroy_text_references{};
     TextResolverFn text_resolver{};
     ScaleformPathResolverFn scaleform_path_resolver{};
+    // Exact-build Scaleform visibility setter, resolved only for diagnostics.
+    void* scaleform_visibility_setter{};
     ScaleformTextSetterFn scaleform_text_setter{};
     ScaleformResultDestructorFn scaleform_result_destructor{};
+    // Fork: optional wide provider help (LineHelpWide) interfaces.
+    ScaleformValueExistsFn scaleform_value_exists{};
+    StatusBarBinderFn status_bar_binder{};
+    ScaleformMaxHScrollFn scaleform_max_hscroll{};
+    ScaleformSetHScrollFn scaleform_set_hscroll{};
 
     TextInputRowProducerFn text_input_row_producer{};
     NativeMenuStringConstructorFn native_menu_string_constructor{};
@@ -213,6 +241,11 @@ struct GameAddresses {
         bool require_text_inputs,
         bool require_custom_text) const noexcept;
 };
+
+// Copies each interface that `target` lacks from `source`; resolved entries
+// in `target` are never replaced.
+void fill_missing_addresses(
+    GameAddresses& target, const GameAddresses& source) noexcept;
 
 bool resolve_game_addresses(
     const ModuleView& game,

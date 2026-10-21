@@ -67,6 +67,10 @@ struct PatchOptions {
     TextInputPresentation text_input_presentation{TextInputPresentation::native};
     ColorPickerPresentation color_picker_presentation{
         ColorPickerPresentation::native};
+    bool mod_settings_top_level_tab{};
+    // Fork: widens the shared Slider widget's Text_0 value field so named
+    // values (CustomSlider) are not clipped at about six characters.
+    bool wide_slider_values{};
 };
 
 struct PatchReport {
@@ -74,6 +78,9 @@ struct PatchReport {
     Inspection after{};
     std::size_t bytes_added{};
     bool already_satisfied{};
+    // Fork: SettingsMovieOptions asked for a backdrop alpha but the movie has
+    // no recognizable backdrop; the rest of the patch still applies.
+    bool menu_background_skipped{};
 };
 
 struct PatchResult {
@@ -105,6 +112,13 @@ struct PatchResult {
     std::span<const std::uint8_t> input,
     PatchOptions options = {}) noexcept;
 
+// Adds a ninth native top-level settings tab before the game's separate Exit
+// control, reusing the native tab and focus-list layout. The icon is a
+// single vector shape embedded in the GFX (mod_settings_tab_icon.inc); no
+// external TGA resources are needed.
+[[nodiscard]] PatchResult patch_mod_settings_top_level_tab(
+    std::span<const std::uint8_t> input) noexcept;
+
 // Applies only the shared TextInput presentation. This is the route used for
 // 02_042_pc_graphicsetting.gfx; it never changes Game Options row capacity or
 // the Game Options button-label repair.
@@ -120,7 +134,14 @@ struct PatchResult {
 [[nodiscard]] PatchResult patch_widget_presentations(
     std::span<const std::uint8_t> input,
     TextInputPresentation text_input_presentation,
-    ColorPickerPresentation color_picker_presentation) noexcept;
+    ColorPickerPresentation color_picker_presentation,
+    bool wide_slider_values = false) noexcept;
+
+// Fork: restores LineHelp's native bounds (if an earlier build widened it) and
+// adds the empty LineHelpWide twin field. Nothing else in the movie changes,
+// so it can be applied to already patched settings movies.
+[[nodiscard]] PatchResult patch_line_help_only(
+    std::span<const std::uint8_t> input) noexcept;
 
 [[nodiscard]] const char* error_name(ErrorCode error) noexcept;
 [[nodiscard]] const char* host_name(GfxHost host) noexcept;

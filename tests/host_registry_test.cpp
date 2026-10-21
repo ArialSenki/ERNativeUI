@@ -1,5 +1,6 @@
 #include "host_registry.hpp"
 #include "menu_compiler.hpp"
+#include "runtime_state.hpp"
 #include "steam_language.hpp"
 
 #include <Windows.h>
@@ -308,6 +309,147 @@ void verify_text_input_length_contract() {
     }
 }
 
+// Mod Settings lists NativeTweaks' rows first, whatever the priorities; other
+// built-in pages keep the plain priority order.
+void verify_mod_settings_lists_hub_first() {
+    erui::host::Registry registry{};
+    registry.open_registration();
+    unsigned presses = 0;
+    const auto add = [&](const char* id, const wchar_t* label, std::int32_t priority) {
+        ERUI_ProviderDesc desc{};
+        desc.size = sizeof(desc);
+        desc.api_version = ERUI_API_VERSION_CURRENT;
+        desc.owner_module = GetModuleHandleW(nullptr);
+        desc.provider_id = ascii(id);
+        desc.display_name = utf16(label);
+        desc.root_priority = priority;
+        ERUI_ProviderHandle handle{};
+        ERUI_PageHandle root{};
+        ERUI_TEST_CHECK(registry.register_provider(
+            ERUI_API_VERSION_CURRENT, &desc, &handle, &root) == ERUI_OK);
+        ERUI_ButtonDesc button{};
+        button.size = sizeof(button);
+        button.label = utf16(label);
+        button.help = utf16(L"help");
+        button.enabled = 1;
+        button.callback = &pressed;
+        button.user_data = &presses;
+        for (const ERUI_BuiltinPage page :
+            {ERUI_BUILTIN_PAGE_MOD_SETTINGS, ERUI_BUILTIN_PAGE_CAMERA_OPTIONS}) {
+            ERUI_PageHandle builtin{};
+            ERUI_TEST_CHECK(registry.get_builtin_page(handle, page, &builtin) == ERUI_OK);
+            ERUI_TEST_CHECK(registry.add_button(handle, builtin, &button, nullptr) == ERUI_OK);
+        }
+        const std::wstring root_label = std::wstring(label) + L" root";
+        button.label = utf16(root_label);
+        ERUI_TEST_CHECK(registry.add_button(handle, root, &button, nullptr) == ERUI_OK);
+        ERUI_TEST_CHECK(registry.commit_provider(handle) == ERUI_OK);
+    };
+    add("spirit-multiplier", L"Other mod", 100);
+    add("er-mod-settings-hub", L"Hub", 1000);
+
+    auto menu = registry.freeze_and_build();
+    ERUI_TEST_CHECK(menu != nullptr);
+    auto compiled = erui::detail::MenuCompiler::compile(*menu);
+    ERUI_TEST_CHECK(compiled != nullptr);
+    const auto labels = [&](erui::detail::BuiltinPage page) {
+        std::vector<std::wstring> result;
+        const auto* compiled_page = compiled->builtin_page(
+            erui::detail::builtin_native_category_ids[static_cast<std::size_t>(page)]);
+        ERUI_TEST_CHECK(compiled_page != nullptr);
+        if (!compiled_page) return result;
+        for (const auto& row : compiled_page->rows)
+            result.emplace_back(compiled->texts.lookup(row.label_id));
+        return result;
+    };
+    ERUI_TEST_CHECK((labels(erui::detail::BuiltinPage::mod_settings) ==
+        std::vector<std::wstring>{L"Hub", L"Other mod", L"Other mod root"}));
+    // The other provider's root rows moved; NativeTweaks' stay on Game Options.
+    ERUI_TEST_CHECK((labels(erui::detail::BuiltinPage::game_options) ==
+        std::vector<std::wstring>{L"Hub root"}));
+    ERUI_TEST_CHECK((labels(erui::detail::BuiltinPage::camera_options) ==
+        std::vector<std::wstring>{L"Other mod", L"Hub"}));
+
+    // Live host language: no compiled text may keep the startup host texts.
+    auto& runtime = erui::detail::runtime_state();
+    runtime.menu = std::move(compiled);
+    runtime.menu_published.store(true, std::memory_order_release);
+    erui::MenuLocalization spanish{};
+    spanish.menu_title = L"T";
+    spanish.menu_help = L"H";
+    spanish.previous_label = L"PL";
+    spanish.previous_help = L"PH";
+    spanish.next_label = L"NL";
+    spanish.next_help = L"NH";
+    ERUI_TEST_CHECK(registry.set_client_host_locale(spanish) == ERUI_OK);
+    const erui::MenuLocalization english{};
+    const auto& texts = runtime.menu->texts;
+    for (std::size_t index = 0; index < texts.size(); ++index) {
+        const wchar_t* text = texts.lookup(static_cast<int>(
+            erui::detail::TextRegistry::base_id + index));
+        const std::wstring_view value = text ? text : L"";
+        const bool stale = value == english.menu_title || value == english.menu_help ||
+            value.rfind(english.menu_title + L" (", 0) == 0 ||
+            value == english.previous_label || value == english.previous_help ||
+            value == english.next_label || value == english.next_help;
+        ERUI_TEST_CHECK(!stale);
+    }
+    runtime.menu_published.store(false, std::memory_order_release);
+    runtime.menu.reset();
+}
+
+erui::MenuLocalization spanish_host_locale() {
+    erui::MenuLocalization locale{};
+    locale.menu_title = L"Ajustes de mods";
+    locale.menu_help = L"Ayuda del host.";
+    locale.previous_label = L"P\u00e1gina anterior";
+    locale.previous_help = L"Ayuda anterior.";
+    locale.next_label = L"P\u00e1gina siguiente";
+    locale.next_help = L"Ayuda siguiente.";
+    return locale;
+}
+
+// A language picked by a client before the freeze feeds the build and wins
+// over the startup Steam locale, whichever comes first.
+void verify_client_host_locale_before_freeze() {
+    erui::host::Registry registry{};
+    registry.open_registration();
+    ERUI_TEST_CHECK(registry.set_client_host_locale(spanish_host_locale()) == ERUI_OK);
+    erui::MenuLocalization startup{};
+    startup.menu_title = L"Startup";
+    registry.set_host_locale(startup);
+
+    ERUI_ProviderDesc desc{};
+    desc.size = sizeof(desc);
+    desc.api_version = ERUI_API_VERSION_CURRENT;
+    desc.owner_module = GetModuleHandleW(nullptr);
+    desc.provider_id = ascii("locale-test");
+    desc.display_name = utf16(L"Locale Test");
+    ERUI_ProviderHandle handle{};
+    ERUI_PageHandle root{};
+    ERUI_TEST_CHECK(registry.register_provider(
+        ERUI_API_VERSION_CURRENT, &desc, &handle, &root) == ERUI_OK);
+    unsigned presses = 0;
+    ERUI_ButtonDesc button{};
+    button.size = sizeof(button);
+    button.label = utf16(L"Row");
+    button.help = utf16(L"help");
+    button.enabled = 1;
+    button.callback = &pressed;
+    button.user_data = &presses;
+    ERUI_TEST_CHECK(registry.add_button(handle, root, &button, nullptr) == ERUI_OK);
+    ERUI_TEST_CHECK(registry.commit_provider(handle) == ERUI_OK);
+
+    auto menu = registry.freeze_and_build();
+    ERUI_TEST_CHECK(menu != nullptr);
+    auto compiled = erui::detail::MenuCompiler::compile(*menu);
+    ERUI_TEST_CHECK(compiled != nullptr);
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(compiled->title_id)) == L"Ajustes de mods");
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(compiled->help_id)) == L"Ayuda del host.");
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
+        compiled->next_page_label_id)) == L"P\u00e1gina siguiente");
+}
+
 void verify_programmatic_value_writes_are_silent() {
     erui::host::Registry registry{};
     registry.open_registration();
@@ -607,6 +749,8 @@ int main() {
 
     verify_text_input_length_contract();
     verify_programmatic_value_writes_are_silent();
+    verify_mod_settings_lists_hub_first();
+    verify_client_host_locale_before_freeze();
 
     ERUI_Api short_table{};
     short_table.size = ERUI_API_V1_0_SIZE - 1u;
@@ -1180,6 +1324,11 @@ int main() {
     };
     add_provider("late-priority", L"Last Provider", 20, 5);
     add_provider("first-priority", L"First Provider", 5, 1);
+    // Quiet and draft-free, but an awaited provider that never registered
+    // keeps registration open until maxWait.
+    ERUI_TEST_CHECK(!registry.try_freeze_and_build(
+        GetTickCount64(), 0, (std::numeric_limits<std::uint64_t>::max)(),
+        "er-mod-settings-hub"));
 
     ERUI_ProviderDesc active_draft = provider;
     active_draft.provider_id = ascii("active-draft");
@@ -1367,10 +1516,46 @@ int main() {
             erui::detail::game_options_vanilla_capacity,
             1));
     ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
-        root_continuation_presentation.outer_title_id)) == L"ERNativeUI");
+        root_continuation_presentation.outer_title_id)) == L"NativeTweaks");  // fork default title
     ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
         root_continuation_presentation.page_title_id)) ==
-        L"ERNativeUI (2/2)");
+        L"NativeTweaks (2/2)");
+    {
+        // ERNativeUIFork_SetHostLanguage after the freeze, while the menu is
+        // still compiling: kept and applied once the menu is published.
+        const erui::MenuLocalization spanish = spanish_host_locale();
+        ERUI_TEST_CHECK(registry.set_client_host_locale(spanish) == ERUI_OK);
+        auto& runtime = erui::detail::runtime_state();
+        runtime.menu = std::move(compiled);
+        ERUI_TEST_CHECK(registry.apply_pending_client_host_locale() == ERUI_HOST_NOT_READY);
+        runtime.menu_published.store(true, std::memory_order_release);
+        const auto& live = *runtime.menu;
+        const auto text = [&](erui::TextId id) { return std::wstring(live.texts.lookup(id)); };
+        ERUI_TEST_CHECK(text(live.title_id) == L"NativeTweaks");  // not applied before publishing
+        ERUI_TEST_CHECK(registry.apply_pending_client_host_locale() == ERUI_OK);
+        ERUI_TEST_CHECK(text(live.title_id) == L"Ajustes de mods");
+        // Nothing pending any more: applying again changes nothing.
+        ERUI_TEST_CHECK(registry.apply_pending_client_host_locale() == ERUI_OK);
+        // And a call on the published menu relabels it at once.
+        ERUI_TEST_CHECK(registry.set_client_host_locale(spanish) == ERUI_OK);
+        ERUI_TEST_CHECK(text(live.title_id) == L"Ajustes de mods");
+        ERUI_TEST_CHECK(text(live.help_id) == L"Ayuda del host.");
+        ERUI_TEST_CHECK(text(live.previous_page_label_id) == L"P\u00e1gina anterior");
+        ERUI_TEST_CHECK(text(live.previous_page_help_id) == L"Ayuda anterior.");
+        ERUI_TEST_CHECK(text(live.next_page_label_id) == L"P\u00e1gina siguiente");
+        ERUI_TEST_CHECK(text(live.next_page_help_id) == L"Ayuda siguiente.");
+        ERUI_TEST_CHECK(text(root_continuation_presentation.outer_title_id) == L"Ajustes de mods");
+        ERUI_TEST_CHECK(text(root_continuation_presentation.page_title_id) == L"Ajustes de mods (2/2)");
+        // Provider texts stay untouched.
+        ERUI_TEST_CHECK(text(default_outer_presentation.outer_title_id) == L"Registry Test");
+        ERUI_TEST_CHECK(text(default_outer_presentation.page_title_id) == L"Default Child");
+        // And back to English.
+        ERUI_TEST_CHECK(registry.set_client_host_locale(erui::MenuLocalization{}) == ERUI_OK);
+        ERUI_TEST_CHECK(text(root_continuation_presentation.page_title_id) == L"NativeTweaks (2/2)");
+        ERUI_TEST_CHECK(text(live.next_page_label_id) == L"Next Page");
+        runtime.menu_published.store(false, std::memory_order_release);
+        compiled = std::move(runtime.menu);
+    }
     ERUI_TEST_CHECK(!registry.registration_open());
     ERUI_TEST_CHECK(registry.abort_provider(active_handle) == ERUI_OK);
     ERUI_TEST_CHECK(registry.register_provider(

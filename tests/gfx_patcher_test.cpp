@@ -701,6 +701,26 @@ int main() {
     ERUI_TEST_CHECK(real_color_picker.report.already_satisfied);
     ERUI_TEST_CHECK(real_color_picker.output == real_input);
     ERUI_TEST_CHECK(!contains_ascii(real_input, "ButtonValueText"));
+
+    // --wide-slider-values on the Game Options host: idempotent too.
+    const erui::gfx::PatchOptions wide_options{
+        .game_options_rows = 13,
+        .camera_options_rows = 13,
+        .text_input_presentation =
+            erui::gfx::TextInputPresentation::character_name,
+        .color_picker_presentation =
+            erui::gfx::ColorPickerPresentation::character_creation,
+        .wide_slider_values = true,
+    };
+    const erui::gfx::PatchResult real_wide =
+        erui::gfx::patch_game_options_panel(real_input, wide_options);
+    ERUI_TEST_CHECK(real_wide.success());
+    const erui::gfx::PatchResult real_wide_second =
+        erui::gfx::patch_game_options_panel(real_wide.output, wide_options);
+    ERUI_TEST_CHECK(real_wide_second.success());
+    ERUI_TEST_CHECK(real_wide_second.report.already_satisfied);
+    ERUI_TEST_CHECK(real_wide_second.report.bytes_added == 0);
+    ERUI_TEST_CHECK(real_wide_second.output == real_wide.output);
 #endif
 
 #if defined(ERNATIVEUI_TEST_ADVANCED_GFX)
@@ -773,6 +793,56 @@ int main() {
     ERUI_TEST_CHECK(advanced_color_picker.report.already_satisfied);
     ERUI_TEST_CHECK(advanced_color_picker.output == advanced_input);
     ERUI_TEST_CHECK(!contains_ascii(advanced_input, "ButtonValueText"));
+
+    // --wide-slider-values on the Advanced Settings host (mod pages draw
+    // with 02_042): must succeed and be byte-idempotent.
+    const erui::gfx::PatchResult advanced_wide =
+        erui::gfx::patch_widget_presentations(
+            advanced_input,
+            erui::gfx::TextInputPresentation::character_name,
+            erui::gfx::ColorPickerPresentation::character_creation,
+            true);
+    ERUI_TEST_CHECK(advanced_wide.success());
+    const erui::gfx::PatchResult advanced_wide_second =
+        erui::gfx::patch_widget_presentations(
+            advanced_wide.output,
+            erui::gfx::TextInputPresentation::character_name,
+            erui::gfx::ColorPickerPresentation::character_creation,
+            true);
+    ERUI_TEST_CHECK(advanced_wide_second.success());
+    ERUI_TEST_CHECK(advanced_wide_second.report.already_satisfied);
+    ERUI_TEST_CHECK(advanced_wide_second.report.bytes_added == 0);
+    ERUI_TEST_CHECK(advanced_wide_second.output == advanced_wide.output);
 #endif
+
+    // Top-level Hub tab on the real 2.7.1.0 movies: menu\win (9 native slots,
+    // Keyboard/Mouse) and the generic menu movie (8 slots). Both must reach the
+    // same verified 10-slot layout and be byte-idempotent.
+    const auto check_top_level_tab = [](const char* path) {
+        std::ifstream file(path, std::ios::binary);
+        ERUI_TEST_CHECK(file.good());
+        const std::vector<std::uint8_t> input{
+            std::istreambuf_iterator<char>(file),
+            std::istreambuf_iterator<char>()};
+        const erui::gfx::PatchResult first =
+            erui::gfx::patch_mod_settings_top_level_tab(input);
+        ERUI_TEST_CHECK(first.success());
+        ERUI_TEST_CHECK(first.report.bytes_added > 0);
+        ERUI_TEST_CHECK(contains_ascii(first.output, "Item_0_9"));
+        // The tab icon is embedded; no external TGA name may remain.
+        ERUI_TEST_CHECK(!contains_ascii(first.output, "ERModSettingsTab.tga"));
+        const erui::gfx::PatchResult second =
+            erui::gfx::patch_mod_settings_top_level_tab(first.output);
+        ERUI_TEST_CHECK(second.success());
+        ERUI_TEST_CHECK(second.report.already_satisfied);
+        ERUI_TEST_CHECK(second.output == first.output);
+    };
+#if defined(ERNATIVEUI_TEST_PC_OPTIONS_GFX)
+    check_top_level_tab(ERNATIVEUI_TEST_PC_OPTIONS_GFX);
+#endif
+#if defined(ERNATIVEUI_TEST_GENERIC_OPTIONS_GFX)
+    check_top_level_tab(ERNATIVEUI_TEST_GENERIC_OPTIONS_GFX);
+#endif
+    (void)check_top_level_tab;
     return 0;
 }

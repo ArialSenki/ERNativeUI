@@ -4,7 +4,10 @@
 #include "native_input_bindings.hpp"
 #include "native_dialog.hpp"
 #include "native_dialog_presentation.hpp"
+#include "native_slider_presentation.hpp"
+#include "native_value_refresh.hpp"
 #include "runtime_log.hpp"
+#include "runtime_state.hpp"
 
 #include <algorithm>
 #include <array>
@@ -44,6 +47,8 @@ static_assert(ERUI_BUILTIN_PAGE_KEYBOARD_MOUSE ==
         erui::detail::BuiltinPage::keyboard_mouse));
 static_assert(ERUI_BUILTIN_PAGE_GRAPHICS ==
     static_cast<ERUI_BuiltinPage>(erui::detail::BuiltinPage::graphics));
+static_assert(ERUI_BUILTIN_PAGE_MOD_SETTINGS ==
+    static_cast<ERUI_BuiltinPage>(erui::detail::BuiltinPage::mod_settings));
 static_assert(ERUI_BUILTIN_PAGE_COUNT == erui::detail::builtin_page_count);
 
 std::atomic<ApiState> g_api_state{ApiState::initializing};
@@ -513,6 +518,8 @@ void Registry::set_host_locale(erui::MenuLocalization pagination) {
     if (frozen_) {
         throw std::logic_error("host locale must be set before registration freezes");
     }
+    // A client that already picked its menu language keeps it.
+    if (client_host_locale_) return;
     pagination_locale_ = std::move(pagination);
 }
 
@@ -2151,6 +2158,323 @@ ERUI_Result Registry::set_row_value(
     return ERUI_OK;
 }
 
+namespace {
+
+// Null view or null data: keep the current text.
+bool optional_text(const ERUI_Utf16View* view, bool& present, std::wstring& output) {
+    present = view && view->data;
+    if (!present) return true;
+    if (!valid_view(*view) || view->length > kMaxTextUnits) return false;
+    output = copy_utf16(*view);
+    return true;
+}
+
+std::wstring numbered_title(std::wstring_view base, std::size_t number, std::size_t count) {
+    std::wstring result(base);
+    if (count <= 1) return result;
+    result.append(L" (").append(std::to_wstring(number)).push_back(L'/');
+    result.append(std::to_wstring(count)).push_back(L')');
+    return result;
+}
+
+// Where runtime text changes go. Before the registry freezes, the model rows
+// are the source (menu stays null). Once frozen, the compiler reads the rows
+// without the registry lock, so changes wait until the compiled menu is
+// published and then go to its text registry only.
+ERUI_Result text_target(bool frozen, erui::detail::CompiledMenu*& menu) noexcept {
+    menu = nullptr;
+    if (!frozen) return ERUI_OK;
+    auto& runtime = erui::detail::runtime_state();
+    if (!runtime.menu_published.load(std::memory_order_acquire)) return ERUI_HOST_NOT_READY;
+    menu = runtime.menu.get();
+    return menu ? ERUI_OK : ERUI_HOST_NOT_READY;
+}
+
+} // namespace
+
+ERUI_Result Registry::set_row_default(
+    ERUI_ProviderHandle provider_handle,
+    ERUI_RowHandle row_handle,
+    std::int64_t value,
+    bool inverted) noexcept {
+    std::lock_guard lock(mutex_);
+    const auto provider_it = providers_.find(provider_handle);
+    if (provider_it == providers_.end()) return ERUI_INVALID_HANDLE;
+    const auto row_it = provider_it->second->row_lookup.find(row_handle);
+    if (row_it == provider_it->second->row_lookup.end()) return ERUI_INVALID_HANDLE;
+    Row& row = *row_it->second;
+
+    std::int64_t index{};
+    switch (row.kind) {
+    case RowKind::toggle:
+        index = value != 0 ? 1 : 0;
+        break;
+    case RowKind::numeric_slider:
+        if (value < row.numeric_slider.minimum_scaled_value ||
+            value > row.numeric_slider.maximum_scaled_value ||
+            row.numeric_slider.step_scaled_value <= 0) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        index = (value - row.numeric_slider.minimum_scaled_value) /
+            row.numeric_slider.step_scaled_value;
+        break;
+    case RowKind::custom_slider:
+        if (value < 0 || value >= static_cast<std::int64_t>(row.slider_value_texts.size())) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        index = value;
+        break;
+    default:
+        return ERUI_NOT_SUPPORTED;
+    }
+    erui::native::set_native_value_default(
+        &row.native_value, static_cast<std::uint8_t>(index), inverted);
+    return ERUI_OK;
+}
+
+ERUI_Result Registry::set_row_text(
+    ERUI_ProviderHandle provider_handle,
+    ERUI_RowHandle row_handle,
+    const ERUI_Utf16View* label,
+    const ERUI_Utf16View* help) noexcept {
+    try {
+        bool has_label{}, has_help{};
+        std::wstring label_text, help_text;
+        if (!optional_text(label, has_label, label_text) ||
+            !optional_text(help, has_help, help_text)) return ERUI_INVALID_ARGUMENT;
+        std::lock_guard lock(mutex_);
+        const auto provider_it = providers_.find(provider_handle);
+        if (provider_it == providers_.end() || !provider_it->second->committed) return ERUI_INVALID_HANDLE;
+        const auto row_it = provider_it->second->row_lookup.find(row_handle);
+        if (row_it == provider_it->second->row_lookup.end()) return ERUI_INVALID_HANDLE;
+        Row& row = *row_it->second;
+        erui::detail::CompiledMenu* menu{};
+        if (const ERUI_Result state = text_target(frozen_, menu); state != ERUI_OK) return state;
+        if (!menu) {
+            if (has_label) row.label = label_text;
+            if (has_help) row.help = help_text;
+            return ERUI_OK;
+        }
+        for (auto& page : menu->pages) {
+            for (auto& compiled : page.rows) {
+                if (compiled.source_tag != &row) continue;
+                if (has_label) menu->texts.replace(compiled.label_id, label_text);
+                if (has_help) menu->texts.replace(compiled.help_id, help_text);
+            }
+        }
+        return ERUI_OK;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
+
+ERUI_Result Registry::set_custom_slider_values(
+    ERUI_ProviderHandle provider_handle,
+    ERUI_RowHandle row_handle,
+    const ERUI_Utf16View* values,
+    std::uint32_t count) noexcept {
+    try {
+        if (!values || count < ERUI_SLIDER_MIN_VALUE_COUNT ||
+            count > ERUI_SLIDER_MAX_VALUE_COUNT) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        std::vector<std::wstring> texts{};
+        texts.reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const ERUI_Utf16View view = values[index];
+            if (!valid_view(view) || view.length == 0 ||
+                view.length > ERUI_CUSTOM_SLIDER_MAX_TEXT_LENGTH) {
+                return ERUI_INVALID_ARGUMENT;
+            }
+            texts.push_back(copy_utf16(view, false));
+        }
+        std::lock_guard lock(mutex_);
+        const auto provider_it = providers_.find(provider_handle);
+        if (provider_it == providers_.end() || !provider_it->second->committed) return ERUI_INVALID_HANDLE;
+        const auto row_it = provider_it->second->row_lookup.find(row_handle);
+        if (row_it == provider_it->second->row_lookup.end()) return ERUI_INVALID_HANDLE;
+        Row& row = *row_it->second;
+        // Numeric sliders also keep one text per position, so a client can
+        // relabel them (e.g. to show a multiplied value).
+        if ((row.kind != RowKind::custom_slider && row.kind != RowKind::numeric_slider) ||
+            row.slider_value_texts.size() != texts.size()) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        erui::detail::CompiledMenu* menu{};
+        if (const ERUI_Result state = text_target(frozen_, menu); state != ERUI_OK) return state;
+        if (!menu) {
+            row.slider_value_texts = std::move(texts);
+            return ERUI_OK;
+        }
+        // The compiled rows keep their copy (only its size is read again);
+        // the slider bridge owns what the game displays.
+        for (const auto& page : menu->pages) {
+            for (const auto& compiled : page.rows) {
+                if (compiled.source_tag != &row || !compiled.byte_value) continue;
+                if (!erui::native::set_native_slider_presentation_values(
+                        compiled.byte_value, texts)) {
+                    return ERUI_HOST_NOT_READY;
+                }
+            }
+        }
+        return ERUI_OK;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
+
+ERUI_Result Registry::set_submenu_text(
+    ERUI_ProviderHandle provider_handle,
+    ERUI_PageHandle page_handle,
+    const ERUI_Utf16View* label,
+    const ERUI_Utf16View* help,
+    const ERUI_Utf16View* page_title,
+    const ERUI_Utf16View* page_help) noexcept {
+    try {
+        bool has_label{}, has_help{}, has_title{}, has_page_help{};
+        std::wstring label_text, help_text, title_text, page_help_text;
+        if (!optional_text(label, has_label, label_text) ||
+            !optional_text(help, has_help, help_text) ||
+            !optional_text(page_title, has_title, title_text) ||
+            !optional_text(page_help, has_page_help, page_help_text)) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        std::lock_guard lock(mutex_);
+        const auto provider_it = providers_.find(provider_handle);
+        if (provider_it == providers_.end() || !provider_it->second->committed) return ERUI_INVALID_HANDLE;
+        Provider& provider = *provider_it->second;
+        const auto page_it = provider.page_lookup.find(page_handle);
+        if (page_it == provider.page_lookup.end()) return ERUI_INVALID_HANDLE;
+        Page& page = *page_it->second;
+        Row* opener{};
+        for (const auto& candidate : provider.rows) {
+            if (candidate->kind == RowKind::submenu && candidate->child_page == page_handle) {
+                opener = candidate.get();
+                break;
+            }
+        }
+        if (!opener) return ERUI_INVALID_ARGUMENT;
+        erui::detail::CompiledMenu* menu{};
+        if (const ERUI_Result state = text_target(frozen_, menu); state != ERUI_OK) return state;
+        if (!menu) {
+            if (has_label) opener->label = label_text;
+            if (has_help) opener->help = help_text;
+            if (has_title) page.title = title_text;
+            if (has_page_help) page.help = page_help_text;
+            return ERUI_OK;
+        }
+        for (auto& compiled_page : menu->pages) {
+            for (auto& compiled : compiled_page.rows) {
+                if (compiled.source_tag != opener) continue;
+                if (has_label) menu->texts.replace(compiled.label_id, label_text);
+                if (has_help) menu->texts.replace(compiled.help_id, help_text);
+                const std::size_t target = compiled.target_page_index;
+                if (target >= menu->pages.size()) continue;
+                auto& child = menu->pages[target];
+                if (has_page_help) menu->texts.replace(child.help_id, page_help_text);
+                // A custom page_title presentation outranks the submenu title.
+                if (!has_title || !page.page_title.empty()) continue;
+                menu->texts.replace(child.title_id, title_text);
+                const std::size_t count = child.physical_title_ids.size();
+                if (page.title_formatter) continue;
+                for (std::size_t slice = 0; slice < count; ++slice) {
+                    if (child.physical_title_ids[slice] == child.title_id) continue;
+                    menu->texts.replace(child.physical_title_ids[slice],
+                        numbered_title(title_text, slice + 1, count));
+                }
+            }
+        }
+        return ERUI_OK;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
+
+namespace {
+
+// Host texts (menu title/help, pagination) of a published menu, in place.
+void relabel_host_texts(erui::detail::CompiledMenu& menu, const erui::MenuLocalization& locale) {
+    menu.texts.replace(menu.title_id, locale.menu_title);
+    menu.texts.replace(menu.help_id, locale.menu_help);
+    menu.texts.replace(menu.previous_page_label_id, locale.previous_label);
+    menu.texts.replace(menu.previous_page_help_id, locale.previous_help);
+    menu.texts.replace(menu.next_page_label_id, locale.next_label);
+    menu.texts.replace(menu.next_page_help_id, locale.next_help);
+    // Built-in pages are root pages titled with the host title; only
+    // their continuation slices show it, as "Title (n/m)".
+    for (auto& page : menu.pages) {
+        if (page.kind != erui::PageKind::root) continue;
+        menu.texts.replace(page.title_id, locale.menu_title);
+        menu.texts.replace(page.help_id, locale.menu_help);
+        const auto retitle = [&](const std::vector<erui::TextId>& ids) {
+            for (std::size_t slice = 0; slice < ids.size(); ++slice) {
+                if (ids[slice] == page.title_id) continue;
+                menu.texts.replace(ids[slice],
+                    numbered_title(locale.menu_title, slice + 1, ids.size()));
+            }
+        };
+        retitle(page.physical_title_ids);
+        if (page.builtin_physical_title_plan) {
+            for (const auto& variant : page.builtin_physical_title_plan->variants) {
+                retitle(variant.title_ids);
+            }
+        }
+        // Game Options keeps one title vector per visible capacity.
+        if (&page != &menu.root_page()) continue;
+        for (const auto& ids : menu.root_physical_title_ids) retitle(ids);
+    }
+}
+
+} // namespace
+
+ERUI_Result Registry::set_client_host_locale(erui::MenuLocalization locale) noexcept {
+    try {
+        std::lock_guard lock(mutex_);
+        client_host_locale_ = true;
+        pagination_locale_ = locale;
+        erui::detail::CompiledMenu* menu{};
+        const ERUI_Result state = text_target(frozen_, menu);
+        if (state == ERUI_HOST_NOT_READY) {
+            // Frozen but not published yet (the menu is compiling): the host
+            // applies it right after publishing (apply_pending_client_host_locale).
+            client_host_locale_pending_ = true;
+            return ERUI_OK;
+        }
+        if (state != ERUI_OK) return state;
+        client_host_locale_pending_ = false;
+        if (!menu) return ERUI_OK;
+        relabel_host_texts(*menu, locale);
+        return ERUI_OK;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
+
+ERUI_Result Registry::apply_pending_client_host_locale() noexcept {
+    try {
+        std::lock_guard lock(mutex_);
+        if (!client_host_locale_pending_) return ERUI_OK;
+        erui::detail::CompiledMenu* menu{};
+        if (const ERUI_Result state = text_target(frozen_, menu); state != ERUI_OK) return state;
+        if (!menu) return ERUI_HOST_NOT_READY;
+        relabel_host_texts(*menu, pagination_locale_);
+        client_host_locale_pending_ = false;
+        return ERUI_OK;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
+    }
+}
+
 ERUI_Result Registry::get_row_value(
     ERUI_ProviderHandle provider_handle,
     ERUI_RowHandle row_handle,
@@ -2365,6 +2689,7 @@ void Registry::apply_pending_values() noexcept {
                 row.silent_native_transition.store(
                     true, std::memory_order_release);
                 row.native_value = value;
+                erui::native::mark_native_value_dirty(&row.native_value);
             }
         }
     }
@@ -2372,7 +2697,13 @@ void Registry::apply_pending_values() noexcept {
 
 void Registry::button_bridge(void* user_data) noexcept {
     auto* row = static_cast<Row*>(user_data);
-    if (row) invoke_button_callback(row->button_callback, row->user_data);
+    if (!row) return;
+    erui::detail::logf(erui::LogLevel::info,
+        "Provider button activated: \"%ls\" (row=%llu, callback=%s)",
+        row->label.c_str(),
+        static_cast<unsigned long long>(row->handle),
+        row->button_callback ? "yes" : "none");
+    invoke_button_callback(row->button_callback, row->user_data);
 }
 
 void Registry::value_bridge(std::uint8_t value, void* user_data) noexcept {
@@ -2727,10 +3058,12 @@ void Registry::append_page_locked(
             }
             erui::Page& target = destination.add_submenu(
                 row->label, row->help, child->second->title, child->second->help, row->enabled);
+            destination.tag_last_row(row);
             append_page_locked(provider, *child->second, target);
-            break;
+            continue;
         }
         }
+        destination.tag_last_row(row);
     }
 }
 
@@ -2744,7 +3077,7 @@ std::unique_ptr<erui::Menu> Registry::freeze_and_build_locked() {
     frozen_ = true;
 
     auto menu = std::make_unique<erui::Menu>(
-        L"ERNativeUI", L"Settings registered by ERNativeUI client mods.",
+        pagination_locale_.menu_title, pagination_locale_.menu_help,
         pagination_locale_);
     std::vector<const Provider*> ordered{};
     for (const auto& item : providers_) if (item.second->committed) ordered.push_back(item.second.get());
@@ -2753,28 +3086,58 @@ std::unique_ptr<erui::Menu> Registry::freeze_and_build_locked() {
         if (left->id != right->id) return left->id < right->id;
         return left->ordinal < right->ordinal;
     });
+    // With NativeTweaks registered, every other provider's menu goes to Mod
+    // Settings after NativeTweaks' own rows: its Game Options rows (the
+    // provider root, where e.g. Spirit Multiplier puts its submenu) move there
+    // too, so such mods read as more pages of NativeTweaks. Other built-in
+    // pages keep the plain priority order.
+    constexpr std::string_view hub_id = "er-mod-settings-hub";
+    const bool hub_present = std::any_of(ordered.begin(), ordered.end(),
+        [&](const Provider* provider) { return provider->id == hub_id; });
+    std::vector<const Provider*> mod_settings_order = ordered;
+    std::stable_partition(mod_settings_order.begin(), mod_settings_order.end(),
+        [&](const Provider* provider) { return provider->id == hub_id; });
+    const auto append_builtin = [&](const Provider& provider,
+                                    erui::detail::BuiltinPage source_page,
+                                    erui::Page*& destination,
+                                    erui::detail::BuiltinPage destination_page) {
+        const ERUI_PageHandle source_handle = provider.builtin_pages[
+            static_cast<std::size_t>(source_page)];
+        if (source_handle == ERUI_INVALID_PAGE) return;
+        const auto source = provider.page_lookup.find(source_handle);
+        if (source == provider.page_lookup.end()) {
+            throw std::logic_error("provider built-in page missing");
+        }
+        if (source->second->builtin_page != source_page) {
+            throw std::logic_error(
+                "provider built-in page destination mismatch");
+        }
+        if (source->second->rows.empty() && source_page != destination_page) return;
+        if (!destination) {
+            destination = &menu->builtin_page(destination_page);
+        }
+        append_page_locked(provider, *source->second, *destination);
+    };
     for (std::size_t destination_index = 0;
          destination_index < erui::detail::builtin_page_count;
          ++destination_index) {
         erui::Page* destination{};
+        const auto builtin_page =
+            static_cast<erui::detail::BuiltinPage>(destination_index);
+        if (builtin_page == erui::detail::BuiltinPage::mod_settings) {
+            for (const Provider* provider : mod_settings_order) {
+                append_builtin(*provider, builtin_page, destination, builtin_page);
+                if (hub_present && provider->id != hub_id) {
+                    append_builtin(*provider, erui::detail::BuiltinPage::game_options,
+                        destination, builtin_page);
+                }
+            }
+            continue;
+        }
         for (const Provider* provider : ordered) {
-            const ERUI_PageHandle source_handle =
-                provider->builtin_pages[destination_index];
-            if (source_handle == ERUI_INVALID_PAGE) continue;
-            const auto source = provider->page_lookup.find(source_handle);
-            if (source == provider->page_lookup.end()) {
-                throw std::logic_error("provider built-in page missing");
-            }
-            const auto builtin_page =
-                static_cast<erui::detail::BuiltinPage>(destination_index);
-            if (source->second->builtin_page != builtin_page) {
-                throw std::logic_error(
-                    "provider built-in page destination mismatch");
-            }
-            if (!destination) {
-                destination = &menu->builtin_page(builtin_page);
-            }
-            append_page_locked(*provider, *source->second, *destination);
+            if (hub_present && provider->id != hub_id &&
+                builtin_page == erui::detail::BuiltinPage::game_options) continue;
+            append_builtin(*provider, builtin_page, destination, builtin_page);
         }
     }
     for (const Provider* provider : ordered) {
@@ -2816,18 +3179,22 @@ std::unique_ptr<erui::Menu> Registry::freeze_and_build() {
 std::unique_ptr<erui::Menu> Registry::try_freeze_and_build(
     std::uint64_t opened_at,
     std::uint64_t quiet_ms,
-    std::uint64_t maximum_wait_ms) {
+    std::uint64_t maximum_wait_ms,
+    std::string_view awaited_provider_id) {
     std::lock_guard lock(mutex_);
     if (!open_) throw std::logic_error("registration is not open");
 
     std::size_t committed = 0;
+    bool awaited_committed = awaited_provider_id.empty();
     for (const auto& item : providers_) {
-        if (item.second->committed) ++committed;
+        if (!item.second->committed) continue;
+        ++committed;
+        if (item.second->id == awaited_provider_id) awaited_committed = true;
     }
     const std::size_t drafts = providers_.size() - committed;
     const std::uint64_t now = GetTickCount64();
     const bool maximum_reached = now - opened_at >= maximum_wait_ms;
-    const bool quiet = committed != 0 && drafts == 0 &&
+    const bool quiet = committed != 0 && drafts == 0 && awaited_committed &&
         now - opened_at >= quiet_ms &&
         now - last_activity_tick_ >= quiet_ms;
     if (!maximum_reached && !quiet) return {};

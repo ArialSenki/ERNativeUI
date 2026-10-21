@@ -226,12 +226,15 @@ Construction installs these list tables at top `+0x1200`:
 The final list's slot 1 at `0x968DA0` returns the count at list `+0x560`, which
 is top `+0x1760`.
 
-The stock GFX has a different bound: `TabList` and `BackTabList` each contain
-nine instances, `Item_0_0` through `Item_0_8`. Thus ten is native record
-capacity and nine is stock visible placement capacity. Neither is evidence
-for an unbounded custom-tab contract. A tenth native record still requires a
-compatible presentation, while arbitrary counts require virtualization,
-scrolling, or an ERNativeUI-owned tab layer.
+The 2.7.0 reference GFX used for this class map has a different bound:
+`TabList` and `BackTabList` each contain nine instances, `Item_0_0` through
+`Item_0_8`. A clean UXM extraction of the verified 2.7.1.0 game movie instead
+contains eight instances in each list, while the existing row-patched package
+asset still contains nine. These movie versions must not be conflated when
+building a target patch. Ten is the native record capacity observed in this
+2.7.0 reference analysis; it does not prove a free category or an unbounded
+custom-tab contract. Any new category still needs a compatible presentation
+and a complete native panel lifecycle.
 
 ## Tab selection and composite-panel dispatch
 

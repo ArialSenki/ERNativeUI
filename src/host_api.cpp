@@ -617,3 +617,56 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERUI_GetApi(
     std::memcpy(out_api, &table, selected_size);
     return ERUI_OK;
 }
+
+// Fork extension (not part of the official ERUI_Api table): runtime text
+// changes. Clients look these up with GetProcAddress and fall back when absent.
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetRowText(
+    ERUI_ProviderHandle provider,
+    ERUI_RowHandle row,
+    const ERUI_Utf16View* label,
+    const ERUI_Utf16View* help) {
+    if (const ERUI_Result state = callable_state(); state != ERUI_OK) return state;
+    return erui::host::registry().set_row_text(provider, row, label, help);
+}
+
+// Rows whose value differs from this default show their label in the
+// "changed" colour (Game Options only, Elden Ring 2.7.1.0).
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetRowDefault(
+    ERUI_ProviderHandle provider,
+    ERUI_RowHandle row,
+    std::int64_t value) {
+    if (const ERUI_Result state = callable_state(); state != ERUI_OK) return state;
+    return erui::host::registry().set_row_default(provider, row, value);
+}
+
+// As SetRowDefault; flags bit 0 marks a slider where higher is worse, so its
+// label turns red above the default and green below it.
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetRowDefaultEx(
+    ERUI_ProviderHandle provider,
+    ERUI_RowHandle row,
+    std::int64_t value,
+    std::uint32_t flags) {
+    if (const ERUI_Result state = callable_state(); state != ERUI_OK) return state;
+    return erui::host::registry().set_row_default(provider, row, value, (flags & 1u) != 0);
+}
+
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetCustomSliderValues(
+    ERUI_ProviderHandle provider,
+    ERUI_RowHandle row,
+    const ERUI_Utf16View* values,
+    std::uint32_t count) {
+    if (const ERUI_Result state = callable_state(); state != ERUI_OK) return state;
+    return erui::host::registry().set_custom_slider_values(provider, row, values, count);
+}
+
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetSubmenuText(
+    ERUI_ProviderHandle provider,
+    ERUI_PageHandle page,
+    const ERUI_Utf16View* label,
+    const ERUI_Utf16View* help,
+    const ERUI_Utf16View* page_title,
+    const ERUI_Utf16View* page_help) {
+    if (const ERUI_Result state = callable_state(); state != ERUI_OK) return state;
+    return erui::host::registry().set_submenu_text(
+        provider, page, label, help, page_title, page_help);
+}

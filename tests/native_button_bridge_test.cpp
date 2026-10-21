@@ -37,6 +37,11 @@ void* __fastcall fake_text_reference(
 void* __fastcall fake_root_button_text_references(void* destination) {
     ERUI_TEST_CHECK(destination != nullptr);
     std::memset(destination, 0, 0x70);
+    // The native constructor fills both label and help objects; the bridge
+    // only destroys references whose two objects are set.
+    auto* references = static_cast<std::byte*>(destination);
+    *reinterpret_cast<void**>(references) = references;
+    *reinterpret_cast<void**>(references + 0x38) = references + 0x38;
     return destination;
 }
 

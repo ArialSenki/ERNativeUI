@@ -121,8 +121,8 @@ EnableLog = 0
 Language = auto
 
 [Runtime]
-RegistrationQuietMs = 750
-RegistrationMaxWaitMs = 5000
+RegistrationQuietMs = 15000
+RegistrationMaxWaitMs = 15000
 SteamLanguageWaitMs = 5000
 InjectionCooldownMs = 250
 

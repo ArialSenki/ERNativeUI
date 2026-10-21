@@ -397,6 +397,7 @@ enum class BuiltinPage : ERUI_BuiltinPage {
     network = ERUI_BUILTIN_PAGE_NETWORK,
     keyboard_mouse = ERUI_BUILTIN_PAGE_KEYBOARD_MOUSE,
     graphics = ERUI_BUILTIN_PAGE_GRAPHICS,
+    mod_settings = ERUI_BUILTIN_PAGE_MOD_SETTINGS,
 };
 
 enum class GameLanguage : std::uint32_t {
@@ -1441,6 +1442,8 @@ inline ConnectionResult connect() noexcept {
 class Page {
 public:
     Page() = default;
+    // NativeTweaks fork: exposes the handle for live text updates.
+    [[nodiscard]] ERUI_PageHandle handle() const noexcept { return page_; }
 
     RowHandle add_button(
         std::wstring_view label,

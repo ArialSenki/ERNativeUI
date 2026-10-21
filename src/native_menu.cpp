@@ -521,6 +521,38 @@ bool prepare_button_text(
 #endif
 }
 
+void log_button_seh_failure(
+    const char* phase,
+    unsigned long exception_code,
+    const EXCEPTION_POINTERS* exception_info) noexcept {
+    const EXCEPTION_RECORD* const record = exception_info
+        ? exception_info->ExceptionRecord
+        : nullptr;
+    const std::uintptr_t fault_address = record
+        ? reinterpret_cast<std::uintptr_t>(record->ExceptionAddress)
+        : 0;
+    const bool access_violation = record &&
+        record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+        record->NumberParameters >= 2;
+    const std::uintptr_t access_kind = access_violation
+        ? static_cast<std::uintptr_t>(record->ExceptionInformation[0])
+        : 0;
+    const std::uintptr_t accessed_address = access_violation
+        ? static_cast<std::uintptr_t>(record->ExceptionInformation[1])
+        : 0;
+
+    erui::detail::logf(
+        erui::LogLevel::error,
+        "button %s raised SEH exception 0x%08lX at=0x%llX access=%s address=0x%llX",
+        phase,
+        exception_code,
+        static_cast<unsigned long long>(fault_address),
+        access_violation
+            ? (access_kind == 0 ? "read" : access_kind == 1 ? "write" : "execute")
+            : "n/a",
+        static_cast<unsigned long long>(accessed_address));
+}
+
 void release_button_display_text(std::byte* display_text) noexcept {
     const std::uint64_t capacity =
         *reinterpret_cast<const std::uint64_t*>(
@@ -559,6 +591,7 @@ bool call_add_button(
     faulted = false;
 #if defined(_MSC_VER)
     unsigned long seh_exception_code = 0;
+    EXCEPTION_POINTERS* exception_info = nullptr;
     __try {
 #endif
         addresses.add_button(
@@ -567,19 +600,62 @@ bool call_add_button(
             display_text_reference,
             primary_action,
             secondary_action);
+#if defined(_MSC_VER)
+    } __except (
+        seh_exception_code = GetExceptionCode(),
+        exception_info = GetExceptionInformation(),
+        EXCEPTION_EXECUTE_HANDLER) {
+        faulted = true;
+        log_button_seh_failure(
+            "native add_button", seh_exception_code, exception_info);
+        return false;
+    }
+
+    seh_exception_code = 0;
+    exception_info = nullptr;
+    __try {
+#endif
 
         // Solid Uncapper cleans both native text-reference objects after the
-        // row constructor has cloned all inputs.
-        addresses.destroy_text_references(text_references);
+        // row constructor has cloned all inputs. Root-style references can be
+        // left partially empty, so skip cleanup when either object is unset.
+        auto* references = static_cast<std::byte*>(text_references);
+        void* label_object = *reinterpret_cast<void**>(references);
+        void* help_object = *reinterpret_cast<void**>(
+            references + kButtonHelpReferenceOffset);
+        if (label_object && help_object) {
+            addresses.destroy_text_references(text_references);
+        } else {
+            erui::detail::logf(
+                erui::LogLevel::trace,
+                "button text-reference cleanup skipped label=%p help=%p",
+                label_object, help_object);
+        }
+#if defined(_MSC_VER)
+    } __except (
+        seh_exception_code = GetExceptionCode(),
+        exception_info = GetExceptionInformation(),
+        EXCEPTION_EXECUTE_HANDLER) {
+        // The native row already exists at this point; a cleanup fault only
+        // leaks the temporary references and must not fail materialization.
+        log_button_seh_failure(
+            "text-reference cleanup", seh_exception_code, exception_info);
+    }
+
+    seh_exception_code = 0;
+    exception_info = nullptr;
+    __try {
+#endif
         release_button_display_text(display_text);
         return true;
 #if defined(_MSC_VER)
-    } __except (seh_exception_code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+    } __except (
+        seh_exception_code = GetExceptionCode(),
+        exception_info = GetExceptionInformation(),
+        EXCEPTION_EXECUTE_HANDLER) {
         faulted = true;
-        erui::detail::logf(
-            erui::LogLevel::error,
-            "button native constructor/cleanup raised SEH exception 0x%08lX",
-            seh_exception_code);
+        log_button_seh_failure(
+            "display-text cleanup", seh_exception_code, exception_info);
         return false;
     }
 #endif
@@ -597,6 +673,18 @@ bool add_button_with_callback(
     faulted = false;
     if (!row.enabled || !addresses.add_button ||
         !addresses.destroy_text_references) {
+        if (erui::detail::diagnostics_enabled()) {
+            erui::detail::logf(
+                erui::LogLevel::warning,
+                "diagnostic: button materialization stopped kind=%s stage=prerequisites enabled=%u addButton=%u destroyTextRefs=%u label=%u help=%u targetPage=%zu",
+                callback_kind ? callback_kind : "unknown",
+                row.enabled ? 1u : 0u,
+                addresses.add_button ? 1u : 0u,
+                addresses.destroy_text_references ? 1u : 0u,
+                static_cast<unsigned>(label_id(row)),
+                static_cast<unsigned>(help_id(row)),
+                row.target_page_index);
+        }
         return false;
     }
 
@@ -611,6 +699,24 @@ bool add_button_with_callback(
             display_text_reference,
             root_text_style,
             faulted)) {
+        if (erui::detail::diagnostics_enabled()) {
+            erui::detail::logf(
+                erui::LogLevel::warning,
+                "diagnostic: button materialization stopped kind=%s stage=text-prepare rootStyle=%u displayConstructor=%u rootTextRefs=%u displayReference=%p faulted=%u label=%u help=%u targetPage=%zu",
+                callback_kind ? callback_kind : "unknown",
+                root_text_style ? 1u : 0u,
+                (root_text_style
+                    ? addresses.root_button_display_text != nullptr
+                    : addresses.text_ref_label != nullptr) ? 1u : 0u,
+                root_text_style
+                    ? (addresses.root_button_text_references ? 1u : 0u)
+                    : 1u,
+                display_text_reference,
+                faulted ? 1u : 0u,
+                static_cast<unsigned>(label_id(row)),
+                static_cast<unsigned>(help_id(row)),
+                row.target_page_index);
+        }
         if (!faulted) {
             erui::detail::logf(
                 erui::LogLevel::error,
@@ -642,7 +748,7 @@ bool add_button_with_callback(
                 row.target_page_index);
         }
 
-        return call_add_button(
+        const bool added = call_add_button(
             page,
             addresses,
             text_references,
@@ -651,6 +757,19 @@ bool add_button_with_callback(
             &primary_action,
             &secondary_action,
             faulted);
+        if (erui::detail::diagnostics_enabled()) {
+            erui::detail::logf(
+                added ? erui::LogLevel::info : erui::LogLevel::warning,
+                "diagnostic: button materialization result kind=%s stage=native-add-button added=%u faulted=%u label=%u help=%u targetPage=%zu page=%p",
+                callback_kind ? callback_kind : "unknown",
+                added ? 1u : 0u,
+                faulted ? 1u : 0u,
+                static_cast<unsigned>(label_id(row)),
+                static_cast<unsigned>(help_id(row)),
+                row.target_page_index,
+                page);
+        }
+        return added;
     } catch (const std::exception& exception) {
         erui::detail::logf(
             erui::LogLevel::error,
@@ -743,6 +862,15 @@ bool add_submenu_button(
     bool& faulted) noexcept {
     if (row.target_page_index == erui::detail::invalid_compiled_index) {
         faulted = false;
+        if (erui::detail::diagnostics_enabled()) {
+            erui::detail::logf(
+                erui::LogLevel::warning,
+                "diagnostic: submenu button rejected stage=invalid-target label=%u help=%u targetPage=%zu page=%p",
+                static_cast<unsigned>(label_id(row)),
+                static_cast<unsigned>(help_id(row)),
+                row.target_page_index,
+                page);
+        }
         return false;
     }
     return add_button_with_callback(
@@ -919,6 +1047,15 @@ bool inject_logical_row(
         if (!row.enabled ||
             row.target_page_index == erui::detail::invalid_compiled_index) {
             ++outcome.skipped;
+            if (erui::detail::diagnostics_enabled()) {
+                erui::detail::logf(
+                    erui::LogLevel::warning,
+                    "diagnostic: row materialization skipped kind=submenu enabled=%u targetPage=%zu label=%u help=%u",
+                    row.enabled ? 1u : 0u,
+                    row.target_page_index,
+                    static_cast<unsigned>(label_id(row)),
+                    static_cast<unsigned>(help_id(row)));
+            }
             return false;
         }
         constructor_succeeded = add_submenu_button(
@@ -953,6 +1090,8 @@ ColorPickerWidgetHost widget_host_for_route(
         return ColorPickerWidgetHost::subpage;
     }
     switch (route.builtin_category) {
+    case 4:
+        return ColorPickerWidgetHost::game_options;
     case 1:
         return ColorPickerWidgetHost::camera_options;
     case 2:
@@ -974,7 +1113,8 @@ bool route_uses_game_options_text_style(
     const erui::detail::PageRoute& route) noexcept {
     return route.kind == erui::detail::PageRouteKind::root_main ||
         (route.kind == erui::detail::PageRouteKind::builtin_main &&
-            route.builtin_category == 1);
+            (route.builtin_category == 1 ||
+                route.builtin_category == 4));
 }
 
 } // namespace

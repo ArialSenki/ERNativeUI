@@ -17,6 +17,17 @@ output file; the input is never modified.
 misleading spelling. The actual **Controller Settings** tab is backed by the
 separate `PadSetting`/`PadSettingDialog` path; this patcher does not expand it.
 
+For the supported Elden Ring 2.7.1.0 movie, `--mod-settings-top-level-tab`
+adds ERNativeUI after Graphics and reserves the next selector position for the
+vanilla Quit Game tab. It also moves the `BackTabList.RightArrow` placement so
+the RB prompt follows the Quit Game door icon. Existing ten-position candidate
+GFX files with the earlier RB placement are migrated without changing their
+file size. The tab uses a single icon embedded in the GFX as a vector shape
+(`mod_settings_tab_icon.inc`), so no external TGA files are required. Always
+patch from the vanilla 2.7.1.0 GFX, not from a previously patched file. This
+is a selector-layout patch only; it does not validate or change
+the native panel route used when ERNativeUI is selected.
+
 ## Relevant display tree
 
 The names preserve Elden Ring's spelling and capitalization:

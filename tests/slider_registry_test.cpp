@@ -220,7 +220,48 @@ int main() {
     ERUI_TEST_CHECK(registry.get_row_value(
         provider_handle, custom_row, &generic_value) == ERUI_INVALID_ARGUMENT);
 
+    /* Fork: CustomSlider value texts can be replaced after commit (language
+       switch). Same count only, and every text must be valid. */
+    std::vector<std::wstring> relabelled_values{};
+    std::vector<ERUI_Utf16View> relabelled_views{};
+    for (std::uint32_t index = 0; index < ERUI_SLIDER_MAX_VALUE_COUNT; ++index) {
+        relabelled_values.push_back(L"w" + std::to_wstring(index));
+    }
+    for (const std::wstring& value : relabelled_values) {
+        relabelled_views.push_back(utf16(value));
+    }
+    ERUI_TEST_CHECK(registry.set_custom_slider_values(
+        provider_handle, maximum_custom_row, relabelled_views.data(),
+        ERUI_SLIDER_MAX_VALUE_COUNT - 1u) == ERUI_INVALID_ARGUMENT);
+    ERUI_TEST_CHECK(registry.set_custom_slider_values(
+        provider_handle, numeric_row, relabelled_views.data(),
+        ERUI_SLIDER_MAX_VALUE_COUNT) == ERUI_INVALID_ARGUMENT);
+    ERUI_TEST_CHECK(registry.set_custom_slider_values(
+        provider_handle, maximum_custom_row, nullptr,
+        ERUI_SLIDER_MAX_VALUE_COUNT) == ERUI_INVALID_ARGUMENT);
+    ERUI_TEST_CHECK(registry.set_custom_slider_values(
+        provider_handle, ERUI_INVALID_ROW, relabelled_views.data(),
+        ERUI_SLIDER_MAX_VALUE_COUNT) == ERUI_INVALID_HANDLE);
+    const ERUI_Utf16View saved_view = relabelled_views[3];
+    relabelled_views[3] = utf16(L"");
+    ERUI_TEST_CHECK(registry.set_custom_slider_values(
+        provider_handle, maximum_custom_row, relabelled_views.data(),
+        ERUI_SLIDER_MAX_VALUE_COUNT) == ERUI_INVALID_ARGUMENT);
+    relabelled_views[3] = saved_view;
+    ERUI_TEST_CHECK(registry.set_custom_slider_values(
+        provider_handle, maximum_custom_row, relabelled_views.data(),
+        ERUI_SLIDER_MAX_VALUE_COUNT) == ERUI_OK);
+    /* The texts are copied, like add_custom_slider's. */
+    for (std::wstring& value : relabelled_values) value.assign(L"overwritten");
+    for (std::size_t index = 0; index < relabelled_values.size(); ++index) {
+        relabelled_views[index] = utf16(relabelled_values[index]);
+    }
+
     std::unique_ptr<erui::Menu> menu = registry.freeze_and_build();
+    /* Frozen but not yet published: the change must wait. */
+    ERUI_TEST_CHECK(registry.set_custom_slider_values(
+        provider_handle, maximum_custom_row, relabelled_views.data(),
+        ERUI_SLIDER_MAX_VALUE_COUNT) == ERUI_HOST_NOT_READY);
     ERUI_TEST_CHECK(menu != nullptr);
     std::unique_ptr<erui::detail::CompiledMenu> compiled =
         erui::detail::MenuCompiler::compile(*menu);
@@ -283,8 +324,8 @@ int main() {
         L"9223372036854775807");
     ERUI_TEST_CHECK(maximum_custom_it->slider.maximum == 255);
     ERUI_TEST_CHECK(*maximum_custom_it->byte_value == 255);
-    ERUI_TEST_CHECK(maximum_custom_it->slider_value_texts.front() == L"v0");
-    ERUI_TEST_CHECK(maximum_custom_it->slider_value_texts.back() == L"v255");
+    ERUI_TEST_CHECK(maximum_custom_it->slider_value_texts.front() == L"w0");
+    ERUI_TEST_CHECK(maximum_custom_it->slider_value_texts.back() == L"w255");
 
     /* Programmatic writes update the canonical/native values without
        masquerading as player changes when the runtime observes them. */

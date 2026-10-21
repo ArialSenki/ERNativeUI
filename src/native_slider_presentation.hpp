@@ -3,6 +3,8 @@
 #include "addresses.hpp"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace erui::native {
 
@@ -19,5 +21,11 @@ void remove_native_slider_presentation() noexcept;
 void begin_native_slider_presentation_row(
     volatile std::uint8_t* bound_value) noexcept;
 void end_native_slider_presentation_row() noexcept;
+
+// Fork: replaces the value texts of an installed formatted slider (same
+// count). False when the row has no presentation slot.
+bool set_native_slider_presentation_values(
+    volatile std::uint8_t* bound_value,
+    const std::vector<std::wstring>& values) noexcept;
 
 } // namespace erui::native

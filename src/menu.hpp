@@ -62,6 +62,8 @@ struct PagePresentationSpec {
 };
 
 struct MenuLocalization {
+    std::wstring menu_title{L"NativeTweaks"};
+    std::wstring menu_help{L"Settings provided by installed mods."};
     std::wstring previous_label{L"Previous Page"};
     std::wstring previous_help{L"Return to the preceding settings page."};
     std::wstring next_label{L"Next Page"};
@@ -248,6 +250,11 @@ public:
 
     Page& set_presentation(PagePresentationSpec presentation);
 
+    // Fork: tags the most recently added row (see RowDefinition::source_tag).
+    void tag_last_row(const void* tag) noexcept {
+        if (!rows_.empty()) rows_.back().source_tag = tag;
+    }
+
     [[nodiscard]] PageKind kind() const noexcept { return kind_; }
     [[nodiscard]] std::wstring_view title() const noexcept { return title_; }
     [[nodiscard]] std::wstring_view help() const noexcept { return help_; }
@@ -276,6 +283,8 @@ private:
         detail::ColorAction color_action{};
         Page* target_page{};
         bool enabled{true};
+        // Fork: identifies the host registry row, for runtime text changes.
+        const void* source_tag{};
     };
 
     Page(Menu& owner, PageKind kind, std::wstring title, std::wstring help);

@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -33,11 +34,22 @@ public:
 
     void open_registration() noexcept;
     void set_host_locale(erui::MenuLocalization pagination);
+    // Fork: host texts (menu title/help, pagination) picked by a client at
+    // runtime. Before the freeze they feed the menu build; once the menu is
+    // published they replace the compiled texts in place. Wins over the
+    // startup Steam-language locale from set_host_locale. In between (frozen,
+    // menu still compiling) it is kept and returns ERUI_OK; the host applies
+    // it with apply_pending_client_host_locale right after publishing.
+    ERUI_Result set_client_host_locale(erui::MenuLocalization locale) noexcept;
+    // Applies a client locale that arrived while the menu was compiling.
+    // ERUI_OK when there was none or it was applied.
+    ERUI_Result apply_pending_client_host_locale() noexcept;
     [[nodiscard]] std::unique_ptr<erui::Menu> freeze_and_build();
     [[nodiscard]] std::unique_ptr<erui::Menu> try_freeze_and_build(
         std::uint64_t opened_at,
         std::uint64_t quiet_ms,
-        std::uint64_t maximum_wait_ms);
+        std::uint64_t maximum_wait_ms,
+        std::string_view awaited_provider_id = {});
     [[nodiscard]] bool registration_open() const noexcept;
     [[nodiscard]] std::uint64_t generation() const noexcept;
     [[nodiscard]] std::size_t committed_provider_count() const noexcept;
@@ -229,6 +241,39 @@ public:
         ERUI_ProviderHandle provider,
         const ERUI_AlertDesc* description) noexcept;
 
+    // Fork: value whose row label stays uncoloured (toggle 0/1, numeric
+    // slider scaled value, custom slider index). inverted: higher is worse,
+    // so sliders above the default show red instead of green.
+    ERUI_Result set_row_default(
+        ERUI_ProviderHandle provider,
+        ERUI_RowHandle row,
+        std::int64_t value,
+        bool inverted = false) noexcept;
+    // Fork: change texts after commit (e.g. a language switch without
+    // restarting). A null view, or one with null data, keeps that text.
+    // The game shows the new text the next time it asks for it.
+    ERUI_Result set_row_text(
+        ERUI_ProviderHandle provider,
+        ERUI_RowHandle row,
+        const ERUI_Utf16View* label,
+        const ERUI_Utf16View* help) noexcept;
+    // Replaces every value text of a CustomSlider; count must match the
+    // value_count it was added with.
+    ERUI_Result set_custom_slider_values(
+        ERUI_ProviderHandle provider,
+        ERUI_RowHandle row,
+        const ERUI_Utf16View* values,
+        std::uint32_t count) noexcept;
+    // page is a child page from add_submenu; label/help belong to the row
+    // that opens it, page_title/page_help to the page itself.
+    ERUI_Result set_submenu_text(
+        ERUI_ProviderHandle provider,
+        ERUI_PageHandle page,
+        const ERUI_Utf16View* label,
+        const ERUI_Utf16View* help,
+        const ERUI_Utf16View* page_title,
+        const ERUI_Utf16View* page_help) noexcept;
+
     void apply_pending_values() noexcept;
 
 private:
@@ -406,6 +451,8 @@ private:
     std::uint64_t next_ordinal_{};
     std::unordered_map<ERUI_ProviderHandle, std::unique_ptr<Provider>> providers_{};
     erui::MenuLocalization pagination_locale_{};
+    bool client_host_locale_{};
+    bool client_host_locale_pending_{};
 };
 
 Registry& registry() noexcept;

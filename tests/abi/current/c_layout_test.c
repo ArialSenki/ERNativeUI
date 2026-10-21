@@ -120,7 +120,10 @@ _Static_assert(ERUI_BUILTIN_PAGE_KEYBOARD_MOUSE == 5u,
     "Keyboard/Mouse built-in page value drift");
 _Static_assert(ERUI_BUILTIN_PAGE_GRAPHICS == 6u,
     "Graphics built-in page value drift");
-_Static_assert(ERUI_BUILTIN_PAGE_COUNT == 7u,
+/* Fork: Mod Settings is an extra built-in page. */
+_Static_assert(ERUI_BUILTIN_PAGE_MOD_SETTINGS == 7u,
+    "Mod Settings built-in page value drift");
+_Static_assert(ERUI_BUILTIN_PAGE_COUNT == 8u,
     "built-in page count drift");
 _Static_assert(sizeof(ERUI_TextInputChangeContext) == 48u,
     "TextInput callback context ABI drift");

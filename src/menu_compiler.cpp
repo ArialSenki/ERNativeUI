@@ -306,6 +306,7 @@ std::unique_ptr<CompiledMenu> MenuCompiler::compile(Menu& menu) {
             compiled_row.color_picker_state = row.color_picker_state;
             compiled_row.color_action = row.color_action;
             compiled_row.enabled = row.enabled;
+            compiled_row.source_tag = row.source_tag;
             if (row.kind == RowKind::popup_choice && row.byte_value) {
                 compiled_row.popup_choice_state.set_public_selection(
                     *row.byte_value);

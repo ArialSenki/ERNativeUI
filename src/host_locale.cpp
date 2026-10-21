@@ -44,6 +44,66 @@ bool utf8_to_utf16(std::string_view input, std::wstring& output) {
     return true;
 }
 
+// Built-in host text for Elden Ring's Steam languages, so no locales folder
+// is needed. A locales\<identifier>.ini next to the DLL still overrides any
+// key. nullptr keeps the English default.
+struct BuiltinLocale {
+    const char* identifier;
+    const wchar_t* menu_help;
+    const wchar_t* previous_label;
+    const wchar_t* previous_help;
+    const wchar_t* next_label;
+    const wchar_t* next_help;
+};
+
+constexpr BuiltinLocale kBuiltinLocales[] = {
+    {"arabic", nullptr, L"الصفحة السابقة", L"العودة إلى صفحة الإعدادات السابقة.",
+        L"الصفحة التالية", L"فتح صفحة الإعدادات التالية."},
+    {"brazilian", nullptr, L"Página anterior", L"Voltar à página de configurações anterior.",
+        L"Próxima página", L"Abrir a próxima página de configurações."},
+    {"french", nullptr, L"Page précédente", L"Revenir à la page de réglages précédente.",
+        L"Page suivante", L"Ouvrir la page de réglages suivante."},
+    {"german", nullptr, L"Vorherige Seite", L"Zur vorherigen Einstellungsseite zurückkehren.",
+        L"Nächste Seite", L"Die nächste Einstellungsseite öffnen."},
+    {"italian", nullptr, L"Pagina precedente", L"Torna alla pagina delle impostazioni precedente.",
+        L"Pagina successiva", L"Apri la pagina delle impostazioni successiva."},
+    {"japanese", nullptr, L"前のページ", L"前の設定ページに戻ります。",
+        L"次のページ", L"次の設定ページを開きます。"},
+    {"koreana", nullptr, L"이전 페이지", L"이전 설정 페이지로 돌아갑니다.",
+        L"다음 페이지", L"다음 설정 페이지를 엽니다."},
+    {"latam", L"Ajustes proporcionados por los mods instalados.", L"Página anterior",
+        L"Volver a la página de configuración anterior.", L"Página siguiente",
+        L"Abrir la página de configuración siguiente."},
+    {"polish", nullptr, L"Poprzednia strona", L"Wróć do poprzedniej strony ustawień.",
+        L"Następna strona", L"Otwórz następną stronę ustawień."},
+    {"russian", nullptr, L"Предыдущая страница", L"Вернуться на предыдущую страницу настроек.",
+        L"Следующая страница", L"Открыть следующую страницу настроек."},
+    {"schinese", nullptr, L"上一页", L"返回上一设置页。", L"下一页", L"打开下一设置页。"},
+    {"spanish", L"Ajustes proporcionados por los mods instalados.", L"Página anterior",
+        L"Volver a la página de ajustes anterior.", L"Página siguiente",
+        L"Abrir la página de ajustes siguiente."},
+    {"tchinese", nullptr, L"上一頁", L"返回上一個設定頁面。", L"下一頁", L"開啟下一個設定頁面。"},
+    {"thai", nullptr, L"หน้าก่อนหน้า", L"กลับไปยังหน้าการตั้งค่าก่อนหน้า",
+        L"หน้าถัดไป", L"เปิดหน้าการตั้งค่าถัดไป"},
+    {"vietnamese", nullptr, L"Trang trước", L"Quay lại trang cài đặt trước đó.",
+        L"Trang sau", L"Mở trang cài đặt tiếp theo."},
+};
+
+void apply_builtin(std::string_view identifier, erui::MenuLocalization& text) {
+    for (const BuiltinLocale& locale : kBuiltinLocales) {
+        if (identifier != locale.identifier) continue;
+        const auto set = [](const wchar_t* value, std::wstring& destination) {
+            if (value) destination = value;
+        };
+        set(locale.menu_help, text.menu_help);
+        set(locale.previous_label, text.previous_label);
+        set(locale.previous_help, text.previous_help);
+        set(locale.next_label, text.next_label);
+        set(locale.next_help, text.next_help);
+        return;
+    }
+}
+
 } // namespace
 
 HostLocale load_host_locale(
@@ -51,6 +111,11 @@ HostLocale load_host_locale(
     std::string_view language_identifier) noexcept {
     HostLocale result{};
     if (!is_safe_locale_identifier(language_identifier)) return result;
+    try {
+        apply_builtin(language_identifier, result.pagination);
+    } catch (...) {
+        result = HostLocale{};
+    }
     try {
         const std::filesystem::path path = dll_directory / L"locales" /
             (std::filesystem::path(language_identifier) += L".ini");
@@ -101,13 +166,21 @@ HostLocale load_host_locale(
                 (void)utf8_to_utf16(found->second, destination);
             }
         };
+        apply("Menu.Title", result.pagination.menu_title);
+        apply("Menu.Help", result.pagination.menu_help);
         apply("Pagination.PreviousLabel", result.pagination.previous_label);
         apply("Pagination.PreviousHelp", result.pagination.previous_help);
         apply("Pagination.NextLabel", result.pagination.next_label);
         apply("Pagination.NextHelp", result.pagination.next_help);
         result.loaded = true;
     } catch (...) {
-        return HostLocale{};
+        HostLocale fallback{};
+        try {
+            apply_builtin(language_identifier, fallback.pagination);
+        } catch (...) {
+            return HostLocale{};
+        }
+        return fallback;
     }
     return result;
 }

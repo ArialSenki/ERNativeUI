@@ -12,6 +12,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 #include <vector>
@@ -28,12 +30,19 @@ constexpr std::size_t kStepValueOffset = 0xD38;
 constexpr std::size_t kBoundValuePointerOffset = 0xD90;
 constexpr std::uint32_t kFaultLogLimit = 8;
 
+using ValueTexts = std::vector<std::wstring>;
+
+// Fork: the value texts can be replaced at runtime (language switch). The
+// detour reads them without a lock, so a replacement publishes a new list and
+// the old one stays alive until process exit (a few strings per switch).
 struct PresentationSlot {
     std::uintptr_t bound_value{};
-    std::vector<std::wstring> values{};
+    std::shared_ptr<std::atomic<const ValueTexts*>> values{};
 };
 
 std::vector<PresentationSlot> g_slots{};
+std::vector<std::unique_ptr<const ValueTexts>> g_value_store{};
+std::mutex g_value_lock{};
 GameAddresses g_addresses{};
 SafetyHookInline g_slider_refresh_hook{};
 std::atomic<SliderRefreshFn> g_original_slider_refresh{};
@@ -183,7 +192,7 @@ void apply_presentation(void* slider) noexcept {
             constructing && minimum == 0 && step == 1 &&
             maximum >= 1 &&
             static_cast<std::size_t>(maximum) + 1 ==
-                constructing->values.size() &&
+                constructing->values->load(std::memory_order_acquire)->size() &&
             current == g_constructing_value && current >= minimum &&
             current <= maximum && baseline >= minimum && baseline <= maximum) {
             // The constructor's first structurally valid refresh consumes the
@@ -196,7 +205,8 @@ void apply_presentation(void* slider) noexcept {
         }
         if (!slot) return;
 
-        const std::vector<std::wstring>& values = slot->values;
+        const ValueTexts& values =
+            *slot->values->load(std::memory_order_acquire);
         if (minimum != 0 || step != 1 || maximum < 1 ||
             static_cast<std::size_t>(maximum) + 1 != values.size() ||
             current < minimum || current > maximum ||
@@ -249,11 +259,16 @@ std::size_t collect_slots() {
                     ERUI_SLIDER_MAX_VALUE_COUNT) {
                 continue;
             }
+            auto texts = std::make_unique<const ValueTexts>(
+                row.slider_value_texts);
             collected.push_back({
                 reinterpret_cast<std::uintptr_t>(
                     const_cast<std::uint8_t*>(row.byte_value)),
-                row.slider_value_texts,
+                std::make_shared<std::atomic<const ValueTexts*>>(
+                    texts.get()),
             });
+            std::lock_guard lock(g_value_lock);
+            g_value_store.push_back(std::move(texts));
         }
     }
     std::sort(
@@ -262,6 +277,7 @@ std::size_t collect_slots() {
         [](const PresentationSlot& left, const PresentationSlot& right) {
             return left.bound_value < right.bound_value;
         });
+    std::lock_guard lock(g_value_lock);
     g_slots = std::move(collected);
     return g_slots.size();
 }
@@ -367,7 +383,10 @@ void remove_native_slider_presentation() noexcept {
     // Before the first hook is created there cannot be an in-flight detour,
     // so failed preparation may release its temporary state normally.
     g_original_slider_refresh.store(nullptr, std::memory_order_release);
-    g_slots.clear();
+    {
+        std::lock_guard lock(g_value_lock);
+        g_slots.clear();
+    }
     g_addresses = {};
     g_fault_logs.store(0, std::memory_order_release);
     g_constructing_slot = nullptr;
@@ -386,6 +405,27 @@ void begin_native_slider_presentation_row(
 void end_native_slider_presentation_row() noexcept {
     g_constructing_slot = nullptr;
     g_constructing_value = 0;
+}
+
+bool set_native_slider_presentation_values(
+    volatile std::uint8_t* bound_value,
+    const std::vector<std::wstring>& values) noexcept {
+    try {
+        std::lock_guard lock(g_value_lock);
+        const PresentationSlot* slot = find_slot(reinterpret_cast<std::uintptr_t>(
+            const_cast<std::uint8_t*>(bound_value)));
+        if (!slot ||
+            slot->values->load(std::memory_order_acquire)->size() != values.size()) {
+            return false;
+        }
+        auto texts = std::make_unique<const ValueTexts>(values);
+        const ValueTexts* published = texts.get();
+        g_value_store.push_back(std::move(texts));
+        slot->values->store(published, std::memory_order_release);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace erui::native

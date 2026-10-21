@@ -72,6 +72,7 @@ struct CompiledRow {
     ColorAction color_action{};
     std::size_t target_page_index{invalid_compiled_index};
     bool enabled{true};
+    const void* source_tag{};  // fork: host registry row, for runtime text changes
     mutable PopupChoiceNativeState popup_choice_state{};
     std::uint8_t last_observed_value{};
 };
@@ -200,6 +201,27 @@ struct CompiledMenu {
     [[nodiscard]] bool has_builtin_pages() const noexcept {
         for (const std::size_t index : builtin_page_indices) {
             if (index < pages.size() && !pages[index].rows.empty()) return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool builtin_rows_may_require_runtime_pagination() const noexcept {
+        for (std::uint8_t native_category = 1;
+             native_category < builtin_page_indices.size();
+             ++native_category) {
+            const CompiledPage* const page = builtin_page(native_category);
+            if (!page || page->rows.empty()) continue;
+
+            // The dedicated Mod Settings category replaces the dormant
+            // Brightness materializer, so its native page starts with zero
+            // rows. The supported 2.7.1.0 options movie has at least
+            // game_options_vanilla_capacity placements. A shorter Mods list
+            // fits without the global subpage hook, which also sees every
+            // vanilla settings page. Longer lists still enable pagination.
+            const bool dedicated_mod_settings_page_fits =
+                native_category == native_category_id(BuiltinPage::mod_settings) &&
+                page->rows.size() <= game_options_vanilla_capacity;
+            if (!dedicated_mod_settings_page_fits) return true;
         }
         return false;
     }

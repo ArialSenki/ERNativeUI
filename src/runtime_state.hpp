@@ -13,6 +13,9 @@ struct RuntimeState {
     RuntimeOptions options{};
     std::unique_ptr<CompiledMenu> menu{};
     std::atomic_bool installed{false};
+    // Fork: true while `menu` holds a fully compiled menu (set after compile,
+    // cleared before reset), so runtime text changes never race compilation.
+    std::atomic_bool menu_published{false};
     std::atomic<std::uint64_t> custom_text_hits{0};
     std::atomic<std::uint32_t> diagnostic_value_logs{0};
     std::atomic<std::uint64_t> button_action_hits{0};

@@ -61,8 +61,13 @@ int main(int argc, char** argv) {
         ERUI_BUILTIN_PAGE_SOUND,
         ERUI_BUILTIN_PAGE_NETWORK,
         ERUI_BUILTIN_PAGE_KEYBOARD_MOUSE,
-        ERUI_BUILTIN_PAGE_GRAPHICS
+        ERUI_BUILTIN_PAGE_GRAPHICS,
+        ERUI_BUILTIN_PAGE_MOD_SETTINGS
     };
+    _Static_assert(
+        sizeof(builtin_pages) / sizeof(builtin_pages[0]) ==
+            ERUI_BUILTIN_PAGE_COUNT,
+        "builtin_pages must list every built-in page");
     static const uint16_t row_label[] = {
         'B','u','i','l','t','-','i','n',' ','r','o','w'};
     ERUI_LoadedTestHost host;

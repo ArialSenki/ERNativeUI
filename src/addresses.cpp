@@ -10,35 +10,55 @@
 namespace erui::native {
 namespace {
 
-constexpr std::uintptr_t kGameOptionsHandlerRva = 0x958C50;
+constexpr std::uintptr_t kGameOptionsHandlerRva = 0x959DF0;
+constexpr std::uintptr_t kOptionSettingTabFrameDispatchRva = 0x9680D0;
+constexpr std::uintptr_t kOptionSettingTabSelectedIndexRva = 0x73AC70;
 constexpr std::uintptr_t kCameraPanelMaterializerRva = 0x959320;
 constexpr std::uintptr_t kDisplayPanelMaterializerRva = 0x95D540;
 constexpr std::uintptr_t kSoundPanelMaterializerRva = 0x959090;
 constexpr std::uintptr_t kNetworkPanelMaterializerRva = 0x95AD00;
 constexpr std::uintptr_t kKeyboardMousePanelMaterializerRva = 0x95CB30;
 constexpr std::uintptr_t kGraphicsPanelMaterializerRva = 0x95C050;
-constexpr std::uintptr_t kSubHandlerRva = 0x95A5D0;
-constexpr std::uintptr_t kOpenSubPageRva = 0x94FA20;
+constexpr std::uintptr_t kModSettingsPanelMaterializerRva = 0x95D200;
+constexpr std::uintptr_t kModSettingsCategoryBuilderRva = 0x807E10;
+constexpr std::uintptr_t kModSettingsCategoryDestructorRva = 0x86A190;
+constexpr std::uintptr_t kConfigurationCategoryAppendRva = 0x968CF0;
+constexpr std::uintptr_t kModSettingsPanelRouteSiteRva = 0x93CB22;
+constexpr std::uintptr_t kModSettingsPanelRouteReturnSiteRva = 0x93CB34;
+constexpr std::uintptr_t kSubHandlerRva = 0x95B770;
+constexpr std::uintptr_t kOpenSubPageRva = 0x950850;
 constexpr std::uintptr_t kOnOffListRva = 0x955550;
-constexpr std::uintptr_t kMenuContextRva = 0x869300;
-constexpr std::uintptr_t kTextRefHelpRva = 0x760790;
-constexpr std::uintptr_t kTextRefLabelRva = 0x760970;
+constexpr std::uintptr_t kMenuContextRva = 0x86A2F0;
+constexpr std::uintptr_t kTextRefHelpRva = 0x7615E0;
+constexpr std::uintptr_t kTextRefLabelRva = 0x7617C0;
 constexpr std::uintptr_t kRootButtonTextReferencesRva = 0x958210;
 constexpr std::uintptr_t kRootButtonDisplayTextRva = 0x763BA0;
-constexpr std::uintptr_t kAddToggleRva = 0x948FA0;
-constexpr std::uintptr_t kAddChoiceRva = 0x949120;
-constexpr std::uintptr_t kAddSliderRva = 0x9493F0;
+constexpr std::uintptr_t kAddToggleRva = 0x94A140;
+constexpr std::uintptr_t kAddChoiceRva = 0x94A2C0;
+constexpr std::uintptr_t kAddSliderRva = 0x94A590;
 constexpr std::uintptr_t kSliderRefreshRva = 0x74FA20;
-constexpr std::uintptr_t kAddButtonRva = 0x9298A0;
-constexpr std::uintptr_t kDestroyTextReferencesRva = 0x742C90;
-constexpr std::uintptr_t kTextResolverRva = 0x7633D0;
+constexpr std::uintptr_t kAddButtonRva = 0x92AA40;
+constexpr std::uintptr_t kAddUnclassifiedRowBuilderDiagnosticRva = 0x94A430;
+constexpr std::uintptr_t kDestroyTextReferencesRva = 0x743AE0;
+constexpr std::uintptr_t kTextResolverRva = 0x764220;
 constexpr std::uintptr_t kNativeBackRva = 0x747CD0;
 constexpr std::uintptr_t kPageFrameRva = 0x958FF0;
 constexpr std::uintptr_t kScaleformPathResolverRva = 0x74B140;
 constexpr std::uintptr_t kScaleformTextSetterRva = 0x74AE50;
+constexpr std::uintptr_t kScaleformVisibilitySetterRva = 0x734190;
+constexpr std::uintptr_t kScaleformValueExistsRva = 0x733FA0;
+constexpr std::uintptr_t kStatusBarBinderRva = 0x746110;
+constexpr std::uintptr_t kScaleformMaxHScrollRva = 0x74AF90;
+constexpr std::uintptr_t kScaleformSetHScrollRva = 0x74B080;
 
 constexpr std::string_view kGameOptionsHandlerPattern =
     "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 E0 F2 FF FF";
+constexpr std::string_view kOptionSettingTabFrameDispatchPattern =
+    "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 30 48 8B D9 "
+    "0F 29 74 24 20 48 8B 49 10 49 8B F8 0F 28 F1 E8 ?? ?? ?? ?? "
+    "48 8B 4B 18 8B F0 E8 ?? ?? ?? ??";
+constexpr std::string_view kOptionSettingTabSelectedIndexPattern =
+    "8B 81 D4 00 00 00 C3";
 // Category 1's CameraSetting row materializer. The wrapper at 0x93CB70
 // stores this target in the same two-argument callback slot used by the other
 // ordinary OptionSetting panels.
@@ -67,6 +87,22 @@ constexpr std::string_view kGraphicsPanelMaterializerPattern =
     "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 50 F5 FF FF "
     "48 81 EC B0 0B 00 00 48 C7 45 80 FE FF FF FF "
     "48 89 9C 24 00 0C 00 00";
+constexpr std::string_view kModSettingsPanelMaterializerPattern =
+    "40 55 56 57 48 8D AC 24 60 FE FF FF 48 81 EC A0 02 00 00 "
+    "48 C7 44 24 50 FE FF FF FF 48 89 9C 24 D0 02 00 00";
+constexpr std::string_view kModSettingsCategoryBuilderPattern =
+    "4C 8B DC 49 89 4B 08 57 48 81 EC B0 00 00 00 "
+    "48 C7 44 24 28 FE FF FF FF";
+constexpr std::string_view kModSettingsCategoryDestructorPattern =
+    "48 89 4C 24 08 57 48 83 EC 30 "
+    "48 C7 44 24 20 FE FF FF FF 48 89 5C 24 50";
+constexpr std::string_view kConfigurationCategoryAppendPattern =
+    "40 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF "
+    "48 89 5C 24 48 48 8B FA 48 8B D9";
+constexpr std::string_view kModSettingsPanelRouteSitePattern =
+    "44 0F B6 CF 4C 8B C3 48 8B D0 48 8B CE E8 ?? ?? ?? ??";
+constexpr std::string_view kModSettingsPanelRouteReturnSitePattern =
+    "48 8B D8 48 8D 8C 24 80 00 00 00 E8 ?? ?? ?? ??";
 constexpr std::string_view kSubHandlerPattern =
     "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 20 F7 FF FF "
     "48 81 EC E0 09 00 00 48 C7 44 24 40 FE FF FF FF";
@@ -163,6 +199,8 @@ constexpr std::string_view kAddChoicePrologue =
     "48 81 EC E8 01 00 00";
 constexpr std::string_view kAddButtonPrologue =
     "40 53 55 56 57 48 81 EC 18 01 00 00";
+constexpr std::string_view kAddUnclassifiedRowBuilderDiagnosticPrologue =
+    "4C 8B DC 53 55 56 57 41 56 41 57 48 81 EC 98 01 00 00";
 constexpr std::string_view kDestroyTextReferencesPrologue =
     "48 89 4C 24 08 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF "
     "48 89 5C 24 50 48 89 74 24 58 48 8B F1 48 8D 41 38";
@@ -179,6 +217,9 @@ constexpr std::string_view kPageFramePattern =
     "E8 ?? ?? ?? ?? 48 8B C8 48 8D 97 38 1B 00 00 "
     "E8 ?? ?? ?? ?? 80 BF E2 1C 00 00 00 75 ?? "
     "80 BF E1 1C 00 00 00 75 ??";
+constexpr std::string_view kScaleformVisibilitySetterPattern =
+    "40 53 48 83 EC 20 48 8B 01 0F B6 DA FF 50 08 8B 48 20 "
+    "81 E1 8F 00 00 00 83 F9 02";
 
 // These interfaces were recovered from the current Game Options construction
 // path. The resolver receives MenuTitle/Text_0 at the page constructor and
@@ -194,10 +235,81 @@ constexpr std::string_view kScaleformPathResolverPattern =
 constexpr std::string_view kScaleformTextSetterPattern =
     "40 53 48 83 EC 20 48 8B 09 48 8B DA 48 8B 01 FF 50 08 "
     "8B 48 20 81 E1 8F 00 00 00 83 F9 02 72 1B";
+constexpr std::string_view kScaleformValueExistsPattern =
+    "48 83 EC 28 48 8B 01 FF 10 F6 40 20 8F "
+    "0F 95 C0 48 83 C4 28 C3";
+// Status bar binder: resolves the base proxy, then "LineHelp" into +0x60 and
+// "KeyGuide" into +0xC0 (verified on 2.7.1.0).
+constexpr std::string_view kStatusBarBinderPattern =
+    "48 8B C4 48 89 48 08 57 48 81 EC 50 01 00 00 "
+    "48 C7 44 24 28 FE FF FF FF 48 89 58 10 48 89 70 18 "
+    "48 8B DA 48 8B F1 C7 44 24 20 00 00 00 00";
+constexpr std::string_view kScaleformMaxHScrollPattern =
+    "48 83 EC 28 48 8B 09 48 8B 01 FF 50 08 8B 48 20 "
+    "81 E1 8F 00 00 00 83 F9 02 72 0C 48 8B C8 48 83 C4 28 E9";
+constexpr std::string_view kScaleformSetHScrollPattern =
+    "40 53 48 83 EC 20 48 8B 09 8B DA 48 8B 01 FF 50 08 8B 48 20 "
+    "81 E1 8F 00 00 00 83 F9 02 72 0F 8B D3 48 8B C8 48 83 C4 20";
 constexpr std::string_view kScaleformResultDestructorPattern =
     "48 89 4C 24 08 53 48 83 EC 30 48 C7 44 24 20 FE FF FF FF "
     "48 8D 05 ?? ?? ?? ?? 48 89 01 48 8D 59 08 8B 43 18 "
     "C1 E8 06 A8 01 74 1A";
+
+// Fork (r122): game-update resilience. These interfaces used to fall back to
+// 2.7.1.0 RVAs because their AOBs were ambiguous or absent. Each lookup below
+// is unique on 2.7.1.0 (relative displacements wildcarded, never crossing the
+// function end) and resolves to the same RVA as the fallback; ERNativeUIAudit
+// verifies that. Call-target lookups also validate the target's prologue.
+// The historical pattern + fallback path still runs when these fail.
+constexpr std::string_view kModSettingsCategoryBuilderUniquePattern =
+    "4C 8B DC 49 89 4B 08 57 48 81 EC B0 00 00 00 48 C7 44 24 28 FE FF FF FF "
+    "49 89 5B 18 48 8B F9 C7 44 24 20 00 00 00 00 49 8D 43 C0 49 89 43 10 "
+    "BA 78 AE 01 00";
+constexpr std::string_view kModSettingsCategoryDestructorUniquePattern =
+    "48 89 4C 24 08 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 50 "
+    "48 8B F9 48 8D 05 ?? ?? ?? ?? 48 89 01 48 8D 41 08";
+constexpr std::string_view kConfigurationCategoryAppendUniquePattern =
+    "40 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 48 48 8B FA "
+    "48 8B D9 48 8B 81 58 05 00 00";
+// Argument setup before the panel-route call; the site is 30 bytes in and the
+// return site follows the call, 0x12 bytes after the site.
+constexpr std::string_view kModSettingsPanelRouteContextPattern =
+    "C6 44 24 38 01 48 8D 4C 24 50 48 89 4C 24 30 48 8D 4C 24 60 48 89 4C 24 28 "
+    "C6 44 24 20 06 44 0F B6 CF 4C 8B C3";
+constexpr std::size_t kModSettingsPanelRouteSiteOffset = 30;
+constexpr std::size_t kModSettingsPanelRouteReturnDelta = 0x12;
+// The tab frame dispatcher's first call reads the selected tab index.
+constexpr std::size_t kTabSelectedIndexCallOffset = 0x21;
+constexpr std::string_view kScaleformMaxHScrollCallsite =
+    "88 87 5C 0B 00 00 C7 87 60 0B 00 00 00 00 00 00 E8 ?? ?? ?? ??";
+constexpr std::size_t kScaleformMaxHScrollCallOffset = 16;
+constexpr std::string_view kScaleformSetHScrollCallsite =
+    "33 D2 C7 87 60 0B 00 00 00 00 00 00 E8 ?? ?? ?? ??";
+constexpr std::size_t kScaleformSetHScrollCallOffset = 12;
+constexpr std::string_view kRootButtonTextReferencesUniquePattern =
+    "4C 8B DC 57 48 81 EC 80 00 00 00 49 C7 43 A8 FE FF FF FF 49 89 5B 10 "
+    "49 89 73 18 48 8B 05 ?? ?? ?? ??";
+// root button text refs calls the display-text builder at +0x40.
+constexpr std::size_t kRootButtonDisplayCallOffset = 0x40;
+constexpr std::string_view kChoiceContextUniquePattern =
+    "40 53 48 81 EC A0 00 00 00 48 C7 44 24 20 FE FF FF FF 48 8B D9 "
+    "48 C7 01 00 00 00 00";
+// The subpage handler's first call builds the inline choice list.
+constexpr std::size_t kChoiceListBuilderCallOffset = 0x56;
+constexpr std::string_view kPopupChoiceConstructorCallsite =
+    "4C 8D 85 A0 08 00 00 48 8B D0 49 8B CE E8 ?? ?? ?? ??";
+constexpr std::size_t kPopupChoiceConstructorCallOffset = 13;
+// Graphics panel stores the popup list vtable (lea rax, [rip+disp]); its
+// slot 2 is the list provider.
+constexpr std::string_view kPopupListVtableContextPattern =
+    "4C 89 AD 18 09 00 00 48 8D 85 E0 08 00 00 48 89 44 24 48 48 8D 85 E0 08 00 00 "
+    "48 89 44 24 50 48 8D 05 ?? ?? ?? ?? 48 89 85 E0 08 00 00 48 8D 05 ?? ?? ?? ?? "
+    "48 89 85 E0 08 00 00";
+constexpr std::size_t kPopupListVtableLeaOffset = 45;
+constexpr std::string_view kPopupChoiceListTemplateUniquePattern =
+    "48 8B C4 55 57 41 54 41 56 41 57 48 8D 68 A1 48 81 EC C0 00 00 00 "
+    "48 C7 45 9F FE FF FF FF 48 89 58 10 48 89 70 18 48 8B 05 ?? ?? ?? ?? "
+    "48 33 C4 48 89 45 2F";
 
 // TextInput retains owner-relative state and callbacks, so a locally matching
 // byte sequence is accepted only after a recognized PE identity selects an
@@ -387,33 +499,6 @@ std::uint8_t* resolve_optional_direct(
     return nullptr;
 }
 
-std::uint8_t* resolve_optional_call_target(
-    const ModuleView& game,
-    const char* name,
-    std::string_view callsite_pattern,
-    std::size_t call_offset) noexcept {
-    const ScanResult scan = game.scan_executable(callsite_pattern);
-    if (scan.address && scan.matches == 1) {
-        if (auto* target = resolve_rel32_call(
-                game, scan.address + call_offset)) {
-            erui::detail::logf(
-                erui::LogLevel::info,
-                "Optional address %-13s = %p (AOB call target, RVA 0x%" PRIXPTR ")",
-                name,
-                static_cast<void*>(target),
-                reinterpret_cast<std::uintptr_t>(target) -
-                    reinterpret_cast<std::uintptr_t>(game.base()));
-            return target;
-        }
-    }
-    erui::detail::logf(
-        erui::LogLevel::warning,
-        "Optional address %-13s unavailable (callsite AOB matches=%zu)",
-        name,
-        scan.matches);
-    return nullptr;
-}
-
 std::uint8_t* resolve_text_resolver(const ModuleView& game) noexcept {
     return resolve_direct(
         game,
@@ -421,6 +506,42 @@ std::uint8_t* resolve_text_resolver(const ModuleView& game) noexcept {
         kTextResolverPrologue,
         kTextResolverRva,
         kTextResolverPrologue);
+}
+
+// Fork (r122): build-independent lookups; nullptr lets the caller continue
+// with its historical pattern + fallback path.
+std::uint8_t* unique_at(
+    const ModuleView& game, std::string_view pattern, std::size_t offset) noexcept {
+    const ScanResult scan = game.scan_executable(pattern);
+    if (!scan.address || scan.matches != 1) return nullptr;
+    return game.contains(scan.address + offset) ? scan.address + offset : nullptr;
+}
+
+std::uint8_t* call_target_at(
+    const ModuleView& game,
+    std::uint8_t* instruction,
+    std::string_view target_validation) noexcept {
+    std::uint8_t* const target = resolve_rel32_call(game, instruction);
+    if (!target) return nullptr;
+    if (!target_validation.empty() && !game.matches(target, target_validation)) {
+        return nullptr;
+    }
+    return target;
+}
+
+std::uint8_t* report_resilient(
+    const ModuleView& game, const char* name, std::uint8_t* found, const char* how) noexcept {
+    if (found) {
+        erui::detail::logf(
+            erui::LogLevel::info,
+            "Address %-22s = %p (%s, RVA 0x%" PRIXPTR ")",
+            name,
+            static_cast<void*>(found),
+            how,
+            reinterpret_cast<std::uintptr_t>(found) -
+                reinterpret_cast<std::uintptr_t>(game.base()));
+    }
+    return found;
 }
 
 bool valid_callable_vtable(
@@ -527,6 +648,86 @@ bool GameAddresses::complete(
         popup_choices_ready && text_input_ready && text_ready;
 }
 
+void fill_missing_addresses(
+    GameAddresses& target, const GameAddresses& source) noexcept {
+    const auto fill = [](auto& destination, const auto& value) {
+        if (!destination) destination = value;
+    };
+    fill(target.game_image_base, source.game_image_base);
+    fill(target.game_image_size, source.game_image_size);
+    fill(target.game_options_handler, source.game_options_handler);
+    fill(target.option_setting_tab_frame_dispatch,
+        source.option_setting_tab_frame_dispatch);
+    fill(target.option_setting_tab_selected_index,
+        source.option_setting_tab_selected_index);
+    fill(target.camera_panel_materializer, source.camera_panel_materializer);
+    fill(target.display_panel_materializer, source.display_panel_materializer);
+    fill(target.sound_panel_materializer, source.sound_panel_materializer);
+    fill(target.network_panel_materializer, source.network_panel_materializer);
+    fill(target.keyboard_mouse_panel_materializer,
+        source.keyboard_mouse_panel_materializer);
+    fill(target.graphics_panel_materializer, source.graphics_panel_materializer);
+    fill(target.mod_settings_panel_materializer,
+        source.mod_settings_panel_materializer);
+    fill(target.mod_settings_category_builder,
+        source.mod_settings_category_builder);
+    fill(target.mod_settings_category_destructor,
+        source.mod_settings_category_destructor);
+    fill(target.configuration_category_append,
+        source.configuration_category_append);
+    fill(target.mod_settings_panel_route_site,
+        source.mod_settings_panel_route_site);
+    fill(target.mod_settings_panel_route_return_site,
+        source.mod_settings_panel_route_return_site);
+    fill(target.sub_handler, source.sub_handler);
+    fill(target.open_sub_page, source.open_sub_page);
+    fill(target.native_back, source.native_back);
+    fill(target.page_frame, source.page_frame);
+    fill(target.on_off_list, source.on_off_list);
+    fill(target.menu_context, source.menu_context);
+    fill(target.text_ref_help, source.text_ref_help);
+    fill(target.text_ref_label, source.text_ref_label);
+    fill(target.root_button_text_references,
+        source.root_button_text_references);
+    fill(target.root_button_display_text, source.root_button_display_text);
+    fill(target.add_toggle, source.add_toggle);
+    fill(target.add_inline_choice, source.add_inline_choice);
+    fill(target.choice_context_constructor, source.choice_context_constructor);
+    fill(target.choice_list_builder, source.choice_list_builder);
+    fill(target.popup_choice_constructor, source.popup_choice_constructor);
+    fill(target.popup_choice_list_provider, source.popup_choice_list_provider);
+    fill(target.popup_choice_list_template, source.popup_choice_list_template);
+    fill(target.popup_choice_value_vtable, source.popup_choice_value_vtable);
+    fill(target.popup_choice_selection_vtable,
+        source.popup_choice_selection_vtable);
+    fill(target.popup_choice_presentation_vtable,
+        source.popup_choice_presentation_vtable);
+    fill(target.add_slider, source.add_slider);
+    fill(target.add_button, source.add_button);
+    fill(target.add_unclassified_row_builder_diagnostic,
+        source.add_unclassified_row_builder_diagnostic);
+    fill(target.destroy_text_references, source.destroy_text_references);
+    fill(target.text_resolver, source.text_resolver);
+    fill(target.scaleform_path_resolver, source.scaleform_path_resolver);
+    fill(target.scaleform_visibility_setter, source.scaleform_visibility_setter);
+    fill(target.scaleform_text_setter, source.scaleform_text_setter);
+    fill(target.scaleform_result_destructor, source.scaleform_result_destructor);
+    fill(target.scaleform_value_exists, source.scaleform_value_exists);
+    fill(target.status_bar_binder, source.status_bar_binder);
+    fill(target.scaleform_max_hscroll, source.scaleform_max_hscroll);
+    fill(target.scaleform_set_hscroll, source.scaleform_set_hscroll);
+    fill(target.text_input_row_producer, source.text_input_row_producer);
+    fill(target.native_menu_string_constructor,
+        source.native_menu_string_constructor);
+    fill(target.native_menu_string_borrowed_constructor,
+        source.native_menu_string_borrowed_constructor);
+    fill(target.native_menu_string_destructor,
+        source.native_menu_string_destructor);
+    fill(target.text_input_editor_factory_builder,
+        source.text_input_editor_factory_builder);
+    fill(target.text_input_editor_factory, source.text_input_editor_factory);
+}
+
 bool resolve_game_addresses(
     const ModuleView& game,
     GameAddresses& output,
@@ -564,6 +765,31 @@ bool resolve_game_addresses(
             kGameOptionsHandlerPattern,
             kGameOptionsHandlerRva,
             kGameOptionsHandlerPattern));
+        output.option_setting_tab_frame_dispatch = resolve_optional_direct(
+            game,
+            "Configuration tab frame dispatch",
+            kOptionSettingTabFrameDispatchPattern,
+            kOptionSettingTabFrameDispatchRva,
+            kOptionSettingTabFrameDispatchPattern);
+        std::uint8_t* tab_index = report_resilient(
+            game, "Configuration tab selected index",
+            output.option_setting_tab_frame_dispatch
+                ? call_target_at(game,
+                    reinterpret_cast<std::uint8_t*>(output.option_setting_tab_frame_dispatch) +
+                        kTabSelectedIndexCallOffset,
+                    kOptionSettingTabSelectedIndexPattern)
+                : nullptr,
+            "dispatcher call");
+        if (!tab_index) {
+            tab_index = resolve_optional_direct(
+                game,
+                "Configuration tab selected index",
+                kOptionSettingTabSelectedIndexPattern,
+                kOptionSettingTabSelectedIndexRva,
+                kOptionSettingTabSelectedIndexPattern);
+        }
+        output.option_setting_tab_selected_index =
+            reinterpret_cast<TabSelectionIndexFn>(tab_index);
         // Each built-in destination is optional and independently hooked.
         // A signature failure disables only that panel; Game Options and the
         // other resolved destinations remain available.
@@ -610,6 +836,149 @@ bool resolve_game_addresses(
                 kGraphicsPanelMaterializerPattern,
                 kGraphicsPanelMaterializerRva,
                 kGraphicsPanelMaterializerPattern));
+        output.mod_settings_panel_materializer =
+            reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
+                game,
+                "Mod Settings panel rows",
+                kModSettingsPanelMaterializerPattern,
+                kModSettingsPanelMaterializerRva,
+                kModSettingsPanelMaterializerPattern));
+        std::uint8_t* category_builder = report_resilient(
+            game, "Mod Settings category builder",
+            unique_at(game, kModSettingsCategoryBuilderUniquePattern, 0), "unique AOB");
+        if (!category_builder) {
+            category_builder = resolve_optional_direct(
+                game,
+                "Mod Settings category builder",
+                kModSettingsCategoryBuilderPattern,
+                kModSettingsCategoryBuilderRva,
+                kModSettingsCategoryBuilderPattern);
+        }
+        output.mod_settings_category_builder =
+            reinterpret_cast<BuiltinCategoryBuilderFn>(category_builder);
+        std::uint8_t* category_destructor = report_resilient(
+            game, "Mod Settings category destructor",
+            unique_at(game, kModSettingsCategoryDestructorUniquePattern, 0), "unique AOB");
+        if (!category_destructor) {
+            category_destructor = resolve_optional_direct(
+                game,
+                "Mod Settings category destructor",
+                kModSettingsCategoryDestructorPattern,
+                kModSettingsCategoryDestructorRva,
+                kModSettingsCategoryDestructorPattern);
+        }
+        output.mod_settings_category_destructor =
+            reinterpret_cast<BuiltinCategoryDestructorFn>(category_destructor);
+        output.configuration_category_append = report_resilient(
+            game, "Configuration category append",
+            unique_at(game, kConfigurationCategoryAppendUniquePattern, 0), "unique AOB");
+        if (!output.configuration_category_append) {
+            output.configuration_category_append = resolve_optional_direct(
+                game,
+                "Configuration category append",
+                kConfigurationCategoryAppendPattern,
+                kConfigurationCategoryAppendRva,
+                kConfigurationCategoryAppendPattern);
+        }
+        // The site and its return site are derived together so they always
+        // belong to the same call.
+        std::uint8_t* route_site = unique_at(
+            game, kModSettingsPanelRouteContextPattern, kModSettingsPanelRouteSiteOffset);
+        if (route_site &&
+            (!game.matches(route_site, kModSettingsPanelRouteSitePattern) ||
+             !game.matches(route_site + kModSettingsPanelRouteReturnDelta,
+                 kModSettingsPanelRouteReturnSitePattern))) {
+            route_site = nullptr;
+        }
+        if (route_site) {
+            output.mod_settings_panel_route_site = report_resilient(
+                game, "Mod Settings panel route site", route_site, "unique context AOB");
+            output.mod_settings_panel_route_return_site = report_resilient(
+                game, "Mod Settings panel route return site",
+                route_site + kModSettingsPanelRouteReturnDelta, "unique context AOB");
+        } else {
+            output.mod_settings_panel_route_site = resolve_optional_direct(
+                game,
+                "Mod Settings panel route site",
+                kModSettingsPanelRouteSitePattern,
+                kModSettingsPanelRouteSiteRva,
+                kModSettingsPanelRouteSitePattern);
+            output.mod_settings_panel_route_return_site = resolve_optional_direct(
+                game,
+                "Mod Settings panel route return site",
+                kModSettingsPanelRouteReturnSitePattern,
+                kModSettingsPanelRouteReturnSiteRva,
+                kModSettingsPanelRouteReturnSitePattern);
+        }
+        // Path observation is also used by diagnostics on builds without
+        // native submenu rows, so resolve this optional interface separately.
+        output.scaleform_path_resolver =
+            reinterpret_cast<ScaleformPathResolverFn>(resolve_optional_direct(
+                game,
+                "Scaleform path",
+                kScaleformPathResolverPattern,
+                kScaleformPathResolverRva,
+                kScaleformPathResolverPattern));
+        output.scaleform_visibility_setter = resolve_optional_direct(
+            game,
+            "Scaleform visibility setter (diagnostics)",
+            kScaleformVisibilitySetterPattern,
+            kScaleformVisibilitySetterRva,
+            kScaleformVisibilitySetterPattern);
+        // Text-write diagnostics need this optional setter even when the
+        // provider declares no native submenu rows. Resolving it here keeps
+        // observation independent from the custom-title bridge lifecycle.
+        output.scaleform_text_setter =
+            reinterpret_cast<ScaleformTextSetterFn>(resolve_optional_direct(
+                game,
+                "Scaleform text setter",
+                kScaleformTextSetterPattern,
+                kScaleformTextSetterRva,
+                kScaleformTextSetterPattern));
+        output.scaleform_value_exists =
+            reinterpret_cast<ScaleformValueExistsFn>(resolve_optional_direct(
+                game,
+                "Scaleform value exists",
+                kScaleformValueExistsPattern,
+                kScaleformValueExistsRva,
+                kScaleformValueExistsPattern));
+        output.status_bar_binder =
+            reinterpret_cast<StatusBarBinderFn>(resolve_optional_direct(
+                game,
+                "status bar binder",
+                kStatusBarBinderPattern,
+                kStatusBarBinderRva,
+                kStatusBarBinderPattern));
+        std::uint8_t* max_hscroll = report_resilient(
+            game, "Scaleform max hscroll",
+            call_target_at(game,
+                unique_at(game, kScaleformMaxHScrollCallsite, kScaleformMaxHScrollCallOffset),
+                kScaleformMaxHScrollPattern),
+            "callsite AOB");
+        if (!max_hscroll) {
+            max_hscroll = resolve_optional_direct(
+                game,
+                "Scaleform max hscroll",
+                kScaleformMaxHScrollPattern,
+                kScaleformMaxHScrollRva,
+                kScaleformMaxHScrollPattern);
+        }
+        output.scaleform_max_hscroll = reinterpret_cast<ScaleformMaxHScrollFn>(max_hscroll);
+        std::uint8_t* set_hscroll = report_resilient(
+            game, "Scaleform set hscroll",
+            call_target_at(game,
+                unique_at(game, kScaleformSetHScrollCallsite, kScaleformSetHScrollCallOffset),
+                kScaleformSetHScrollPattern),
+            "callsite AOB");
+        if (!set_hscroll) {
+            set_hscroll = resolve_optional_direct(
+                game,
+                "Scaleform set hscroll",
+                kScaleformSetHScrollPattern,
+                kScaleformSetHScrollRva,
+                kScaleformSetHScrollPattern);
+        }
+        output.scaleform_set_hscroll = reinterpret_cast<ScaleformSetHScrollFn>(set_hscroll);
         if (require_submenus) {
             output.sub_handler = reinterpret_cast<SubHandlerFn>(resolve_direct(
                 game,
@@ -626,20 +995,6 @@ bool resolve_game_addresses(
 
             // Presentation is deliberately optional. A game update may disable
             // custom titles without preventing page construction or row input.
-            output.scaleform_path_resolver =
-                reinterpret_cast<ScaleformPathResolverFn>(resolve_optional_direct(
-                    game,
-                    "Scaleform path",
-                    kScaleformPathResolverPattern,
-                    kScaleformPathResolverRva,
-                    kScaleformPathResolverPattern));
-            output.scaleform_text_setter =
-                reinterpret_cast<ScaleformTextSetterFn>(resolve_optional_direct(
-                    game,
-                    "Scaleform text setter",
-                    kScaleformTextSetterPattern,
-                    kScaleformTextSetterRva,
-                    kScaleformTextSetterPattern));
             output.scaleform_result_destructor =
                 reinterpret_cast<ScaleformResultDestructorFn>(resolve_optional_direct(
                     game,
@@ -704,20 +1059,36 @@ bool resolve_game_addresses(
             kTextRefLabelCallOffset,
             kTextRefLabelRva));
         if (require_buttons) {
-            output.root_button_text_references =
-                reinterpret_cast<BufferConstructorFn>(resolve_direct(
+            std::uint8_t* root_refs = report_resilient(
+                game, "root button text refs",
+                unique_at(game, kRootButtonTextReferencesUniquePattern, 0), "unique AOB");
+            if (!root_refs) {
+                root_refs = resolve_direct(
                     game,
                     "root button text refs",
                     kRootButtonTextReferencesPattern,
                     kRootButtonTextReferencesRva,
-                    kRootButtonTextReferencesPattern));
-            output.root_button_display_text =
-                reinterpret_cast<TextReferenceFn>(resolve_direct(
+                    kRootButtonTextReferencesPattern);
+            }
+            output.root_button_text_references =
+                reinterpret_cast<BufferConstructorFn>(root_refs);
+            std::uint8_t* root_display = report_resilient(
+                game, "root button display",
+                root_refs
+                    ? call_target_at(game, root_refs + kRootButtonDisplayCallOffset,
+                        kRootButtonDisplayTextPattern)
+                    : nullptr,
+                "text refs call");
+            if (!root_display) {
+                root_display = resolve_direct(
                     game,
                     "root button display",
                     kRootButtonDisplayTextPattern,
                     kRootButtonDisplayTextRva,
-                    kRootButtonDisplayTextPattern));
+                    kRootButtonDisplayTextPattern);
+            }
+            output.root_button_display_text =
+                reinterpret_cast<TextReferenceFn>(root_display);
         }
         output.add_toggle = reinterpret_cast<AddToggleFn>(resolve_call_target(
             game,
@@ -730,15 +1101,32 @@ bool resolve_game_addresses(
             reinterpret_cast<AddInlineChoiceFn>(resolve_call_target(
             game, "add inline choice", kAddChoiceCallsitePattern,
             kAddChoiceCallOffset, kAddChoiceRva, kAddChoicePrologue));
-        output.choice_context_constructor =
-            reinterpret_cast<ChoiceContextConstructorFn>(resolve_optional_direct(
+        std::uint8_t* choice_context = report_resilient(
+            game, "choice context",
+            unique_at(game, kChoiceContextUniquePattern, 0), "unique AOB");
+        if (!choice_context) {
+            choice_context = resolve_optional_direct(
                 game, "choice context", kChoiceContextConstructorPrologue,
                 kChoiceContextConstructorRva,
-                kChoiceContextConstructorPrologue));
-        output.choice_list_builder = reinterpret_cast<ChoiceListBuilderFn>(
-            resolve_optional_direct(
+                kChoiceContextConstructorPrologue);
+        }
+        output.choice_context_constructor =
+            reinterpret_cast<ChoiceContextConstructorFn>(choice_context);
+        std::uint8_t* choice_list = report_resilient(
+            game, "choice list builder",
+            output.sub_handler
+                ? call_target_at(game,
+                    reinterpret_cast<std::uint8_t*>(output.sub_handler) +
+                        kChoiceListBuilderCallOffset,
+                    kChoiceListBuilderPrologue)
+                : nullptr,
+            "subpage handler call");
+        if (!choice_list) {
+            choice_list = resolve_optional_direct(
                 game, "choice list builder", kChoiceListBuilderPrologue,
-                kChoiceListBuilderRva, kChoiceListBuilderPrologue));
+                kChoiceListBuilderRva, kChoiceListBuilderPrologue);
+        }
+        output.choice_list_builder = reinterpret_cast<ChoiceListBuilderFn>(choice_list);
         output.add_slider = reinterpret_cast<AddSliderFn>(resolve_call_target(
             game,
             "add slider",
@@ -756,6 +1144,13 @@ bool resolve_game_addresses(
                 kSliderRefreshPattern,
                 kSliderRefreshRva,
                 kSliderRefreshPattern));
+        output.add_unclassified_row_builder_diagnostic =
+            resolve_optional_direct(
+                game,
+                "unclassified row builder (diagnostic)",
+                kAddUnclassifiedRowBuilderDiagnosticPrologue,
+                kAddUnclassifiedRowBuilderDiagnosticRva,
+                kAddUnclassifiedRowBuilderDiagnosticPrologue);
 
         // Inline and popup selectors both clone their text references during
         // construction, after which the temporary source object is destroyed.
@@ -781,27 +1176,60 @@ bool resolve_game_addresses(
         }
 
         if (require_popup_choices) {
-            output.popup_choice_constructor =
-                reinterpret_cast<PopupChoiceConstructorFn>(resolve_direct(
+            std::uint8_t* popup_ctor = report_resilient(
+                game, "popup choice ctor",
+                call_target_at(game,
+                    unique_at(game, kPopupChoiceConstructorCallsite,
+                        kPopupChoiceConstructorCallOffset),
+                    kPopupChoiceConstructorPattern),
+                "callsite AOB");
+            if (!popup_ctor) {
+                popup_ctor = resolve_direct(
                     game,
                     "popup choice ctor",
                     kPopupChoiceConstructorPattern,
                     kPopupChoiceConstructorRva,
-                    kPopupChoiceConstructorPattern));
-            output.popup_choice_list_provider =
-                reinterpret_cast<PopupChoiceListProviderFn>(resolve_direct(
+                    kPopupChoiceConstructorPattern);
+            }
+            output.popup_choice_constructor =
+                reinterpret_cast<PopupChoiceConstructorFn>(popup_ctor);
+            std::uint8_t* popup_provider = nullptr;
+            if (std::uint8_t* lea = unique_at(
+                    game, kPopupListVtableContextPattern, kPopupListVtableLeaOffset)) {
+                auto* vtable = reinterpret_cast<void**>(resolve_rip_relative(game, lea, 3, 7));
+                if (vtable && game.contains(vtable, 3 * sizeof(void*))) {
+                    auto* candidate = static_cast<std::uint8_t*>(vtable[2]);
+                    if (game.is_executable(candidate) &&
+                        game.matches(candidate, kPopupChoiceListProviderPattern)) {
+                        popup_provider = candidate;
+                    }
+                }
+            }
+            popup_provider = report_resilient(
+                game, "popup list provider", popup_provider, "graphics vtable");
+            if (!popup_provider) {
+                popup_provider = resolve_direct(
                     game,
                     "popup list provider",
                     kPopupChoiceListProviderPattern,
                     kPopupChoiceListProviderRva,
-                    kPopupChoiceListProviderPattern));
-            output.popup_choice_list_template =
-                reinterpret_cast<PopupChoiceListTemplateFn>(resolve_direct(
+                    kPopupChoiceListProviderPattern);
+            }
+            output.popup_choice_list_provider =
+                reinterpret_cast<PopupChoiceListProviderFn>(popup_provider);
+            std::uint8_t* popup_template = report_resilient(
+                game, "popup list template",
+                unique_at(game, kPopupChoiceListTemplateUniquePattern, 0), "unique AOB");
+            if (!popup_template) {
+                popup_template = resolve_direct(
                     game,
                     "popup list template",
                     kPopupChoiceListTemplatePattern,
                     kPopupChoiceListTemplateRva,
-                    kPopupChoiceListTemplatePattern));
+                    kPopupChoiceListTemplatePattern);
+            }
+            output.popup_choice_list_template =
+                reinterpret_cast<PopupChoiceListTemplateFn>(popup_template);
             auto* value_invoke = resolve_direct(
                 game,
                 "popup value invoke",

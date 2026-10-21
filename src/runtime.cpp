@@ -21,6 +21,7 @@ InstallResult fail_install(InstallError error) noexcept {
     erui::native::remove_native_input_bindings();
     erui::native::remove_native_menu_hooks();
     erui::native::reset_native_text_inputs();
+    detail::runtime_state().menu_published.store(false, std::memory_order_release);
     detail::runtime_state().menu.reset();
     detail::runtime_state().installed.store(false, std::memory_order_release);
     return InstallResult{error};
@@ -217,6 +218,7 @@ InstallResult install_impl(
 
     try {
         runtime.menu = detail::MenuCompiler::compile(menu);
+        runtime.menu_published.store(true, std::memory_order_release);
     } catch (const std::exception& exception) {
         detail::logf(LogLevel::error, "Menu compilation failed: %s", exception.what());
         return fail_install(InstallError::menu_compile_failed);
@@ -276,22 +278,13 @@ InstallResult install_impl(
     const bool active_pagination = options.enable_row_injection &&
         runtime.menu->pagination_required_for_capacity(
             detail::game_options_min_plan_capacity);
-    bool has_non_game_builtin_rows = false;
-    for (std::uint8_t native_category = 1;
-         native_category < runtime.menu->builtin_page_indices.size();
-         ++native_category) {
-        const detail::CompiledPage* const builtin =
-            runtime.menu->builtin_page(native_category);
-        if (builtin && !builtin->rows.empty()) {
-            has_non_game_builtin_rows = true;
-            break;
-        }
-    }
     // A built-in panel's free slots are a live GFX property. Even a page that
-    // contains only toggles may need a native Next action and Back-enabled
-    // continuation, so resolve those shared interfaces conservatively.
+    // may need a native Next action and Back-enabled continuation, so resolve
+    // those shared interfaces conservatively. The dedicated Mod Settings
+    // page is excluded when its known empty native panel can hold every row.
     const bool runtime_capacity_pagination =
-        options.enable_row_injection && has_non_game_builtin_rows;
+        options.enable_row_injection &&
+        runtime.menu->builtin_rows_may_require_runtime_pagination();
     // ColorPicker reuses Elden Ring's native action-row controller even when
     // its GFX presentation is redirected to the standalone color widget.
     // Resolve that controller for a color-only menu too; otherwise the host
@@ -333,18 +326,62 @@ InstallResult install_impl(
     erui::native::GameAddresses addresses{};
     if (resolved_addresses) {
         addresses = *resolved_addresses;
-        if (!addresses.complete(
+        const bool require_popup_choices =
+            runtime.menu->modeled_popup_choice_count != 0;
+        const auto satisfied = [&](const erui::native::GameAddresses& value) {
+            return value.complete(
+                       options.enable_row_injection,
+                       require_buttons,
+                       require_submenus,
+                       require_popup_choices,
+                       require_text_inputs,
+                       options.enable_custom_text) &&
+                (!require_native_back || value.native_back);
+        };
+        if (!satisfied(addresses)) {
+            const auto group_ready = [&](bool rows, bool buttons, bool submenus,
+                                         bool popups, bool text_inputs,
+                                         bool custom_text) {
+                return addresses.complete(
+                    rows, buttons, submenus, popups, text_inputs, custom_text);
+            };
+            detail::logf(
+                LogLevel::warning,
+                "Pre-resolved native interfaces are incomplete for the compiled menu "
+                "(rows=%d buttons=%d submenus=%d popups=%d textInputs=%d customText=%d nativeBack=%d); "
+                "resolving the missing interfaces now",
+                group_ready(options.enable_row_injection, false, false, false, false, false) ? 1 : 0,
+                group_ready(false, require_buttons, false, false, false, false) ? 1 : 0,
+                group_ready(false, false, require_submenus, false, false, false) ? 1 : 0,
+                group_ready(false, false, false, require_popup_choices, false, false) ? 1 : 0,
+                group_ready(false, false, false, false, require_text_inputs, false) ? 1 : 0,
+                group_ready(false, false, false, false, false, options.enable_custom_text) ? 1 : 0,
+                (!require_native_back || addresses.native_back) ? 1 : 0);
+
+            // Interfaces another module already detoured fail their signature
+            // here and stay null; only fill what the early capture lacked, so
+            // the pristine shared entries captured before third-party hooks win.
+            erui::native::GameAddresses fresh{};
+            (void)erui::native::resolve_game_addresses(
+                game,
+                fresh,
                 options.enable_row_injection,
                 require_buttons,
                 require_submenus,
-                runtime.menu->modeled_popup_choice_count != 0,
+                require_native_back,
+                require_popup_choices,
                 require_text_inputs,
-                options.enable_custom_text) ||
-            (require_native_back && !addresses.native_back)) {
+                options.enable_custom_text);
+            erui::native::fill_missing_addresses(addresses, fresh);
+            if (!satisfied(addresses)) {
+                detail::logf(
+                    LogLevel::error,
+                    "Pre-resolved native interfaces do not satisfy the compiled menu");
+                return fail_install(InstallError::address_resolution_failed);
+            }
             detail::logf(
-                LogLevel::error,
-                "Pre-resolved native interfaces do not satisfy the compiled menu");
-            return fail_install(InstallError::address_resolution_failed);
+                LogLevel::info,
+                "Missing native interfaces resolved after third-party hook installation");
         }
         detail::logf(
             LogLevel::info,
@@ -434,6 +471,7 @@ void uninstall() noexcept {
     runtime.diagnostic_submenu_logs.store(0, std::memory_order_release);
     runtime.pagination_next_hits.store(0, std::memory_order_release);
     runtime.pagination_previous_hits.store(0, std::memory_order_release);
+    runtime.menu_published.store(false, std::memory_order_release);
     runtime.menu.reset();
     detail::set_log_sink(nullptr);
 }

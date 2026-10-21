@@ -17,7 +17,8 @@ enum class BuiltinPage : std::uint8_t {
     network = 4,
     keyboard_mouse = 5,
     graphics = 6,
-    count = 7,
+    mod_settings = 7,
+    count = 8,
 };
 
 inline constexpr std::size_t builtin_page_count =
@@ -34,6 +35,7 @@ inline constexpr std::array<std::uint8_t, builtin_page_count>
         5u, // Network
         7u, // Keyboard/Mouse Settings
         8u, // Graphics
+        4u, // Mod Settings (native Brightness route, repurposed by the host)
     };
 
 [[nodiscard]] constexpr bool valid_builtin_page(

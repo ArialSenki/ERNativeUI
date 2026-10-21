@@ -1,4 +1,5 @@
 #include "gfx_patch.hpp"
+#include "settings_movie.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -35,6 +36,10 @@ struct Arguments {
         erui::gfx::ColorPickerPresentation::native};
     bool game_options_rows_explicit{};
     bool camera_options_rows_explicit{};
+    bool mod_settings_top_level_tab{};
+    bool wide_slider_values{};
+    bool line_help_only{};
+    std::optional<std::uint16_t> menu_background_alpha{};
     bool inspect_only{};
     bool overwrite{};
 };
@@ -48,12 +53,19 @@ void print_usage() {
            L"--game-options-rows 13 --camera-options-rows 13 "
            L"[--text-input-presentation character-name] "
            L"[--color-picker-presentation character-creation] "
+           L"[--mod-settings-top-level-tab] [--wide-slider-values] "
            L"[--overwrite]\n\n"
         << L"Patch Advanced Settings widget presentations:\n"
         << L"  ERNativeUIGfxPatcher.exe --input <02_042_pc_graphicsetting.gfx> "
            L"--output <patched.gfx> [--text-input-presentation character-name] "
            L"[--color-picker-presentation character-creation] "
            L"[--overwrite]\n\n"
+        << L"Only add the LineHelpWide field to an already patched movie:\n"
+        << L"  ERNativeUIGfxPatcher.exe --line-help-only --input <patched.gfx> "
+           L"--output <out.gfx> [--overwrite]\n\n"
+        << L"Only set the full-screen backdrop opacity (percent, 100 = vanilla):\n"
+        << L"  ERNativeUIGfxPatcher.exe --menu-background-alpha 60 --input <movie.gfx> "
+           L"--output <out.gfx> [--overwrite]\n\n"
         << L"The input file is never modified. Game Options supports 6..13 rows; "
            L"Camera Options supports 7..13.\n"
         << L"The host movie and TextInput sprite are detected structurally.\n"
@@ -98,7 +110,20 @@ void print_usage() {
             parsed.overwrite = true;
             continue;
         }
+        if (token == L"--mod-settings-top-level-tab") {
+            parsed.mod_settings_top_level_tab = true;
+            continue;
+        }
+        if (token == L"--wide-slider-values") {
+            parsed.wide_slider_values = true;
+            continue;
+        }
+        if (token == L"--line-help-only") {
+            parsed.line_help_only = true;
+            continue;
+        }
         if (token == L"--input" || token == L"--output" ||
+            token == L"--menu-background-alpha" ||
             token == L"--game-options-rows" ||
             token == L"--controller-rows" ||
             token == L"--camera-options-rows" ||
@@ -141,7 +166,13 @@ void print_usage() {
                     error = std::wstring(token) + L" requires an integer";
                     return false;
                 }
-                if (token == L"--camera-options-rows") {
+                if (token == L"--menu-background-alpha") {
+                    if (*rows > 100) {
+                        error = L"--menu-background-alpha requires 0..100";
+                        return false;
+                    }
+                    parsed.menu_background_alpha = *rows;
+                } else if (token == L"--camera-options-rows") {
                     parsed.camera_options_rows = *rows;
                     parsed.camera_options_rows_explicit = true;
                 } else {
@@ -329,6 +360,7 @@ int run(const std::vector<std::wstring>& command_line) {
     } else if (text_input_inspection.host ==
             erui::gfx::GfxHost::advanced_settings &&
         (arguments.game_options_rows_explicit ||
+            arguments.mod_settings_top_level_tab ||
             arguments.camera_options_rows_explicit)) {
         std::wcerr
             << L"ERROR: settings row options are only valid for "
@@ -347,7 +379,9 @@ int run(const std::vector<std::wstring>& command_line) {
         arguments.text_input_presentation !=
             erui::gfx::TextInputPresentation::character_name &&
         arguments.color_picker_presentation !=
-            erui::gfx::ColorPickerPresentation::character_creation) {
+            erui::gfx::ColorPickerPresentation::character_creation &&
+        !arguments.wide_slider_values && !arguments.line_help_only &&
+        !arguments.menu_background_alpha) {
         std::wcerr
             << L"ERROR: Advanced Settings has no Game Options rows to patch; "
                L"request a TextInput or ColorPicker presentation.\n";
@@ -360,7 +394,14 @@ int run(const std::vector<std::wstring>& command_line) {
     }
 
     erui::gfx::PatchResult patch{};
-    if (inspection.host == erui::gfx::GfxHost::game_options) {
+    if (arguments.menu_background_alpha) {
+        patch = erui::gfx::set_menu_background_alpha(
+            input, static_cast<std::uint8_t>(*arguments.menu_background_alpha));
+        if (patch.success()) patch.report.after = inspection;
+    } else if (arguments.line_help_only) {
+        patch = erui::gfx::patch_line_help_only(input);
+        if (patch.success()) patch.report.after = inspection;
+    } else if (inspection.host == erui::gfx::GfxHost::game_options) {
         patch = erui::gfx::patch_game_options_panel(
             input,
             {
@@ -372,12 +413,16 @@ int run(const std::vector<std::wstring>& command_line) {
                     : inspection.camera_options_rows,
                 .text_input_presentation = arguments.text_input_presentation,
                 .color_picker_presentation = arguments.color_picker_presentation,
+                .mod_settings_top_level_tab =
+                    arguments.mod_settings_top_level_tab,
+                .wide_slider_values = arguments.wide_slider_values,
             });
     } else {
         patch = erui::gfx::patch_widget_presentations(
             input,
             arguments.text_input_presentation,
-            arguments.color_picker_presentation);
+            arguments.color_picker_presentation,
+            arguments.wide_slider_values);
     }
     if (!patch.success()) {
         std::wcerr << L"ERROR [" << widen_ascii(erui::gfx::error_name(patch.error))
@@ -400,6 +445,9 @@ int run(const std::vector<std::wstring>& command_line) {
             << L" -> " << patch.report.after.game_options_rows << L'\n'
             << L"Camera Options rows:         " << patch.report.before.camera_options_rows
             << L" -> " << patch.report.after.camera_options_rows << L'\n';
+        if (arguments.mod_settings_top_level_tab) {
+            std::wcout << L"Dedicated Mod Settings tab:  added before Exit\n";
+        }
     }
     std::wcout
         << L"TextInput sprite ID:          " << patch.report.after.text_input_sprite << L'\n'

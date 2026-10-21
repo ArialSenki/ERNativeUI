@@ -20,7 +20,10 @@ namespace {
 
 constexpr std::uint16_t kTagEnd = 0;
 constexpr std::uint16_t kTagShowFrame = 1;
+constexpr std::uint16_t kTagDefineShape = 2;
+constexpr std::uint16_t kTagDefineBitsLossless2 = 36;
 constexpr std::uint16_t kTagPlaceObject2 = 26;
+constexpr std::uint16_t kTagRemoveObject2 = 28;
 constexpr std::uint16_t kTagDefineEditText = 37;
 constexpr std::uint16_t kTagDefineSprite = 39;
 constexpr std::uint16_t kTagPlaceObject3 = 70;
@@ -28,7 +31,6 @@ constexpr std::uint16_t kTagDefineScalingGrid = 78;
 constexpr std::uint16_t kTagDefineExternalImage2 = 1009;
 constexpr std::uint16_t kGameOptionsButtonSprite = 97;
 constexpr std::uint16_t kGameOptionsCaptionWrapper = 101;
-constexpr std::uint16_t kGameOptionsButtonLabelWrapper = 193;
 constexpr std::uint16_t kMinimumGameOptionsRows = 6;
 constexpr std::uint16_t kMaximumGameOptionsRows = 13;
 constexpr std::uint16_t kMinimumCameraOptionsRows = 7;
@@ -52,11 +54,45 @@ constexpr std::string_view kColorPickerName = "ColorPicker";
 constexpr std::string_view kButtonFrameName = "ButtonFrame";
 constexpr std::string_view kLegacyColorPreviewName = "ColorPreview";
 constexpr std::string_view kColorName = "Color";
+constexpr std::string_view kModSettingsTabSlotPrefix = "Item_0_";
+constexpr std::string_view kModSettingsTabIconName = "ItemIcon";
+constexpr std::string_view kModSettingsTabTitleName = "Text_0";
+// Names used by the earlier external-image tab icon, kept to reject such movies.
+constexpr std::string_view kModSettingsTabIconFile = "ERModSettingsTab.tga";
+constexpr std::string_view kModSettingsTabSelectedFile =
+    "ERModSettingsTabSelected.tga";
 constexpr std::uint16_t kButtonFrameDepth = 3;
 constexpr std::uint16_t kLegacyColorPreviewDepth5 = 5;
 constexpr std::uint16_t kLegacyColorPreviewDepth7 = 7;
 constexpr std::uint16_t kButtonValueDepth = 10;
 constexpr std::uint16_t kColorPickerDepth = 2;
+// Native tab symbol IDs differ between the generic (8 slots) and PC/menu\win
+// (9 slots, Keyboard/Mouse) movies, so they are discovered structurally.
+constexpr std::uint16_t kModSettingsTabSlotCount = 8;
+constexpr std::uint16_t kModSettingsPcTabSlotCount = 9;
+constexpr std::uint16_t kModSettingsPatchedTabSlotCount = 10;
+constexpr std::uint16_t kModSettingsHubSlot = 8;
+constexpr std::uint16_t kModSettingsTabIconFrame = 3;
+constexpr std::int32_t kModSettingsTabSlotStride = 1800;
+constexpr std::int32_t kNativeRightArrowX = -8260;
+constexpr std::int32_t kNativeLeftArrowX = -11260;
+// Measured in game: LB sits 1460 and RB 1260 twips from the outer tab
+// centres; these shifts make both gaps match the 1800-twip tab stride.
+constexpr std::int32_t kLeftArrowSpacingShift = -390;
+constexpr std::int32_t kRightArrowSpacingShift = 570;
+
+// PC movie only: per-slot X offsets (twips) that make the edge-to-edge gaps
+// between the ten tab icons equal (~63 px at 2560x1440), measured in game on
+// the Xbox prompt set. Slot order: Game Options, Camera, Display, Sound,
+// Network, Controls, Keyboard, Graphics, Hub, Quit Game.
+constexpr std::array<std::int32_t, kModSettingsPatchedTabSlotCount>
+    kTabSlotSpacingOffsets{-16, 42, 55, -6, 22, 111, 275, 363, 347, 195};
+
+[[nodiscard]] constexpr bool is_right_arrow_x(
+    std::int32_t x, std::int32_t base) noexcept {
+    return x == base || x == base + kRightArrowSpacingShift;
+}
+constexpr std::int32_t kExpandedRightArrowX = -4660;
 
 struct TagView {
     std::uint16_t code{};
@@ -109,6 +145,22 @@ struct SettingsPanelContext {
     std::uint16_t item_character_id{};
     std::uint16_t row_count{};
     std::vector<const Placement*> items{};
+};
+
+struct ModSettingsTopTabContext {
+    const Sprite* tab_list{};
+    const Sprite* back_tab_list{};
+    const Sprite* regular_tab_item{};
+    const Sprite* back_tab_item{};
+    const Sprite* back_cursor{};
+    const Sprite* regular_icon{};
+    const Sprite* selected_icon{};
+    const Sprite* native_regular_tab_item{};
+    const Sprite* native_back_tab_item{};
+    const Sprite* native_cursor{};
+    const Sprite* native_regular_icon{};
+    const Sprite* native_selected_icon{};
+    const Sprite* right_arrow{};
 };
 
 struct TextInputContext {
@@ -209,6 +261,7 @@ public:
 
     void align() noexcept { bit_position_ = (bit_position_ + 7) & ~std::size_t{7}; }
     [[nodiscard]] std::size_t byte_position() const noexcept { return bit_position_ / 8; }
+    [[nodiscard]] std::size_t bit_position() const noexcept { return bit_position_; }
 
 private:
     std::span<const std::uint8_t> bytes_{};
@@ -470,6 +523,110 @@ void write_u32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32
     reader.align();
     offset = reader.byte_position();
     return offset <= end;
+}
+
+[[nodiscard]] bool locate_matrix_translation_x_bits(
+    std::span<const std::uint8_t> bytes,
+    std::size_t offset,
+    std::size_t end,
+    std::size_t& x_bit_offset,
+    std::uint32_t& translation_bits,
+    std::int32_t& current_x) noexcept {
+    if (offset > end || end > bytes.size()) return false;
+    BitReader reader(bytes, offset);
+    std::uint32_t present{};
+    std::uint32_t bit_count{};
+    std::int32_t ignored{};
+
+    if (!reader.read(1, present)) return false;
+    if (present != 0) {
+        if (!reader.read(5, bit_count) || bit_count == 0 || bit_count > 31 ||
+            !reader.read_signed(bit_count, ignored) ||
+            !reader.read_signed(bit_count, ignored)) {
+            return false;
+        }
+    }
+    if (!reader.read(1, present)) return false;
+    if (present != 0) {
+        if (!reader.read(5, bit_count) || bit_count == 0 || bit_count > 31 ||
+            !reader.read_signed(bit_count, ignored) ||
+            !reader.read_signed(bit_count, ignored)) {
+            return false;
+        }
+    }
+    if (!reader.read(5, translation_bits) || translation_bits == 0 ||
+        translation_bits > 31) {
+        return false;
+    }
+    x_bit_offset = reader.bit_position();
+    return reader.read_signed(translation_bits, current_x) &&
+        reader.read_signed(translation_bits, ignored) &&
+        reader.bit_position() <= end * 8;
+}
+
+[[nodiscard]] bool write_bits(
+    std::span<std::uint8_t> bytes,
+    std::size_t bit_offset,
+    std::uint32_t value,
+    std::uint32_t bit_count) noexcept {
+    if (bit_count == 0 || bit_count > 31 ||
+        bit_offset > bytes.size() * 8 ||
+        bit_count > bytes.size() * 8 - bit_offset) {
+        return false;
+    }
+    for (std::uint32_t index = 0; index < bit_count; ++index) {
+        const std::size_t current_bit = bit_offset + index;
+        const std::size_t byte_index = current_bit / 8;
+        const std::uint8_t bit_mask = static_cast<std::uint8_t>(
+            1U << (7U - static_cast<unsigned>(current_bit % 8)));
+        const std::uint32_t value_bit =
+            (value >> (bit_count - 1U - index)) & 1U;
+        if (value_bit != 0) {
+            bytes[byte_index] |= bit_mask;
+        } else {
+            bytes[byte_index] &= static_cast<std::uint8_t>(~bit_mask);
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool set_place_object2_translation_x(
+    std::vector<std::uint8_t>& bytes,
+    const Placement& placement,
+    std::int32_t expected_x,
+    std::int32_t target_x) noexcept {
+    if (placement.tag.code != kTagPlaceObject2 ||
+        placement.is_place_object3 || !placement.has_matrix ||
+        placement.translation.x != expected_x ||
+        placement.tag.body_start + 3 > placement.tag.body_end) {
+        return false;
+    }
+    const std::size_t matrix_offset = placement.tag.body_start + 3 +
+        (placement.has_character ? 2U : 0U);
+    std::size_t x_bit_offset{};
+    std::uint32_t translation_bits{};
+    std::int32_t current_x{};
+    if (!locate_matrix_translation_x_bits(
+            bytes,
+            matrix_offset,
+            placement.tag.body_end,
+            x_bit_offset,
+            translation_bits,
+            current_x) || current_x != expected_x) {
+        return false;
+    }
+    const std::int64_t minimum = -(
+        std::int64_t{1} << (translation_bits - 1U));
+    const std::int64_t maximum = (
+        std::int64_t{1} << (translation_bits - 1U)) - 1;
+    if (target_x < minimum || target_x > maximum) return false;
+    const std::uint32_t value_mask =
+        (std::uint32_t{1} << translation_bits) - 1U;
+    return write_bits(
+        bytes,
+        x_bit_offset,
+        static_cast<std::uint32_t>(target_x) & value_mask,
+        translation_bits);
 }
 
 [[nodiscard]] bool skip_color_transform(
@@ -748,6 +905,44 @@ void write_u32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32
         parsed.sprites.end(),
         [id](const Sprite& sprite) { return sprite.id == id; });
     return iterator == parsed.sprites.end() ? nullptr : &*iterator;
+}
+
+[[nodiscard]] bool sprite_reference_graph_is_acyclic(
+    const ParsedGfx& parsed) {
+    std::unordered_map<std::uint16_t, std::size_t> sprite_indices{};
+    sprite_indices.reserve(parsed.sprites.size());
+    for (std::size_t index = 0; index < parsed.sprites.size(); ++index) {
+        if (!sprite_indices.emplace(parsed.sprites[index].id, index).second) {
+            return false;
+        }
+    }
+
+    std::vector<std::vector<std::size_t>> edges(parsed.sprites.size());
+    std::vector<std::size_t> indegrees(parsed.sprites.size());
+    for (std::size_t source = 0; source < parsed.sprites.size(); ++source) {
+        for (const Placement& placement : parsed.sprites[source].placements) {
+            if (!placement.has_character) continue;
+            const auto target = sprite_indices.find(placement.character_id);
+            if (target == sprite_indices.end()) continue;
+            edges[source].push_back(target->second);
+            ++indegrees[target->second];
+        }
+    }
+
+    std::vector<std::size_t> ready{};
+    ready.reserve(parsed.sprites.size());
+    for (std::size_t index = 0; index < indegrees.size(); ++index) {
+        if (indegrees[index] == 0) ready.push_back(index);
+    }
+    std::size_t visited{};
+    for (std::size_t cursor = 0; cursor < ready.size(); ++cursor) {
+        const std::size_t source = ready[cursor];
+        ++visited;
+        for (const std::size_t target : edges[source]) {
+            if (--indegrees[target] == 0) ready.push_back(target);
+        }
+    }
+    return visited == parsed.sprites.size();
 }
 
 [[nodiscard]] std::optional<std::uint16_t> parse_item_index(std::string_view name) noexcept {
@@ -3070,6 +3265,528 @@ struct DefinitionRange {
     return result;
 }
 
+[[nodiscard]] bool make_game_options_button_label_wrapper(
+    std::span<const std::uint8_t> bytes,
+    const Sprite& caption,
+    std::uint16_t wrapper_id,
+    std::vector<std::uint8_t>& wrapper,
+    std::string& error,
+    bool legacy_length = false) {
+    if (placement_name_count(caption, kValueTextName) != 1) {
+        error = "Game Options Caption wrapper does not contain one Text_0 field";
+        return false;
+    }
+    const Placement* const text = find_unique_placement(
+        caption, kValueTextName);
+    if (!text || !text->has_character || !text->has_matrix ||
+        text->translation.x != -4360 || text->translation.y != -640) {
+        error = "Game Options Caption Text_0 field does not match the native binding layout";        return false;
+    }
+    if (text->tag.tag_start > text->tag.body_end ||
+        text->tag.body_end > bytes.size()) {
+        error = "Game Options Caption Text_0 tag is out of bounds";
+        return false;
+    }
+
+    std::vector<std::uint8_t> text_placement(
+        bytes.begin() + static_cast<std::ptrdiff_t>(text->tag.tag_start),
+        bytes.begin() + static_cast<std::ptrdiff_t>(text->tag.body_end));
+    constexpr std::array<std::uint8_t, 7> source_name{
+        'T', 'e', 'x', 't', '_', '0', 0};
+    const auto name = std::search(
+        text_placement.begin(), text_placement.end(),
+        source_name.begin(), source_name.end());
+    if (name == text_placement.end() ||
+        std::search(std::next(name), text_placement.end(),
+            source_name.begin(), source_name.end()) != text_placement.end()) {
+        error = "Game Options Caption Text_0 instance name is not unique";
+        return false;
+    }
+
+    // Keep the native text object, transform, and filters, but omit the
+    // Caption wrapper's Cursor child. That child references Button again and
+    // creates a recursive Sprite graph if the whole Caption is nested there.
+    text_placement.erase(std::next(name, 4), std::next(name, 6));
+    const std::size_t text_body_size =
+        text_placement.size() - text->tag.header_size;
+    if (text->tag.header_size == 2 && text_body_size < 0x3FU) {
+        std::uint16_t header{};
+        if (!read_u16(text_placement, 0, header)) {
+            error = "could not update the cloned Text_0 placement header";
+            return false;
+        }
+        header = static_cast<std::uint16_t>(
+            (header & 0xFFC0U) | text_body_size);
+        write_u16(text_placement, 0, header);
+    } else if (text->tag.header_size == 6) {
+        // Legacy wrappers (shipped 02_040, sprite 193) kept the source length,
+        // so their PlaceObject3 also spans the ShowFrame that follows it.
+        if (!legacy_length) write_u32(
+            text_placement, 2, static_cast<std::uint32_t>(text_body_size));
+    } else {
+        error = "Game Options Caption Text_0 placement has an unsupported tag header";
+        return false;
+    }
+
+    std::vector<std::uint8_t> body{};
+    append_u16(body, wrapper_id);
+    append_u16(body, 1);
+    body.insert(body.end(), text_placement.begin(), text_placement.end());
+    const std::vector<std::uint8_t> show_frame = make_tag(kTagShowFrame, {});
+    body.insert(body.end(), show_frame.begin(), show_frame.end());
+    const std::vector<std::uint8_t> end = make_tag(kTagEnd, {});
+    body.insert(body.end(), end.begin(), end.end());
+    wrapper = make_tag(kTagDefineSprite, body, true);
+    return true;
+}
+
+[[nodiscard]] bool game_options_button_label_matches(
+    std::span<const std::uint8_t> bytes,
+    const ParsedGfx& parsed,
+    const Sprite& button,
+    const Sprite& caption,
+    std::string& error) {
+    if (placement_name_count(button, "Text_1") != 1) return false;
+    const Placement* const label = find_unique_placement(button, "Text_1");
+    if (!label || !label->has_character || !label->has_matrix ||
+        label->depth != 12 || label->translation.x != -9520 ||
+        label->translation.y != 0) {
+        return false;
+    }
+    std::vector<std::uint8_t> expected{};
+    if (!make_game_options_button_label_wrapper(
+            bytes, caption, label->character_id, expected, error)) {
+        return false;
+    }
+    const TagView* const existing = find_character_definition(
+        bytes, parsed, kTagDefineSprite, label->character_id);
+    // The shipped asset defines the wrapper after Button (id 193 appended at
+    // the end) with the legacy placement length; Scaleform resolves it when
+    // Button is instantiated, so accept that form as well.
+    if (!existing) return false;
+    if (tag_equals(bytes, *existing, expected)) return true;
+    std::vector<std::uint8_t> legacy{};
+    return make_game_options_button_label_wrapper(
+               bytes, caption, label->character_id, legacy, error, true) &&
+        tag_equals(bytes, *existing, legacy);
+}
+
+// Fork: the Slider widget's Text_0 value field is 80 px wide and centred, which
+// clips named values ("Downpour" shows as "Downpo"). Widen it to the right and
+// align it left with a small margin, so short numeric values stay about where
+// they were and longer names use the free space up to the row's right edge.
+constexpr std::int32_t kWideSliderValueXMax = 3200;          // twips (160 px)
+constexpr std::uint16_t kWideSliderValueLeftMargin = 200;    // twips (10 px)
+
+[[nodiscard]] bool widen_slider_value_text(
+    std::vector<std::uint8_t>& output,
+    std::uint16_t text_id,
+    std::string& error,
+    bool& changed) {
+    ParsedGfx parsed{};
+    ErrorCode code{};
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    const TagView* tag = find_character_definition(
+        output, parsed, kTagDefineEditText, text_id);
+    if (!tag) {
+        error = "Slider Text_0 does not reference one DefineEditText";
+        return false;
+    }
+
+    BitReader reader(output, tag->body_start + 2);
+    std::uint32_t bits{};
+    std::int32_t x_min{}, x_max{}, y_min{}, y_max{};
+    if (!reader.read(5, bits) || !reader.read_signed(bits, x_min) ||
+        !reader.read_signed(bits, x_max) || !reader.read_signed(bits, y_min) ||
+        !reader.read_signed(bits, y_max)) {
+        error = "Slider Text_0 bounds are out of range";
+        return false;
+    }
+    reader.align();
+    const std::size_t rect_end = reader.byte_position();
+    if (rect_end + 2 > tag->body_end) {
+        error = "Slider Text_0 flags are out of range";
+        return false;
+    }
+    const std::uint8_t flags1 = output[rect_end];
+    const std::uint8_t flags2 = output[rect_end + 1];
+    constexpr std::uint8_t kHasTextColor = 0x04, kHasMaxLength = 0x02, kHasFont = 0x01;
+    constexpr std::uint8_t kHasFontClass = 0x80, kAutoSize = 0x40, kHasLayout = 0x20;
+    if ((flags2 & kHasLayout) == 0 || (flags2 & kAutoSize) != 0) {
+        error = "Slider Text_0 has no fixed layout to widen";
+        return false;
+    }
+    std::size_t offset = rect_end + 2;
+    if (flags1 & kHasFont) offset += 2;
+    if (flags2 & kHasFontClass) {
+        while (offset < tag->body_end && output[offset] != 0) ++offset;
+        ++offset;
+    }
+    if ((flags1 & kHasFont) || (flags2 & kHasFontClass)) offset += 2;  // FontHeight
+    if (flags1 & kHasTextColor) offset += 4;
+    if (flags1 & kHasMaxLength) offset += 2;
+    const std::size_t layout = offset;  // Align u8, LeftMargin, RightMargin, Indent, Leading
+    if (layout + 9 > tag->body_end) {
+        error = "Slider Text_0 layout is out of range";
+        return false;
+    }
+    // The initial HTML text carries its own paragraph alignment, which the
+    // game's later text assignments inherit.
+    constexpr std::string_view kCentredParagraph = "<p align=\"center\">";
+    constexpr std::string_view kLeftParagraph = "<p align=\"left\">";
+    const auto tail_begin = output.begin() + static_cast<std::ptrdiff_t>(layout + 9);
+    const auto tail_end = output.begin() + static_cast<std::ptrdiff_t>(tag->body_end);
+    const auto centred = std::search(tail_begin, tail_end,
+        kCentredParagraph.begin(), kCentredParagraph.end());
+
+    std::uint16_t left_margin{};
+    (void)read_u16(output, layout + 1, left_margin);
+    if (x_max >= kWideSliderValueXMax && output[layout] == 0 &&
+        left_margin == kWideSliderValueLeftMargin && centred == tail_end) {
+        return true;  // already widened
+    }
+
+    std::vector<std::uint8_t> body{};
+    append_u16(body, text_id);
+    x_max = std::max(x_max, kWideSliderValueXMax);
+    const std::uint32_t new_bits = std::max({signed_bit_count(x_min),
+        signed_bit_count(x_max), signed_bit_count(y_min), signed_bit_count(y_max)});
+    BitWriter rectangle(body);
+    rectangle.write(new_bits, 5);
+    rectangle.write_signed(x_min, new_bits);
+    rectangle.write_signed(x_max, new_bits);
+    rectangle.write_signed(y_min, new_bits);
+    rectangle.write_signed(y_max, new_bits);
+    rectangle.align();
+    body.insert(body.end(), output.begin() + static_cast<std::ptrdiff_t>(rect_end),
+        output.begin() + static_cast<std::ptrdiff_t>(layout));
+    body.push_back(0);  // align left
+    append_u16(body, kWideSliderValueLeftMargin);
+    body.insert(body.end(), output.begin() + static_cast<std::ptrdiff_t>(layout + 3),
+        tail_begin);
+    if (centred != tail_end) {
+        body.insert(body.end(), tail_begin, centred);
+        body.insert(body.end(), kLeftParagraph.begin(), kLeftParagraph.end());
+        body.insert(body.end(),
+            centred + static_cast<std::ptrdiff_t>(kCentredParagraph.size()), tail_end);
+    } else {
+        body.insert(body.end(), tail_begin, tail_end);
+    }
+
+    const std::vector<std::uint8_t> replacement =
+        make_tag(kTagDefineEditText, body, tag->header_size == 6);
+    const std::size_t old_size = tag->body_end - tag->tag_start;
+    const std::size_t start = tag->tag_start;
+    output.erase(output.begin() + static_cast<std::ptrdiff_t>(start),
+        output.begin() + static_cast<std::ptrdiff_t>(start + old_size));
+    output.insert(output.begin() + static_cast<std::ptrdiff_t>(start),
+        replacement.begin(), replacement.end());
+    write_u32(output, 4, static_cast<std::uint32_t>(
+        parsed.declared_length - old_size + replacement.size()));
+    changed = true;
+    return parse_gfx(output, parsed, code, error);
+}
+
+[[nodiscard]] bool ensure_wide_slider_values(
+    std::vector<std::uint8_t>& output,
+    std::string& error,
+    bool& changed) {
+    changed = false;
+    ParsedGfx parsed{};
+    ErrorCode code{};
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    std::vector<std::uint16_t> text_ids{};
+    for (const Sprite& sprite : parsed.sprites) {
+        const Placement* slider = find_unique_placement(sprite, kSliderName);
+        if (!slider || !slider->has_character) continue;
+        const Sprite* widget = find_sprite(parsed, slider->character_id);
+        if (!widget) continue;
+        const Placement* value = find_unique_placement(*widget, kValueTextName);
+        if (!value || !value->has_character) continue;
+        if (std::find(text_ids.begin(), text_ids.end(), value->character_id) ==
+            text_ids.end()) {
+            text_ids.push_back(value->character_id);
+        }
+    }
+    if (text_ids.empty()) {
+        error = "no Slider widget exposes a Text_0 value field";
+        return false;
+    }
+    for (const std::uint16_t id : text_ids) {
+        bool widened = false;
+        if (!widen_slider_value_text(output, id, error, widened)) return false;
+        changed = changed || widened;
+    }
+    return true;
+}
+
+// Fork: the one-line help at the bottom (LineHelp) is 1140 px wide and clips
+// long provider descriptions around x=1522 of a 1920 px screen. LineHelp keeps
+// its native bounds so vanilla pages are unchanged; a twin field LineHelpWide
+// with the same style spans about x=48..1872 (equal screen margins). It stays
+// empty until the host routes provider help text to it.
+constexpr std::int32_t kNativeLineHelpXMin = -40;
+constexpr std::int32_t kNativeLineHelpXMax = 22760;
+constexpr std::int32_t kWideLineHelpXMin = -6680;  // twips (starts 332 px further left)
+constexpr std::int32_t kWideLineHelpXMax = 29800;  // twips (1490 px)
+constexpr std::string_view kWideLineHelpName = "LineHelpWide";
+// Second twin: two lines tall (one native line is 720 twips) with word wrap,
+// its bottom line exactly where LineHelp sits. The host moves help that
+// overflows LineHelpWide here.
+constexpr std::string_view kTwoLineHelpName = "LineHelpWide2";
+constexpr std::int32_t kNativeLineHelpHeight = 720;
+constexpr std::uint8_t kEditTextHasText = 0x80U;
+constexpr std::uint8_t kEditTextWordWrapMultiline = 0x60U;
+
+// Builds a DefineEditText tag from an existing one with a new ID and
+// horizontal bounds. Optionally drops the initial text (the last field).
+[[nodiscard]] bool make_line_help_definition(
+    std::span<const std::uint8_t> output,
+    const TagView& tag,
+    std::uint16_t character_id,
+    std::int32_t x_min,
+    std::int32_t x_max,
+    bool drop_initial_text,
+    std::vector<std::uint8_t>& replacement,
+    std::string& error,
+    std::int32_t extra_lines = 0) {
+    BitReader reader(output, tag.body_start + 2);
+    std::uint32_t bits{};
+    std::int32_t old_x_min{}, old_x_max{}, y_min{}, y_max{};
+    if (!reader.read(5, bits) || !reader.read_signed(bits, old_x_min) ||
+        !reader.read_signed(bits, old_x_max) || !reader.read_signed(bits, y_min) ||
+        !reader.read_signed(bits, y_max)) {
+        error = "LineHelp bounds are out of range";
+        return false;
+    }
+    // Extra lines grow upwards so the last line stays on the native one.
+    y_min -= extra_lines * kNativeLineHelpHeight;
+    reader.align();
+    const std::size_t rect_end = reader.byte_position();
+    if (rect_end + 2 > tag.body_end) {
+        error = "LineHelp DefineEditText is truncated";
+        return false;
+    }
+
+    std::vector<std::uint8_t> body{};
+    append_u16(body, character_id);
+    const std::uint32_t new_bits = std::max({signed_bit_count(x_min),
+        signed_bit_count(x_max), signed_bit_count(y_min),
+        signed_bit_count(y_max)});
+    BitWriter rectangle(body);
+    rectangle.write(new_bits, 5);
+    rectangle.write_signed(x_min, new_bits);
+    rectangle.write_signed(x_max, new_bits);
+    rectangle.write_signed(y_min, new_bits);
+    rectangle.write_signed(y_max, new_bits);
+    rectangle.align();
+    const std::size_t flags_offset = body.size();
+    std::size_t fields_end = tag.body_end;
+    if (drop_initial_text && (output[rect_end] & kEditTextHasText) != 0) {
+        // VariableName and InitialText are the two trailing strings.
+        if (output[tag.body_end - 1] != 0) {
+            error = "LineHelp initial text is not terminated";
+            return false;
+        }
+        std::size_t position = tag.body_end - 1;
+        while (position > rect_end + 2 && output[position - 1] != 0) --position;
+        if (position <= rect_end + 2) {
+            error = "LineHelp variable name is not terminated";
+            return false;
+        }
+        fields_end = position;
+    }
+    body.insert(body.end(), output.begin() + static_cast<std::ptrdiff_t>(rect_end),
+        output.begin() + static_cast<std::ptrdiff_t>(fields_end));
+    if (fields_end != tag.body_end) {
+        body[flags_offset] = static_cast<std::uint8_t>(
+            body[flags_offset] & ~kEditTextHasText);
+    }
+    if (extra_lines > 0) {
+        body[flags_offset] = static_cast<std::uint8_t>(
+            body[flags_offset] | kEditTextWordWrapMultiline);
+    }
+    replacement = make_tag(kTagDefineEditText, body, tag.header_size == 6);
+    return true;
+}
+
+// Earlier fork builds widened LineHelp itself; put its native bounds back.
+[[nodiscard]] bool restore_native_line_help(
+    std::vector<std::uint8_t>& output,
+    std::uint16_t text_id,
+    std::string& error,
+    bool& changed) {
+    ParsedGfx parsed{};
+    ErrorCode code{};
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    const TagView* tag = find_character_definition(
+        output, parsed, kTagDefineEditText, text_id);
+    if (!tag) {
+        error = "LineHelp does not reference one DefineEditText";
+        return false;
+    }
+    BitReader reader(output, tag->body_start + 2);
+    std::uint32_t bits{};
+    std::int32_t x_min{}, x_max{};
+    if (!reader.read(5, bits) || !reader.read_signed(bits, x_min) ||
+        !reader.read_signed(bits, x_max)) {
+        error = "LineHelp bounds are out of range";
+        return false;
+    }
+    if (x_min != kWideLineHelpXMin || x_max != kWideLineHelpXMax) return true;
+
+    std::vector<std::uint8_t> replacement{};
+    if (!make_line_help_definition(output, *tag, text_id, kNativeLineHelpXMin,
+            kNativeLineHelpXMax, false, replacement, error)) {
+        return false;
+    }
+    const std::size_t old_size = tag->body_end - tag->tag_start;
+    const std::size_t start = tag->tag_start;
+    output.erase(output.begin() + static_cast<std::ptrdiff_t>(start),
+        output.begin() + static_cast<std::ptrdiff_t>(start + old_size));
+    output.insert(output.begin() + static_cast<std::ptrdiff_t>(start),
+        replacement.begin(), replacement.end());
+    write_u32(output, 4, static_cast<std::uint32_t>(
+        parsed.declared_length - old_size + replacement.size()));
+    changed = true;
+    return parse_gfx(output, parsed, code, error);
+}
+
+[[nodiscard]] bool add_wide_line_help_twin(
+    std::vector<std::uint8_t>& output,
+    std::uint16_t sprite_id,
+    std::string& error,
+    bool& changed,
+    std::string_view twin_name = kWideLineHelpName,
+    std::int32_t extra_lines = 0) {
+    ParsedGfx parsed{};
+    ErrorCode code{};
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    const Sprite* sprite = find_sprite(parsed, sprite_id);
+    if (!sprite) {
+        error = "LineHelp owner sprite disappeared during patching";
+        return false;
+    }
+    if (placement_name_count(*sprite, twin_name) > 0) return true;
+    const Placement* help = find_unique_placement(*sprite, "LineHelp");
+    if (!help || !help->has_character || !help->has_matrix ||
+        help->translation.x < -16384 || help->translation.x > 16383 ||
+        help->translation.y < -16384 || help->translation.y > 16383) {
+        error = "LineHelp placement does not match the native layout";
+        return false;
+    }
+    const std::int32_t help_x = help->translation.x;
+    const std::int32_t help_y = help->translation.y;
+    std::uint16_t depth = 1;
+    for (const Placement& placement : sprite->placements) {
+        depth = std::max(depth, static_cast<std::uint16_t>(placement.depth + 1U));
+    }
+    const TagView* definition = find_character_definition(
+        output, parsed, kTagDefineEditText, help->character_id);
+    if (!definition) {
+        error = "LineHelp does not reference one DefineEditText";
+        return false;
+    }
+    const std::optional<std::uint16_t> twin_id = next_character_id(output, parsed);
+    if (!twin_id) {
+        error = "there is no free character ID for LineHelpWide";
+        return false;
+    }
+    std::vector<std::uint8_t> twin{};
+    if (!make_line_help_definition(output, *definition, *twin_id,
+            kWideLineHelpXMin, kWideLineHelpXMax, true, twin, error, extra_lines)) {
+        return false;
+    }
+    output.insert(output.begin() + static_cast<std::ptrdiff_t>(sprite->tag.tag_start),
+        twin.begin(), twin.end());
+    write_u32(output, 4, parsed.declared_length +
+        static_cast<std::uint32_t>(twin.size()));
+
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    sprite = find_sprite(parsed, sprite_id);
+    if (!sprite) {
+        error = "LineHelp owner sprite disappeared during patching";
+        return false;
+    }
+    const std::optional<std::size_t> insertion = show_frame_offset(*sprite);
+    if (!insertion) {
+        error = "LineHelp owner sprite has no ShowFrame tag";
+        return false;
+    }
+    const std::vector<std::uint8_t> placement = make_named_placement(
+        *twin_id, depth, help_x, help_y, twin_name);
+    if (!patch_tag_body_length(output, sprite->tag, placement.size(), error)) {
+        return false;
+    }
+    output.insert(output.begin() + static_cast<std::ptrdiff_t>(*insertion),
+        placement.begin(), placement.end());
+    write_u32(output, 4, parsed.declared_length +
+        static_cast<std::uint32_t>(placement.size()));
+    changed = true;
+    return parse_gfx(output, parsed, code, error);
+}
+
+// Movies without a LineHelp field are left alone.
+[[nodiscard]] bool ensure_wide_line_help(
+    std::vector<std::uint8_t>& output,
+    std::string& error,
+    bool& changed) {
+    changed = false;
+    ParsedGfx parsed{};
+    ErrorCode code{};
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    std::vector<std::uint16_t> text_ids{};
+    std::vector<std::uint16_t> sprite_ids{};
+    for (const Sprite& sprite : parsed.sprites) {
+        const Placement* help = find_unique_placement(sprite, "LineHelp");
+        if (!help || !help->has_character) continue;
+        sprite_ids.push_back(sprite.id);
+        if (std::find(text_ids.begin(), text_ids.end(), help->character_id) ==
+            text_ids.end()) {
+            text_ids.push_back(help->character_id);
+        }
+    }
+    for (const std::uint16_t id : text_ids) {
+        bool restored = false;
+        if (!restore_native_line_help(output, id, error, restored)) return false;
+        changed = changed || restored;
+    }
+    for (const std::uint16_t id : sprite_ids) {
+        bool added = false;
+        if (!add_wide_line_help_twin(output, id, error, added)) return false;
+        changed = changed || added;
+        bool two_lines = false;
+        if (!add_wide_line_help_twin(output, id, error, two_lines, kTwoLineHelpName, 1)) {
+            return false;
+        }
+        changed = changed || two_lines;
+    }
+    return true;
+}
+
+}  // namespace
+
+PatchResult patch_line_help_only(std::span<const std::uint8_t> input) noexcept {
+    try {
+        PatchResult result{};
+        result.output.assign(input.begin(), input.end());
+        std::string error{};
+        bool changed = false;
+        if (!ensure_wide_line_help(result.output, error, changed)) {
+            return fail(ErrorCode::unsupported_gfx, std::move(error));
+        }
+        result.report.already_satisfied = !changed;
+        result.report.bytes_added = result.output.size() > input.size()
+            ? result.output.size() - input.size()
+            : 0;
+        return result;
+    } catch (...) {
+        return fail(ErrorCode::invalid_gfx, "LineHelp patch failed");
+    }
+}
+
+namespace {
+
 [[nodiscard]] bool ensure_game_options_button_label(
     std::vector<std::uint8_t>& output,
     std::string& error,
@@ -3086,118 +3803,1697 @@ struct DefinitionRange {
         // contain the PC button widget. Row expansion remains useful there.
         return true;
     }
-
-    // Clone the exact Caption wrapper used by Slider, ComboBox and TextInput.
-    // It contains a PlaceObject3 child with the native -4360 twip transform
-    // and filter/shadow list. Only its ActionScript binding name differs:
-    // Caption exposes Text_0, while an injected Button requires Text_1.Text.
-    std::vector<std::uint8_t> cloned(
-        output.begin() + static_cast<std::ptrdiff_t>(caption->tag.tag_start),
-        output.begin() + static_cast<std::ptrdiff_t>(caption->tag.body_end));
-    write_u16(cloned, caption->tag.header_size, kGameOptionsButtonLabelWrapper);
-
-    constexpr std::array<std::uint8_t, 7> source_name{
-        'T', 'e', 'x', 't', '_', '0', 0};
-    const auto name = std::search(
-        cloned.begin(), cloned.end(), source_name.begin(), source_name.end());
-    if (name == cloned.end() ||
-        std::search(std::next(name), cloned.end(),
-            source_name.begin(), source_name.end()) != cloned.end()) {
-        error = "Game Options Caption wrapper does not contain one Text_0 binding";
+    if (placement_name_count(*button, "Text_1") > 1) {
+        error = "Game Options Button contains duplicate Text_1 bindings";
         return false;
     }
-    cloned.erase(std::next(name, 4), std::next(name, 6));
+    if (game_options_button_label_matches(
+            output, parsed, *button, *caption, error)) {
+        return true;
+    }
 
-    const std::size_t cloned_body_size =
-        caption->tag.body_end - caption->tag.body_start - 2;
-    if (caption->tag.header_size == 2 && cloned_body_size < 0x3FU) {
-        std::uint16_t header{};
-        if (!read_u16(cloned, 0, header)) {
-            error = "could not update cloned Caption header";
-            return false;
-        }
-        header = static_cast<std::uint16_t>(
-            (header & 0xFFC0U) | cloned_body_size);
-        write_u16(cloned, 0, header);
-    } else if (caption->tag.header_size == 6) {
-        write_u32(cloned, 2, static_cast<std::uint32_t>(cloned_body_size));
-    } else {
-        error = "Game Options Caption wrapper has an unsupported tag header";
+    const Placement* const existing_label = find_unique_placement(
+        *button, "Text_1");
+    const bool had_existing_label = existing_label != nullptr;
+    if (existing_label && (!existing_label->has_character ||
+            !existing_label->has_matrix || existing_label->depth != 12 ||
+            existing_label->translation.x != -9520 ||
+            existing_label->translation.y != 0)) {
+        error = "Game Options Button Text_1 binding does not match the native label layout";
         return false;
     }
-
-    const Sprite* existing_wrapper =
-        find_sprite(parsed, kGameOptionsButtonLabelWrapper);
-    if (existing_wrapper) {
-        const auto old_begin = output.begin() +
-            static_cast<std::ptrdiff_t>(existing_wrapper->tag.tag_start);
-        const auto old_end = output.begin() +
-            static_cast<std::ptrdiff_t>(existing_wrapper->tag.body_end);
-        if (static_cast<std::size_t>(std::distance(old_begin, old_end)) !=
-                cloned.size() ||
-            !std::equal(old_begin, old_end, cloned.begin())) {
-            const std::ptrdiff_t delta = static_cast<std::ptrdiff_t>(cloned.size()) -
-                std::distance(old_begin, old_end);
-            output.erase(old_begin, old_end);
-            output.insert(
-                output.begin() + static_cast<std::ptrdiff_t>(
-                    existing_wrapper->tag.tag_start),
-                cloned.begin(), cloned.end());
-            write_u32(output, 4, static_cast<std::uint32_t>(
-                static_cast<std::ptrdiff_t>(parsed.declared_length) + delta));
-            added = true;
-        }
-    } else {
-        const auto top_end = std::find_if(
-            parsed.top_level_tags.begin(), parsed.top_level_tags.end(),
-            [](const TagView& tag) { return tag.code == kTagEnd; });
-        if (top_end == parsed.top_level_tags.end()) {
-            error = "top-level GFX stream has no End tag";
-            return false;
-        }
-        output.insert(
-            output.begin() + static_cast<std::ptrdiff_t>(top_end->tag_start),
-            cloned.begin(), cloned.end());
-        write_u32(output, 4, parsed.declared_length +
-            static_cast<std::uint32_t>(cloned.size()));
-        added = true;
-    }
-
-    // Reparse because inserting or upgrading the wrapper shifts later tags.
-    if (!parse_gfx(output, parsed, code, error)) return false;
-    button = find_sprite(parsed, kGameOptionsButtonSprite);
-    if (!button) {
-        error = "Game Options button sprite disappeared after wrapper insertion";
-        return false;
-    }
-    const bool has_text_1 = std::any_of(
-        button->placements.begin(), button->placements.end(),
-        [](const Placement& placement) {
-            return placement.has_name && placement.name == "Text_1";
-        });
-    if (has_text_1) return true;
-
-    const std::optional<std::size_t> insertion = show_frame_offset(*button);
-    if (!insertion) {
-        error = "Game Options button sprite has no ShowFrame tag";
-        return false;
-    }
-    if (std::any_of(button->placements.begin(), button->placements.end(),
-            [](const Placement& placement) { return placement.depth == 12; })) {
+    if (!existing_label && find_character_at_depth(*button, 12)) {
         error = "Game Options button depth 12 is already occupied";
         return false;
     }
 
-    const std::vector<std::uint8_t> label = make_named_placement(
-        kGameOptionsButtonLabelWrapper, 12, -9520, 0, "Text_1");
-    if (!patch_tag_body_length(output, button->tag, label.size(), error)) {
+    const std::optional<std::uint16_t> wrapper_id =
+        next_character_id(output, parsed);
+    if (!wrapper_id) {
+        error = "there is no free character ID for the Game Options Button label";
+        return false;
+    }
+    std::vector<std::uint8_t> wrapper{};
+    if (!make_game_options_button_label_wrapper(
+            output, *caption, *wrapper_id, wrapper, error)) {
+        return false;
+    }
+
+    const auto button_definition = std::find_if(
+        parsed.top_level_tags.begin(), parsed.top_level_tags.end(),
+        [button](const TagView& tag) {
+            return tag.tag_start == button->tag.tag_start;
+        });
+    if (button_definition == parsed.top_level_tags.end()) {
+        error = "Game Options Button definition is not in the top-level GFX stream";
         return false;
     }
     output.insert(
-        output.begin() + static_cast<std::ptrdiff_t>(*insertion),
-        label.begin(), label.end());
+        output.begin() + static_cast<std::ptrdiff_t>(button_definition->tag_start),
+        wrapper.begin(), wrapper.end());
     write_u32(output, 4, parsed.declared_length +
-        static_cast<std::uint32_t>(label.size()));
+        static_cast<std::uint32_t>(wrapper.size()));
+    added = true;
+
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    button = find_sprite(parsed, kGameOptionsButtonSprite);
+    if (!button) {
+        error = "Game Options Button disappeared after adding its label wrapper";
+        return false;
+    }
+    if (had_existing_label) {
+        const Placement* const label = find_unique_placement(*button, "Text_1");
+        if (!label) {
+            error = "Game Options Button Text_1 binding disappeared during patching";
+            return false;
+        }
+        const std::size_t character_offset = label->tag.body_start +
+            (label->is_place_object3 ? 4U : 3U);
+        if (character_offset + 2 > label->tag.body_end) {
+            error = "Game Options Button Text_1 character field is out of bounds";
+            return false;
+        }
+        write_u16(output, character_offset, *wrapper_id);
+    } else {
+        const std::optional<std::size_t> insertion = show_frame_offset(*button);
+        if (!insertion) {
+            error = "Game Options Button sprite has no ShowFrame tag";
+            return false;
+        }
+        const std::vector<std::uint8_t> label = make_named_placement(
+            *wrapper_id, 12, -9520, 0, "Text_1");
+        if (!patch_tag_body_length(output, button->tag, label.size(), error)) {
+            return false;
+        }
+        output.insert(
+            output.begin() + static_cast<std::ptrdiff_t>(*insertion),
+            label.begin(), label.end());
+        write_u32(output, 4, parsed.declared_length +
+            static_cast<std::uint32_t>(label.size()));
+    }
+
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    button = find_sprite(parsed, kGameOptionsButtonSprite);
+    caption = find_sprite(parsed, kGameOptionsCaptionWrapper);
+    if (!button || !caption || !game_options_button_label_matches(
+            output, parsed, *button, *caption, error)) {
+        if (error.empty()) {
+            error = "Game Options Button Text_1 wrapper did not verify";
+        }
+        return false;
+    }
+    if (!sprite_reference_graph_is_acyclic(parsed)) {
+        error = "Game Options Button label patch creates recursive sprite references";
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] std::optional<std::uint16_t> parse_mod_settings_tab_index(
+    std::string_view name) noexcept {
+    if (!name.starts_with(kModSettingsTabSlotPrefix)) return std::nullopt;
+    const std::string_view digits = name.substr(kModSettingsTabSlotPrefix.size());
+    std::uint16_t value{};
+    const auto parsed = std::from_chars(
+        digits.data(), digits.data() + digits.size(), value);
+    if (digits.empty() || parsed.ec != std::errc{} ||
+        parsed.ptr != digits.data() + digits.size()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+using ModSettingsTabSlots = std::array<
+    const Placement*, kModSettingsPatchedTabSlotCount>;
+
+[[nodiscard]] bool collect_mod_settings_tab_slots(
+    const Sprite& sprite,
+    std::uint16_t expected_count,
+    ModSettingsTabSlots& slots) noexcept {
+    slots = {};
+    std::size_t found{};
+    for (const Placement& placement : sprite.placements) {
+        if (!placement.has_name ||
+            !placement.name.starts_with(kModSettingsTabSlotPrefix)) {
+            continue;
+        }
+        const std::optional<std::uint16_t> index =
+            parse_mod_settings_tab_index(placement.name);
+        if (!index || *index >= expected_count || slots[*index]) return false;
+        slots[*index] = &placement;
+        ++found;
+    }
+    if (found != expected_count) return false;
+    for (std::uint16_t index = 0; index < expected_count; ++index) {
+        if (!slots[index]) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool mod_settings_tab_slots_match(
+    const Sprite& sprite,
+    bool back_list,
+    std::uint16_t expected_count,
+    ModSettingsTabSlots& slots) noexcept {
+    if (!collect_mod_settings_tab_slots(sprite, expected_count, slots)) {
+        return false;
+    }
+    if (!slots[0]->has_character || slots[0]->character_id == 0) return false;
+    // Slot 0 is always a native tab, so it names the native item symbol.
+    const std::uint16_t expected_character = slots[0]->character_id;
+    std::array<bool, kModSettingsPatchedTabSlotCount> used_top_depths{};
+    for (std::uint16_t index = 0; index < expected_count; ++index) {
+        const Placement& placement = *slots[index];
+        const bool custom_mod_settings_slot =
+            expected_count == kModSettingsPatchedTabSlotCount &&
+            index == kModSettingsHubSlot;
+        const std::int32_t expected_x = -9760 +
+            static_cast<std::int32_t>(index) * kModSettingsTabSlotStride;
+        bool depth_matches{};
+        if (back_list) {
+            depth_matches = placement.depth ==
+                5 + 6 * static_cast<std::int32_t>(expected_count - 1 - index);
+        } else {
+            // The generic movie stacks Item_0_0 lowest; the PC movie stacks
+            // it highest. Accept any unique 2 + 4k depth inside the list.
+            const std::int32_t step = static_cast<std::int32_t>(placement.depth) - 2;
+            if (step >= 0 && step % 4 == 0 && step / 4 < expected_count &&
+                !used_top_depths[static_cast<std::size_t>(step / 4)]) {
+                used_top_depths[static_cast<std::size_t>(step / 4)] = true;
+                depth_matches = true;
+            }
+        }
+        if (!placement.has_character || !placement.has_matrix ||
+            (custom_mod_settings_slot
+                ? (placement.character_id == 0 ||
+                    placement.character_id == expected_character)
+                : placement.character_id != expected_character) ||
+            (placement.translation.x != expected_x &&
+                !(expected_count == kModSettingsPatchedTabSlotCount &&
+                    placement.translation.x ==
+                        expected_x + kTabSlotSpacingOffsets[index])) ||
+            placement.translation.y != -6920 ||
+            !depth_matches) {
+            return false;
+        }
+    }
+
+    if (back_list) {
+        const Placement* const title = find_unique_placement(
+            sprite, kModSettingsTabTitleName);
+        const Placement* const right_arrow = find_unique_placement(
+            sprite, "RightArrow");
+        const std::uint16_t expected_title_depth = static_cast<std::uint16_t>(
+            5 + 6 * expected_count);
+        const bool right_arrow_position_matches = right_arrow &&
+            (expected_count == kModSettingsPatchedTabSlotCount
+                ? (is_right_arrow_x(right_arrow->translation.x, kNativeRightArrowX) ||
+                    is_right_arrow_x(right_arrow->translation.x, kExpandedRightArrowX))
+                : right_arrow->translation.x == kNativeRightArrowX);
+        if (!title || !title->has_character || !title->has_matrix ||
+            title->depth != expected_title_depth ||
+            title->translation.x != -11660 ||
+            title->translation.y != -8520 ||
+            !right_arrow || !right_arrow->has_character ||
+            !right_arrow->has_matrix ||
+            right_arrow->depth != 3 ||
+            !right_arrow_position_matches ||
+            right_arrow->translation.y != -6640) {
+            return false;
+        }
+    } else if (find_unique_placement(sprite, "RightArrow")) {
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool locate_mod_settings_tab_lists(
+    const ParsedGfx& parsed,
+    std::uint16_t expected_count,
+    const Sprite*& tab_list,
+    const Sprite*& back_tab_list,
+    ModSettingsTabSlots& tab_slots,
+    ModSettingsTabSlots& back_slots,
+    std::string& error) noexcept {
+    tab_list = nullptr;
+    back_tab_list = nullptr;
+    std::size_t tab_matches{};
+    std::size_t back_matches{};
+    for (const Sprite& sprite : parsed.sprites) {
+        ModSettingsTabSlots slots{};
+        if (mod_settings_tab_slots_match(
+                sprite, false, expected_count, slots)) {
+            tab_list = &sprite;
+            tab_slots = slots;
+            ++tab_matches;
+        }
+        if (mod_settings_tab_slots_match(
+                sprite, true, expected_count, slots)) {
+            back_tab_list = &sprite;
+            back_slots = slots;
+            ++back_matches;
+        }
+    }
+    if (tab_matches != 1 || back_matches != 1 ||
+        !tab_list || !back_tab_list) {
+        error = "the native TabList/BackTabList slot layout is not the supported 2.7.1.0 structure";
+        return false;
+    }
+    return true;
+}
+
+// The RB prompt symbol moves its child by (frame - 1) * slot stride, so the
+// engine's gotoAndStop(tabCount) places it after the last visible tab.
+[[nodiscard]] bool right_arrow_frame_offsets(
+    std::span<const std::uint8_t> bytes,
+    const Sprite& arrow,
+    std::vector<std::int32_t>& offsets) {
+    offsets.clear();
+    std::int32_t current_x{};
+    bool placed{};
+    for (const TagView& tag : arrow.tags) {
+        if (tag.code == kTagShowFrame) {
+            if (!placed) return false;
+            offsets.push_back(current_x);
+            continue;
+        }
+        if (tag.code != kTagPlaceObject2) continue;
+        Placement placement{};
+        if (!parse_placement(bytes, tag, placement) || placement.depth != 1) {
+            return false;
+        }
+        if (placement.has_character) placed = true;
+        if (placement.has_matrix) current_x = placement.translation.x;
+    }
+    return offsets.size() == arrow.frame_count;
+}
+
+[[nodiscard]] bool right_arrow_frames_cover(
+    std::span<const std::uint8_t> bytes,
+    const Sprite& arrow,
+    std::uint16_t slot_count) {
+    std::vector<std::int32_t> offsets{};
+    if (!right_arrow_frame_offsets(bytes, arrow, offsets) ||
+        offsets.size() < slot_count) {
+        return false;
+    }
+    for (std::size_t frame = 0; frame < offsets.size(); ++frame) {
+        if (offsets[frame] !=
+            static_cast<std::int32_t>(frame) * kModSettingsTabSlotStride) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] const TagView* show_frame_tag(
+    const Sprite& sprite,
+    std::uint16_t frame_number,
+    std::size_t* tag_index = nullptr) noexcept {
+    std::uint16_t current_frame{};
+    for (std::size_t index = 0; index < sprite.tags.size(); ++index) {
+        const TagView& tag = sprite.tags[index];
+        if (tag.code != kTagShowFrame) continue;
+        ++current_frame;
+        if (current_frame == frame_number) {
+            if (tag_index) *tag_index = index;
+            return &tag;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> make_mod_settings_tab_icon_placement(
+    std::uint16_t image_id);
+
+[[nodiscard]] std::optional<std::size_t> empty_mod_settings_icon_frame_offset(
+    std::span<const std::uint8_t> bytes,
+    const Sprite& sprite) noexcept {
+    std::size_t second_frame_tag_index{};
+    std::size_t third_frame_tag_index{};
+    const TagView* const second_frame = show_frame_tag(
+        sprite, 2, &second_frame_tag_index);
+    const TagView* const third_frame = show_frame_tag(
+        sprite, kModSettingsTabIconFrame, &third_frame_tag_index);
+    if (!second_frame || !third_frame ||
+        third_frame_tag_index != second_frame_tag_index + 2) {
+        return std::nullopt;
+    }
+    const TagView& clear_previous_icon =
+        sprite.tags[second_frame_tag_index + 1];
+    std::uint16_t cleared_depth{};
+    if (clear_previous_icon.code != kTagRemoveObject2 ||
+        clear_previous_icon.body_end - clear_previous_icon.body_start != 2 ||
+        !read_u16(bytes, clear_previous_icon.body_start, cleared_depth) ||
+        cleared_depth != 1) {
+        return std::nullopt;
+    }
+    return third_frame->tag_start;
+}
+
+[[nodiscard]] bool mod_settings_icon_frame_matches(
+    std::span<const std::uint8_t> bytes,
+    const Sprite& sprite,
+    std::uint16_t image_id) {
+    std::size_t second_frame_index{};
+    std::size_t third_frame_index{};
+    if (!show_frame_tag(sprite, 2, &second_frame_index) ||
+        !show_frame_tag(sprite, kModSettingsTabIconFrame,
+            &third_frame_index) ||
+        third_frame_index != second_frame_index + 3) {
+        return false;
+    }
+    const TagView& clear_previous_icon = sprite.tags[second_frame_index + 1];
+    std::uint16_t cleared_depth{};
+    if (clear_previous_icon.code != kTagRemoveObject2 ||
+        clear_previous_icon.body_end - clear_previous_icon.body_start != 2 ||
+        !read_u16(bytes, clear_previous_icon.body_start, cleared_depth) ||
+        cleared_depth != 1) {
+        return false;
+    }
+    const TagView& image_placement = sprite.tags[second_frame_index + 2];
+    return image_placement.code == kTagPlaceObject3 &&
+        tag_equals(
+            bytes,
+            image_placement,
+            make_mod_settings_tab_icon_placement(image_id));
+}
+
+// The game resolves external tab images by name from its own SB_Tab atlas,
+// which has no entry for the Hub, so the icon is embedded: a
+// DefineBitsLossless2 drawn through a clipped-bitmap DefineShape. The
+// placement keeps its 0.4 scale and -320 twip offset; the 2800-twip square at
+// -600 therefore renders 56 px wide, centred like the native 0.5-scale icons.
+constexpr std::int32_t kModSettingsTabIconShapeOrigin = -600;
+constexpr std::int32_t kModSettingsTabIconShapeSize = 2800;
+constexpr std::uint32_t kModSettingsTabIconShapeBits = 14;
+#include "mod_settings_tab_icon.inc"
+static_assert(sizeof(kModSettingsTabIconArgb) ==
+    std::size_t{kModSettingsTabIconWidth} * kModSettingsTabIconHeight * 4U);
+
+// Zlib stream made of stored deflate blocks; GFx inflates it like any other.
+[[nodiscard]] std::vector<std::uint8_t> make_stored_zlib(
+    std::span<const std::uint8_t> data) {
+    std::vector<std::uint8_t> output{0x78U, 0x01U};
+    std::size_t position = 0;
+    do {
+        const std::size_t length = std::min<std::size_t>(
+            0xFFFFU, data.size() - position);
+        const bool last = position + length >= data.size();
+        output.push_back(last ? 1U : 0U);
+        append_u16(output, static_cast<std::uint16_t>(length));
+        append_u16(output, static_cast<std::uint16_t>(~length & 0xFFFFU));
+        output.insert(
+            output.end(),
+            data.begin() + static_cast<std::ptrdiff_t>(position),
+            data.begin() + static_cast<std::ptrdiff_t>(position + length));
+        position += length;
+    } while (position < data.size());
+    std::uint32_t a = 1;
+    std::uint32_t b = 0;
+    for (const std::uint8_t value : data) {
+        a = (a + value) % 65521U;
+        b = (b + a) % 65521U;
+    }
+    const std::uint32_t adler = (b << 16U) | a;
+    output.push_back(static_cast<std::uint8_t>(adler >> 24U));
+    output.push_back(static_cast<std::uint8_t>(adler >> 16U));
+    output.push_back(static_cast<std::uint8_t>(adler >> 8U));
+    output.push_back(static_cast<std::uint8_t>(adler));
+    return output;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> make_mod_settings_tab_bitmap(
+    std::uint16_t bitmap_id) {
+    std::vector<std::uint8_t> body{};
+    append_u16(body, bitmap_id);
+    body.push_back(5); // 32-bit premultiplied ARGB
+    append_u16(body, kModSettingsTabIconWidth);
+    append_u16(body, kModSettingsTabIconHeight);
+    const std::vector<std::uint8_t> pixels = make_stored_zlib(
+        kModSettingsTabIconArgb);
+    body.insert(body.end(), pixels.begin(), pixels.end());
+    return make_tag(kTagDefineBitsLossless2, body, true);
+}
+
+[[nodiscard]] std::vector<std::uint8_t> make_mod_settings_tab_shape(
+    std::uint16_t shape_id,
+    std::uint16_t bitmap_id) {
+    constexpr std::int32_t x0 = kModSettingsTabIconShapeOrigin;
+    constexpr std::int32_t size = kModSettingsTabIconShapeSize;
+    constexpr std::uint32_t bits = kModSettingsTabIconShapeBits;
+    std::vector<std::uint8_t> body{};
+    append_u16(body, shape_id);
+    {
+        BitWriter writer(body);
+        writer.write(bits, 5);
+        writer.write_signed(x0, bits);
+        writer.write_signed(x0 + size, bits);
+        writer.write_signed(x0, bits);
+        writer.write_signed(x0 + size, bits);
+        writer.align();
+    }
+    body.push_back(1);     // one fill style
+    body.push_back(0x41U); // clipped bitmap fill
+    append_u16(body, bitmap_id);
+    // Twips per bitmap pixel in 16.16 fixed point.
+    const std::int32_t fill_scale = static_cast<std::int32_t>(
+        (std::int64_t{size} << 16U) / kModSettingsTabIconWidth);
+    append_matrix(body, x0, x0, fill_scale, fill_scale);
+    body.push_back(0);     // no line styles
+    BitWriter writer(body);
+    writer.write(1, 4);    // NumFillBits
+    writer.write(0, 4);    // NumLineBits
+    writer.write(0b000101, 6); // StyleChange: FillStyle1 + MoveTo
+    writer.write(bits, 5);
+    writer.write_signed(x0, bits);
+    writer.write_signed(x0, bits);
+    writer.write(1, 1);    // FillStyle1 = 1
+    constexpr std::array<std::array<std::int32_t, 2>, 4> edges{{
+        {size, 0}, {0, size}, {-size, 0}, {0, -size}}};
+    for (const auto& edge : edges) {
+        writer.write(0b11, 2); // straight edge
+        writer.write(bits - 2U, 4);
+        writer.write(0, 1);    // not a general line
+        const bool vertical = edge[0] == 0;
+        writer.write(vertical ? 1U : 0U, 1);
+        writer.write_signed(vertical ? edge[1] : edge[0], bits);
+    }
+    writer.write(0, 6);    // EndShapeRecord
+    writer.align();
+    return make_tag(kTagDefineShape, body, true);
+}
+
+[[nodiscard]] std::vector<std::uint8_t> make_mod_settings_tab_icon_placement(
+    std::uint16_t shape_id) {
+    std::vector<std::uint8_t> body{};
+    body.push_back(0x06U); // character + matrix
+    body.push_back(0x00U);
+    append_u16(body, 1);
+    append_u16(body, shape_id);
+    append_matrix(body, -320, -320, 26214, 26214);
+    return make_tag(kTagPlaceObject3, body, true);
+}
+
+// Finds the embedded tab icon: a DefineBitsLossless2 immediately followed by
+// the DefineShape that fills with it, both byte-identical to what the patcher
+// writes.
+[[nodiscard]] bool find_mod_settings_tab_icon(
+    std::span<const std::uint8_t> bytes,
+    const ParsedGfx& parsed,
+    std::size_t& bitmap_tag_start,
+    std::uint16_t& shape_id) {
+    bool found = false;
+    for (std::size_t index = 0; index + 1 < parsed.top_level_tags.size(); ++index) {
+        const TagView& bitmap = parsed.top_level_tags[index];
+        const TagView& shape = parsed.top_level_tags[index + 1];
+        if (bitmap.code != kTagDefineBitsLossless2 || shape.code != kTagDefineShape) {
+            continue;
+        }
+        std::uint16_t bitmap_id{};
+        std::uint16_t candidate_shape{};
+        if (!read_u16(bytes, bitmap.body_start, bitmap_id) ||
+            !read_u16(bytes, shape.body_start, candidate_shape) ||
+            !tag_equals(bytes, bitmap, make_mod_settings_tab_bitmap(bitmap_id)) ||
+            !tag_equals(bytes, shape,
+                make_mod_settings_tab_shape(candidate_shape, bitmap_id))) {
+            continue;
+        }
+        if (found) return false;
+        found = true;
+        bitmap_tag_start = bitmap.tag_start;
+        shape_id = candidate_shape;
+    }
+    return found;
+}
+
+struct SpriteCharacterRemap {
+    std::uint16_t source{};
+    std::uint16_t replacement{};
+};
+
+struct ModSettingsTabCloneIds {
+    std::uint16_t regular_icon{};
+    std::uint16_t selected_icon{};
+    std::uint16_t back_cursor{};
+    std::uint16_t regular_tab_item{};
+    std::uint16_t back_tab_item{};
+};
+
+[[nodiscard]] bool make_sprite_clone(
+    std::span<const std::uint8_t> bytes,
+    const Sprite& source,
+    std::uint16_t clone_id,
+    std::span<const SpriteCharacterRemap> remaps,
+    std::vector<std::uint8_t>& clone,
+    std::string& error) {
+    if (source.tag.tag_start >= source.tag.body_end ||
+        source.tag.body_end > bytes.size() ||
+        source.tag.body_start + 4 > source.tag.body_end || clone_id == 0) {
+        error = "native tab sprite clone has an invalid definition range";
+        return false;
+    }
+    clone.assign(
+        bytes.begin() + static_cast<std::ptrdiff_t>(source.tag.tag_start),
+        bytes.begin() + static_cast<std::ptrdiff_t>(source.tag.body_end));
+    const std::size_t relative_body =
+        source.tag.body_start - source.tag.tag_start;
+    write_u16(clone, relative_body, clone_id);
+
+    for (const Placement& placement : source.placements) {
+        if (!placement.has_character) continue;
+        const auto remap = std::find_if(
+            remaps.begin(), remaps.end(),
+            [&placement](const SpriteCharacterRemap& candidate) {
+                return placement.character_id == candidate.source;
+            });
+        if (remap == remaps.end()) continue;
+        const std::size_t relative_tag_body =
+            placement.tag.body_start - source.tag.tag_start;
+        const std::size_t relative_character = relative_tag_body +
+            (placement.is_place_object3 ? 4U : 3U);
+        if (relative_character + 2 > clone.size()) {
+            error = "native tab sprite child reference lies outside its definition";
+            return false;
+        }
+        write_u16(clone, relative_character, remap->replacement);
+    }
+    return true;
+}
+
+[[nodiscard]] bool insert_sprite_clone_definitions(
+    std::vector<std::uint8_t>& output,
+    const ParsedGfx& parsed,
+    std::size_t insertion,
+    std::span<const std::uint8_t> definitions,
+    std::string& error) {
+    if (definitions.empty() || insertion < parsed.top_level_start ||
+        insertion > parsed.declared_length ||
+        definitions.size() > std::numeric_limits<std::uint32_t>::max() -
+            parsed.declared_length) {
+        error = "native tab sprite definitions cannot be inserted at this GFX offset";
+        return false;
+    }
+    output.insert(
+        output.begin() + static_cast<std::ptrdiff_t>(insertion),
+        definitions.begin(), definitions.end());
+    write_u32(output, 4, parsed.declared_length +
+        static_cast<std::uint32_t>(definitions.size()));
+    return true;
+}
+
+[[nodiscard]] bool locate_mod_settings_top_tab_context(
+    std::span<const std::uint8_t> bytes,
+    const ParsedGfx& parsed,
+    std::uint16_t expected_count,
+    ModSettingsTopTabContext& context,
+    ModSettingsTabSlots& tab_slots,
+    ModSettingsTabSlots& back_slots,
+    std::string& error) {
+    const Sprite* tab_list{};
+    const Sprite* back_tab_list{};
+    if (!locate_mod_settings_tab_lists(
+            parsed,
+            expected_count,
+            tab_list,
+            back_tab_list,
+            tab_slots,
+            back_slots,
+            error)) {
+        return false;
+    }
+    // Native symbols are named by slot 0 (always a vanilla tab) and by the
+    // Cursor/HitArea/ItemIcon children, never by fixed IDs: the generic and
+    // PC movies number them differently.
+    const Sprite* const native_regular_tab_item = find_sprite(
+        parsed, tab_slots[0]->character_id);
+    const Sprite* const native_back_tab_item = find_sprite(
+        parsed, back_slots[0]->character_id);
+    if (!native_regular_tab_item || !native_back_tab_item) {
+        error = "the native tab item sprites are missing";
+        return false;
+    }
+    const Placement* const native_regular_hit_area =
+        find_unique_placement(*native_regular_tab_item, "HitArea");
+    const Placement* const native_cursor_placement =
+        find_unique_placement(*native_back_tab_item, kCursorName);
+    const Placement* const native_hit_area =
+        find_unique_placement(*native_back_tab_item, "HitArea");
+    if (!native_regular_hit_area || !native_regular_hit_area->has_character ||
+        native_back_tab_item->frame_count != 1 ||
+        native_back_tab_item->placements.size() != 2 ||
+        !native_cursor_placement || !native_cursor_placement->has_character ||
+        native_cursor_placement->depth != 1 ||
+        !native_hit_area || !native_hit_area->has_character ||
+        native_hit_area->character_id != native_regular_hit_area->character_id ||
+        native_hit_area->depth != 5) {
+        error = "the native BackTab item symbol does not match the supported 2.7.1.0 structure";
+        return false;
+    }
+    const std::uint16_t hit_area_id = native_hit_area->character_id;
+    const Sprite* const native_cursor = find_sprite(
+        parsed, native_cursor_placement->character_id);
+    if (!native_cursor) {
+        error = "the native tab cursor sprite is missing";
+        return false;
+    }
+    const Placement* const native_regular_icon_placement =
+        find_unique_placement(*native_regular_tab_item, kModSettingsTabIconName);
+    const Placement* const native_selected_icon_placement =
+        find_unique_placement(*native_cursor, kModSettingsTabIconName);
+    const Sprite* const native_regular_icon =
+        native_regular_icon_placement && native_regular_icon_placement->has_character
+        ? find_sprite(parsed, native_regular_icon_placement->character_id)
+        : nullptr;
+    const Sprite* const native_selected_icon =
+        native_selected_icon_placement && native_selected_icon_placement->has_character
+        ? find_sprite(parsed, native_selected_icon_placement->character_id)
+        : nullptr;
+    if (!native_regular_icon || !native_selected_icon ||
+        native_regular_icon == native_selected_icon) {
+        error = "the native selected/unselected tab icon placements are not recognized";
+        return false;
+    }
+    if (native_regular_icon->frame_count != 34 ||
+        native_selected_icon->frame_count != 34) {
+        error = "the native ItemIcon movies do not match the supported 2.7.1.0 structure";
+        return false;
+    }
+    const Placement* const right_arrow_placement =
+        find_unique_placement(*back_tab_list, "RightArrow");
+    const Sprite* const right_arrow = right_arrow_placement
+        ? find_sprite(parsed, right_arrow_placement->character_id)
+        : nullptr;
+    if (!right_arrow || !right_arrow_frames_cover(
+            bytes, *right_arrow,
+            std::min<std::uint16_t>(expected_count, kModSettingsTabSlotCount))) {
+        error = "the native RB prompt timeline does not match the supported 2.7.1.0 structure";
+        return false;
+    }
+
+    const Sprite* regular_tab_item = native_regular_tab_item;
+    const Sprite* back_tab_item = native_back_tab_item;
+    const Sprite* back_cursor = native_cursor;
+    const Sprite* regular_icon_sprite = native_regular_icon;
+    const Sprite* selected_icon_sprite = native_selected_icon;
+    if (expected_count == kModSettingsPatchedTabSlotCount) {
+        const Placement& hub_slot = *tab_slots[kModSettingsHubSlot];
+        const Placement& hub_back_slot = *back_slots[kModSettingsHubSlot];
+        if (hub_slot.character_id == native_regular_tab_item->id ||
+            hub_back_slot.character_id == native_back_tab_item->id ||
+            tab_slots[kModSettingsHubSlot + 1]->character_id !=
+                native_regular_tab_item->id ||
+            back_slots[kModSettingsHubSlot + 1]->character_id !=
+                native_back_tab_item->id) {
+            error = "the appended Mod Settings and native Quit Game selector slots are not assigned separately";
+            return false;
+        }
+        regular_tab_item = find_sprite(parsed, hub_slot.character_id);
+        back_tab_item = find_sprite(parsed, hub_back_slot.character_id);
+        const Placement* const back_cursor_placement = back_tab_item
+            ? find_unique_placement(*back_tab_item, kCursorName)
+            : nullptr;
+        const Placement* const custom_hit_area = back_tab_item
+            ? find_unique_placement(*back_tab_item, "HitArea")
+            : nullptr;
+        if (!regular_tab_item || !back_tab_item ||
+            regular_tab_item == native_regular_tab_item ||
+            back_tab_item == native_back_tab_item ||
+            regular_tab_item->frame_count != native_regular_tab_item->frame_count ||
+            regular_tab_item->placements.size() != native_regular_tab_item->placements.size() ||
+            back_tab_item->frame_count != native_back_tab_item->frame_count ||
+            back_tab_item->placements.size() != native_back_tab_item->placements.size() ||
+            !back_cursor_placement || !back_cursor_placement->has_character ||
+            back_cursor_placement->character_id == native_cursor->id ||
+            back_cursor_placement->depth != 1 ||
+            !custom_hit_area || !custom_hit_area->has_character ||
+            custom_hit_area->character_id != hit_area_id ||
+            custom_hit_area->depth != 5) {
+            error = "the custom BackTab item is not isolated from native tab symbols";
+            return false;
+        }
+        back_cursor = find_sprite(parsed, back_cursor_placement->character_id);
+        const Placement* const custom_regular_icon_placement =
+            find_unique_placement(*regular_tab_item, kModSettingsTabIconName);
+        const Placement* const custom_selected_icon_placement = back_cursor
+            ? find_unique_placement(*back_cursor, kModSettingsTabIconName)
+            : nullptr;
+        if (!back_cursor ||
+            back_cursor == native_cursor ||
+            back_cursor->frame_count != native_cursor->frame_count ||
+            back_cursor->placements.size() != native_cursor->placements.size() ||
+            !custom_regular_icon_placement ||
+            !custom_regular_icon_placement->has_character ||
+            custom_regular_icon_placement->character_id ==
+                native_regular_icon->id ||
+            !custom_selected_icon_placement ||
+            !custom_selected_icon_placement->has_character ||
+            custom_selected_icon_placement->character_id ==
+                native_selected_icon->id) {
+            error = "the custom tab item does not use private ItemIcon symbols";
+            return false;
+        }
+        regular_icon_sprite = find_sprite(
+            parsed, custom_regular_icon_placement->character_id);
+        selected_icon_sprite = find_sprite(
+            parsed, custom_selected_icon_placement->character_id);
+        if (!regular_icon_sprite || !selected_icon_sprite ||
+            regular_icon_sprite == native_regular_icon ||
+            selected_icon_sprite == native_selected_icon ||
+            regular_icon_sprite->frame_count != native_regular_icon->frame_count ||
+            selected_icon_sprite->frame_count != native_selected_icon->frame_count) {
+            error = "the custom ItemIcon clones do not match the native movie structure";
+            return false;
+        }
+    }
+
+    context = {
+        .tab_list = tab_list,
+        .back_tab_list = back_tab_list,
+        .regular_tab_item = regular_tab_item,
+        .back_tab_item = back_tab_item,
+        .back_cursor = back_cursor,
+        .regular_icon = regular_icon_sprite,
+        .selected_icon = selected_icon_sprite,
+        .native_regular_tab_item = native_regular_tab_item,
+        .native_back_tab_item = native_back_tab_item,
+        .native_cursor = native_cursor,
+        .native_regular_icon = native_regular_icon,
+        .native_selected_icon = native_selected_icon,
+        .right_arrow = right_arrow,
+    };
+    return true;
+}
+
+[[nodiscard]] bool mod_settings_top_tab_matches(
+    std::span<const std::uint8_t> bytes,
+    const ParsedGfx& parsed,
+    std::string* diagnostic = nullptr) {
+    const auto fail = [diagnostic](std::string_view message) {
+        if (diagnostic) *diagnostic = message;
+        return false;
+    };
+    ModSettingsTopTabContext context{};
+    ModSettingsTabSlots tab_slots{};
+    ModSettingsTabSlots back_slots{};
+    std::string error{};
+    if (!locate_mod_settings_top_tab_context(
+            bytes,
+            parsed,
+            kModSettingsPatchedTabSlotCount,
+            context,
+            tab_slots,
+            back_slots,
+            error)) {
+        return fail(error);
+    }
+    const Placement* const right_arrow = find_unique_placement(
+        *context.back_tab_list, "RightArrow");
+    // Generic r30 layout: 8-frame prompt shifted by two slots. PC layout:
+    // native position with a 10-frame prompt timeline.
+    if (!right_arrow ||
+        !(is_right_arrow_x(right_arrow->translation.x, kExpandedRightArrowX) ||
+            (is_right_arrow_x(right_arrow->translation.x, kNativeRightArrowX) &&
+                right_arrow_frames_cover(
+                    bytes, *context.right_arrow,
+                    kModSettingsPatchedTabSlotCount)))) {
+        return fail("the RB prompt is not positioned after the Quit Game tab");
+    }
+    std::size_t icon_definition_start{};
+    std::uint16_t icon_shape{};
+    if (!find_mod_settings_tab_icon(bytes, parsed, icon_definition_start, icon_shape) ||
+        icon_definition_start >= context.regular_icon->tag.tag_start ||
+        icon_definition_start >= context.selected_icon->tag.tag_start) {
+        return fail("the embedded tab icon definitions are missing or misplaced");
+    }
+    if (!mod_settings_icon_frame_matches(
+            bytes, *context.regular_icon, icon_shape) ||
+        !mod_settings_icon_frame_matches(
+            bytes, *context.selected_icon, icon_shape)) {
+        return fail("selected/unselected ItemIcon frame 3 placements did not verify");
+    }
+    if (!empty_mod_settings_icon_frame_offset(
+            bytes, *context.native_regular_icon) ||
+        !empty_mod_settings_icon_frame_offset(
+            bytes, *context.native_selected_icon)) {
+        return fail("the vanilla tab icon timelines were modified by the custom tab");
+    }
+    if (!sprite_reference_graph_is_acyclic(parsed)) {
+        return fail("the settings GFX contains duplicate IDs or recursive sprite references");
+    }
+    return true;
+}
+
+struct SpriteTagInsertion {
+    TagView sprite_tag{};
+    std::size_t insertion_offset{};
+    std::vector<std::uint8_t> bytes{};
+};
+
+[[nodiscard]] bool apply_sprite_tag_insertions(
+    std::vector<std::uint8_t>& output,
+    const ParsedGfx& parsed,
+    std::vector<SpriteTagInsertion> insertions,
+    std::string& error) {
+    struct SpriteLengthUpdate {
+        TagView sprite_tag{};
+        std::size_t added_bytes{};
+    };
+    std::size_t total_added{};
+    std::vector<SpriteLengthUpdate> length_updates{};
+    for (const SpriteTagInsertion& insertion : insertions) {
+        if (insertion.bytes.empty() ||
+            insertion.insertion_offset < insertion.sprite_tag.body_start ||
+            insertion.insertion_offset > insertion.sprite_tag.body_end ||
+            insertion.bytes.size() >
+                std::numeric_limits<std::uint32_t>::max() - total_added) {
+            error = "native top-level tab insertion offsets are invalid";
+            return false;
+        }
+        total_added += insertion.bytes.size();
+        const auto existing_update = std::find_if(
+            length_updates.begin(),
+            length_updates.end(),
+            [&insertion](const SpriteLengthUpdate& update) {
+                return update.sprite_tag.tag_start ==
+                    insertion.sprite_tag.tag_start;
+            });
+        if (existing_update == length_updates.end()) {
+            length_updates.push_back({insertion.sprite_tag, insertion.bytes.size()});
+        } else {
+            existing_update->added_bytes += insertion.bytes.size();
+        }
+    }
+    for (const SpriteLengthUpdate& update : length_updates) {
+        if (!patch_tag_body_length(
+                output, update.sprite_tag, update.added_bytes, error)) {
+            return false;
+        }
+    }
+    std::stable_sort(
+        insertions.begin(),
+        insertions.end(),
+        [](const SpriteTagInsertion& left, const SpriteTagInsertion& right) {
+            return left.insertion_offset > right.insertion_offset;
+        });
+    for (std::size_t group_begin = 0; group_begin < insertions.size();) {
+        std::size_t group_end = group_begin + 1;
+        while (group_end < insertions.size() &&
+            insertions[group_end].insertion_offset ==
+                insertions[group_begin].insertion_offset) {
+            ++group_end;
+        }
+        // Repeated insertion at the same offset prepends each new byte range.
+        // Apply equal-offset insertions in reverse so their final file order
+        // matches the order in which the insertions were declared.
+        for (std::size_t index = group_end; index > group_begin; --index) {
+            const SpriteTagInsertion& insertion = insertions[index - 1];
+            output.insert(
+                output.begin() + static_cast<std::ptrdiff_t>(
+                    insertion.insertion_offset),
+                insertion.bytes.begin(),
+                insertion.bytes.end());
+        }
+        group_begin = group_end;
+    }
+    if (total_added > std::numeric_limits<std::uint32_t>::max() -
+            parsed.declared_length) {
+        error = "native top-level tab patch would overflow the GFX movie length";
+        return false;
+    }
+    write_u32(
+        output,
+        4,
+        parsed.declared_length + static_cast<std::uint32_t>(total_added));
+    return true;
+}
+
+// Re-emits a native tab slot placement (keeping its color transform) with a
+// new character, depth, x translation and instance name.
+[[nodiscard]] bool make_slot_placement_clone(
+    std::span<const std::uint8_t> bytes,
+    const Placement& source,
+    std::uint16_t character_id,
+    std::uint16_t depth,
+    std::int32_t x,
+    std::string_view name,
+    std::vector<std::uint8_t>& tag,
+    std::string& error) {
+    constexpr std::uint8_t kAllowedFlags = 0x2EU; // name, cxform, matrix, character
+    if (source.is_place_object3 || source.tag.code != kTagPlaceObject2 ||
+        !source.has_character || !source.has_matrix || !source.has_name ||
+        (source.flags & ~kAllowedFlags) != 0 ||
+        source.tag.body_start + 5 >= source.tag.body_end) {
+        error = "the native tab slot placement cannot be cloned";
+        return false;
+    }
+    const std::size_t matrix_start = source.tag.body_start + 5;
+    if ((bytes[matrix_start] & 0xC0U) != 0) {
+        error = "the native tab slot placement uses a scaled or rotated matrix";
+        return false;
+    }
+    std::size_t offset = matrix_start;
+    MatrixTranslation ignored{};
+    if (!skip_matrix(bytes, offset, source.tag.body_end, ignored)) {
+        error = "the native tab slot matrix is malformed";
+        return false;
+    }
+    const std::size_t extras_begin = offset;
+    if ((source.flags & 0x08U) != 0 &&
+        !skip_color_transform(bytes, offset, source.tag.body_end)) {
+        error = "the native tab slot color transform is malformed";
+        return false;
+    }
+    const std::size_t extras_end = offset;
+    if (extras_end + source.name.size() + 1 != source.tag.body_end) {
+        error = "the native tab slot placement carries unsupported trailing data";
+        return false;
+    }
+    std::vector<std::uint8_t> body{};
+    body.push_back(source.flags);
+    append_u16(body, depth);
+    append_u16(body, character_id);
+    append_matrix(body, x, source.translation.y);
+    body.insert(
+        body.end(),
+        bytes.begin() + static_cast<std::ptrdiff_t>(extras_begin),
+        bytes.begin() + static_cast<std::ptrdiff_t>(extras_end));
+    body.insert(body.end(), name.begin(), name.end());
+    body.push_back(0);
+    tag = make_tag(kTagPlaceObject2, body);
+    return true;
+}
+
+// One more RB prompt frame: move depth 1 by (frame - 1) * stride, then show.
+[[nodiscard]] std::vector<std::uint8_t> make_right_arrow_frame(
+    std::uint16_t frame_index) {
+    std::vector<std::uint8_t> body{};
+    body.push_back(0x05U); // move + matrix
+    append_u16(body, 1);
+    append_matrix(
+        body,
+        static_cast<std::int32_t>(frame_index) * kModSettingsTabSlotStride,
+        0);
+    std::vector<std::uint8_t> output = make_tag(kTagPlaceObject2, body);
+    const std::vector<std::uint8_t> show_frame = make_tag(kTagShowFrame, {});
+    output.insert(output.end(), show_frame.begin(), show_frame.end());
+    return output;
+}
+
+[[nodiscard]] bool ensure_mod_settings_top_level_tab(
+    std::vector<std::uint8_t>& output,
+    std::string& error,
+    bool& added) {
+    added = false;
+    ParsedGfx parsed{};
+    ErrorCode code{};
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    if (mod_settings_top_tab_matches(output, parsed)) return true;
+
+    ModSettingsTopTabContext existing_context{};
+    ModSettingsTabSlots existing_tab_slots{};
+    ModSettingsTabSlots existing_back_slots{};
+    if (locate_mod_settings_top_tab_context(
+            output,
+            parsed,
+            kModSettingsPatchedTabSlotCount,
+            existing_context,
+            existing_tab_slots,
+            existing_back_slots,
+            error)) {
+        // Only the generic r29 layout (8-frame prompt left at its native
+        // position) is migrated in place.
+        const Placement* const existing_right_arrow = find_unique_placement(
+            *existing_context.back_tab_list, "RightArrow");
+        if (!existing_right_arrow ||
+            existing_right_arrow->translation.x != kNativeRightArrowX ||
+            existing_context.right_arrow->frame_count != kModSettingsTabSlotCount ||
+            !set_place_object2_translation_x(
+                output,
+                *existing_right_arrow,
+                kNativeRightArrowX,
+                kExpandedRightArrowX)) {
+            error = "the existing ten-slot tab layout has an unsupported RB prompt position";
+            return false;
+        }
+        if (!parse_gfx(output, parsed, code, error) ||
+            !mod_settings_top_tab_matches(output, parsed, &error)) {
+            if (error.empty()) {
+                error = "the migrated ten-slot RB prompt did not verify";
+            }
+            return false;
+        }
+        added = true;
+        return true;
+    }
+    error.clear();
+
+    for (const TagView& tag : parsed.top_level_tags) {
+        if (tag.code == kTagDefineExternalImage2) {
+            ExternalImage image{};
+            if (!parse_external_image(output, tag, image)) {
+                error = "an external image definition in 02_040 is malformed";
+                return false;
+            }
+            if (image.file_name == kModSettingsTabIconFile ||
+                image.file_name == kModSettingsTabSelectedFile) {
+                error = "an older (TGA) Mod Settings tab icon patch was found; patch the vanilla movie instead";
+                return false;
+            }
+        }
+    }
+    {
+        std::size_t existing_icon{};
+        std::uint16_t existing_shape{};
+        if (find_mod_settings_tab_icon(output, parsed, existing_icon, existing_shape)) {
+            error = "a partial Mod Settings tab icon patch was found; refusing to modify the movie again";
+            return false;
+        }
+    }
+
+    // PC (menu\win) movies carry 9 native slots, the generic movie 8. Slot
+    // collection is exact, so a partial append fails both probes.
+    ModSettingsTopTabContext context{};
+    ModSettingsTabSlots tab_slots{};
+    ModSettingsTabSlots back_slots{};
+    std::uint16_t native_count{};
+    for (const std::uint16_t candidate :
+            {kModSettingsPcTabSlotCount, kModSettingsTabSlotCount}) {
+        error.clear();
+        if (locate_mod_settings_top_tab_context(
+                output, parsed, candidate, context, tab_slots, back_slots, error)) {
+            native_count = candidate;
+            break;
+        }
+    }
+    if (native_count == 0) {
+        if (error.empty()) {
+            error = "the native top-level tab layout was not recognized";
+        }
+        return false;
+    }
+
+    const std::optional<std::uint16_t> first_character =
+        next_character_id(output, parsed);
+    if (!first_character ||
+        *first_character >= std::numeric_limits<std::uint16_t>::max()) {
+        error = "there are not two free character IDs for the custom tab icons";
+        return false;
+    }
+    // Normal and selected ItemIcon timelines share one image, as the native
+    // tabs do.
+    const std::uint16_t icon_bitmap = *first_character;
+    const std::uint16_t icon_shape = static_cast<std::uint16_t>(
+        *first_character + 1U);
+    std::vector<std::uint8_t> image_definitions =
+        make_mod_settings_tab_bitmap(icon_bitmap);
+    const std::vector<std::uint8_t> shape_definition =
+        make_mod_settings_tab_shape(icon_shape, icon_bitmap);
+    image_definitions.insert(
+        image_definitions.end(),
+        shape_definition.begin(),
+        shape_definition.end());
+    const std::size_t resource_insertion = std::min(
+        context.regular_icon->tag.tag_start,
+        context.selected_icon->tag.tag_start);
+    if (!replace_resource_closure(
+            output,
+            parsed,
+            resource_insertion,
+            {},
+            image_definitions,
+            error)) {
+        return false;
+    }
+
+    if (!parse_gfx(output, parsed, code, error) ||
+        !locate_mod_settings_top_tab_context(
+            output,
+            parsed,
+            native_count,
+            context,
+            tab_slots,
+            back_slots,
+            error)) {
+        return false;
+    }
+
+    const std::optional<std::uint16_t> first_sprite_id =
+        next_character_id(output, parsed);
+    constexpr std::uint16_t kSpriteClonesNeeded = 5;
+    if (!first_sprite_id ||
+        *first_sprite_id > std::numeric_limits<std::uint16_t>::max() -
+            (kSpriteClonesNeeded - 1U)) {
+        error = "there are not five free character IDs for private tab symbols";
+        return false;
+    }
+    const ModSettingsTabCloneIds clone_ids{
+        .regular_icon = *first_sprite_id,
+        .selected_icon = static_cast<std::uint16_t>(*first_sprite_id + 1U),
+        .back_cursor = static_cast<std::uint16_t>(*first_sprite_id + 2U),
+        .regular_tab_item = static_cast<std::uint16_t>(*first_sprite_id + 3U),
+        .back_tab_item = static_cast<std::uint16_t>(*first_sprite_id + 4U),
+    };
+    const std::array<SpriteCharacterRemap, 1> regular_item_remaps{{
+        {context.native_regular_icon->id, clone_ids.regular_icon},
+    }};
+    const std::array<SpriteCharacterRemap, 1> cursor_remaps{{
+        {context.native_selected_icon->id, clone_ids.selected_icon},
+    }};
+    const std::array<SpriteCharacterRemap, 1> back_item_remaps{{
+        {context.native_cursor->id, clone_ids.back_cursor},
+    }};
+    std::vector<std::uint8_t> cloned_sprite_definitions{};
+    const auto append_sprite_clone = [&](
+            const Sprite* source,
+            std::uint16_t new_id,
+            std::span<const SpriteCharacterRemap> remaps) {
+        if (!source) {
+            error = "one of the native top-level tab symbols is missing";
+            return false;
+        }
+        std::vector<std::uint8_t> clone{};
+        if (!make_sprite_clone(output, *source, new_id, remaps, clone, error)) {
+            return false;
+        }
+        cloned_sprite_definitions.insert(
+            cloned_sprite_definitions.end(), clone.begin(), clone.end());
+        return true;
+    };
+    if (!append_sprite_clone(context.regular_icon, clone_ids.regular_icon, {}) ||
+        !append_sprite_clone(context.selected_icon, clone_ids.selected_icon, {}) ||
+        !append_sprite_clone(
+            context.back_cursor, clone_ids.back_cursor, cursor_remaps) ||
+        !append_sprite_clone(
+            context.regular_tab_item,
+            clone_ids.regular_tab_item,
+            regular_item_remaps) ||
+        !append_sprite_clone(
+            context.back_tab_item,
+            clone_ids.back_tab_item,
+            back_item_remaps)) {
+        return false;
+    }
+    const std::size_t sprite_definition_insertion = std::min(
+        context.tab_list->tag.tag_start,
+        context.back_tab_list->tag.tag_start);
+    if (!insert_sprite_clone_definitions(
+            output,
+            parsed,
+            sprite_definition_insertion,
+            cloned_sprite_definitions,
+            error)) {
+        return false;
+    }
+
+    if (!parse_gfx(output, parsed, code, error) ||
+        !locate_mod_settings_top_tab_context(
+            output,
+            parsed,
+            native_count,
+            context,
+            tab_slots,
+            back_slots,
+            error)) {
+        return false;
+    }
+    const std::uint16_t native_tab_item = context.native_regular_tab_item->id;
+    const std::uint16_t native_back_item = context.native_back_tab_item->id;
+    const Placement* const native_right_arrow = find_unique_placement(
+        *context.back_tab_list, "RightArrow");
+    if (!native_right_arrow ||
+        native_right_arrow->depth != 3 ||
+        native_right_arrow->translation.x != kNativeRightArrowX ||
+        native_right_arrow->translation.y != -6640 ||
+        context.right_arrow->frame_count != native_count) {
+        error = "the native RB prompt placement is not recognized";
+        return false;
+    }
+    const Sprite* const regular_icon_clone =
+        find_sprite(parsed, clone_ids.regular_icon);
+    const Sprite* const selected_icon_clone =
+        find_sprite(parsed, clone_ids.selected_icon);
+    const std::optional<std::size_t> regular_offset = regular_icon_clone
+        ? empty_mod_settings_icon_frame_offset(output, *regular_icon_clone)
+        : std::nullopt;
+    const std::optional<std::size_t> selected_offset = selected_icon_clone
+        ? empty_mod_settings_icon_frame_offset(output, *selected_icon_clone)
+        : std::nullopt;
+    const std::optional<std::size_t> tab_list_offset =
+        show_frame_offset(*context.tab_list);
+    const std::optional<std::size_t> back_list_offset =
+        show_frame_offset(*context.back_tab_list);
+    if (!regular_offset || !selected_offset || !tab_list_offset ||
+        !back_list_offset) {
+        error = "one of the native tab sprites no longer has its validated insertion frame";
+        return false;
+    }
+    const Placement* const title = find_unique_placement(
+        *context.back_tab_list, kModSettingsTabTitleName);
+    if (!title) {
+        error = "the native BackTabList title was not found";
+        return false;
+    }
+
+    std::vector<SpriteTagInsertion> insertions{};
+    insertions.push_back({
+        .sprite_tag = regular_icon_clone->tag,
+        .insertion_offset = *regular_offset,
+        .bytes = make_mod_settings_tab_icon_placement(icon_shape),
+    });
+    insertions.push_back({
+        .sprite_tag = selected_icon_clone->tag,
+        .insertion_offset = *selected_offset,
+        .bytes = make_mod_settings_tab_icon_placement(icon_shape),
+    });
+
+    // Every in-place write below keeps tag sizes, so the parsed offsets used
+    // by the insertions stay valid.
+    const std::uint16_t added_slots = static_cast<std::uint16_t>(
+        kModSettingsPatchedTabSlotCount - native_count);
+    const std::uint16_t back_depth_shift = static_cast<std::uint16_t>(
+        6 * added_slots);
+    for (std::uint16_t index = 0; index < native_count; ++index) {
+        const Placement& back_slot = *back_slots[index];
+        write_u16(
+            output,
+            back_slot.tag.body_start + (back_slot.is_place_object3 ? 2 : 1),
+            static_cast<std::uint16_t>(back_slot.depth + back_depth_shift));
+    }
+    write_u16(
+        output,
+        title->tag.body_start + (title->is_place_object3 ? 2 : 1),
+        static_cast<std::uint16_t>(title->depth + back_depth_shift));
+
+    constexpr std::int32_t kHubSlotX = -9760 +
+        kModSettingsHubSlot * kModSettingsTabSlotStride;
+    constexpr std::int32_t kQuitSlotX = kHubSlotX + kModSettingsTabSlotStride;
+    if (native_count == kModSettingsTabSlotCount) {
+        // Generic movie: append Hub (8) and Quit (9); shift the prompt by two
+        // slots because its timeline stops at eight tabs.
+        if (!set_place_object2_translation_x(
+                output,
+                *native_right_arrow,
+                kNativeRightArrowX,
+                kExpandedRightArrowX)) {
+            error = "the native RB prompt placement could not be moved after the added Quit Game tab";
+            return false;
+        }
+        insertions.push_back({
+            .sprite_tag = context.tab_list->tag,
+            .insertion_offset = *tab_list_offset,
+            .bytes = make_named_placement(
+                clone_ids.regular_tab_item, 34, kHubSlotX, -6920, "Item_0_8"),
+        });
+        insertions.push_back({
+            .sprite_tag = context.tab_list->tag,
+            .insertion_offset = *tab_list_offset,
+            .bytes = make_named_placement(
+                native_tab_item, 38, kQuitSlotX, -6920, "Item_0_9"),
+        });
+        insertions.push_back({
+            .sprite_tag = context.back_tab_list->tag,
+            .insertion_offset = *back_list_offset,
+            .bytes = make_named_placement(
+                clone_ids.back_tab_item, 11, kHubSlotX, -6920, "Item_0_8"),
+        });
+        insertions.push_back({
+            .sprite_tag = context.back_tab_list->tag,
+            .insertion_offset = *back_list_offset,
+            .bytes = make_named_placement(
+                native_back_item, 5, kQuitSlotX, -6920, "Item_0_9"),
+        });
+    } else {
+        // PC movie: native slot 8 (Quit Game in game) becomes Hub, a native
+        // slot 9 is appended for Quit, and the prompt timeline gains frame 10.
+        const Placement& hub_slot = *tab_slots[kModSettingsHubSlot];
+        const Placement& hub_back_slot = *back_slots[kModSettingsHubSlot];
+        if (hub_slot.is_place_object3 || hub_back_slot.is_place_object3) {
+            error = "the native slot 8 placements are not PlaceObject2 records";
+            return false;
+        }
+        std::array<bool, kModSettingsPatchedTabSlotCount> used_top{};
+        for (std::uint16_t index = 0; index < native_count; ++index) {
+            used_top[static_cast<std::size_t>((tab_slots[index]->depth - 2) / 4)] = true;
+        }
+        const auto free_top = std::find(used_top.begin(), used_top.end(), false);
+        if (free_top == used_top.end()) {
+            error = "there is no free TabList depth for the Quit Game slot";
+            return false;
+        }
+        const std::uint16_t quit_top_depth = static_cast<std::uint16_t>(
+            2 + 4 * std::distance(used_top.begin(), free_top));
+        std::vector<std::uint8_t> quit_slot{};
+        std::vector<std::uint8_t> quit_back_slot{};
+        if (!make_slot_placement_clone(
+                output, hub_slot, native_tab_item, quit_top_depth,
+                kQuitSlotX, "Item_0_9", quit_slot, error) ||
+            !make_slot_placement_clone(
+                output, hub_back_slot, native_back_item, 5,
+                kQuitSlotX, "Item_0_9", quit_back_slot, error)) {
+            return false;
+        }
+        write_u16(output, hub_slot.tag.body_start + 3, clone_ids.regular_tab_item);
+        write_u16(output, hub_back_slot.tag.body_start + 3, clone_ids.back_tab_item);
+
+        const Sprite& arrow = *context.right_arrow;
+        if (arrow.tags.empty() || arrow.tags.back().code != kTagEnd) {
+            error = "the RB prompt timeline has no End tag";
+            return false;
+        }
+        write_u16(
+            output,
+            arrow.tag.body_start + 2,
+            static_cast<std::uint16_t>(arrow.frame_count + 1U));
+        insertions.push_back({
+            .sprite_tag = arrow.tag,
+            .insertion_offset = arrow.tags.back().tag_start,
+            .bytes = make_right_arrow_frame(arrow.frame_count),
+        });
+        insertions.push_back({
+            .sprite_tag = context.tab_list->tag,
+            .insertion_offset = *tab_list_offset,
+            .bytes = std::move(quit_slot),
+        });
+        insertions.push_back({
+            .sprite_tag = context.back_tab_list->tag,
+            .insertion_offset = *back_list_offset,
+            .bytes = std::move(quit_back_slot),
+        });
+    }
+    if (!apply_sprite_tag_insertions(output, parsed, std::move(insertions), error)) {
+        return false;
+    }
+
+    if (!parse_gfx(output, parsed, code, error) ||
+        !mod_settings_top_tab_matches(output, parsed, &error)) {
+        if (error.empty()) error = "the 10-slot native tab layout did not verify";
+        return false;
+    }
+    added = true;
+    return true;
+}
+
+// The native row is anchored on LB at the left of the tab bar, so the two
+// added slots leave the ten-tab row off-centre. TabList (LB, tabs, RB, title)
+// and BackTabList (tab backs over the bar image) move right together, and the
+// bar image inside BackTabList moves back so the bar itself stays put.
+constexpr std::int32_t kTabListNativeX = 19200;
+// Measured in game: centres the LB..RB row on the option rows below it
+// (label left edge to value box right edge), which the native row also follows.
+// The title screen hides the Quit Game tab, which pulls RB one slot left; a
+// quarter-slot extra shift splits that half-slot difference between the
+// in-game (eleven tabs) and title (ten tabs) rows.
+constexpr std::int32_t kTabRowInGameCentringShift = 50;
+constexpr std::int32_t kTabRowCentringShift =
+    kTabRowInGameCentringShift + kModSettingsTabSlotStride / 4;
+constexpr std::int32_t kTabBarImageNativeX = -14531;
+
+// TabList and BackTabList are placed on the root timeline.
+[[nodiscard]] std::optional<Placement> find_root_placement(
+    std::span<const std::uint8_t> bytes,
+    const ParsedGfx& parsed,
+    std::string_view name) {
+    std::optional<Placement> result{};
+    for (const TagView& tag : parsed.top_level_tags) {
+        if (tag.code != kTagPlaceObject2) continue;
+        Placement placement{};
+        if (!parse_placement(bytes, tag, placement) ||
+            !placement.has_name || placement.name != name) {
+            continue;
+        }
+        if (result) return std::nullopt;
+        result = placement;
+    }
+    return result;
+}
+
+// Plain depth-1 image placement (PlaceObject3 flags 0x06/0x10: depth,
+// character, matrix) inside a sprite; reports its matrix X.
+[[nodiscard]] const TagView* find_depth1_image_placement(
+    std::span<const std::uint8_t> bytes,
+    const Sprite& sprite,
+    std::int32_t& current_x) noexcept {
+    const TagView* result{};
+    for (const TagView& tag : sprite.tags) {
+        std::uint16_t depth{};
+        if (tag.code != kTagPlaceObject3 || tag.body_start + 6 > tag.body_end ||
+            bytes[tag.body_start] != 0x06U || bytes[tag.body_start + 1] != 0x10U ||
+            !read_u16(bytes, tag.body_start + 2, depth) || depth != 1) {
+            continue;
+        }
+        std::size_t x_bit_offset{};
+        std::uint32_t translation_bits{};
+        if (result || !locate_matrix_translation_x_bits(
+                bytes, tag.body_start + 6, tag.body_end,
+                x_bit_offset, translation_bits, current_x)) {
+            return nullptr;
+        }
+        result = &tag;
+    }
+    return result;
+}
+
+[[nodiscard]] bool set_place_object3_image_translation_x(
+    std::vector<std::uint8_t>& bytes,
+    const TagView& tag,
+    std::int32_t expected_x,
+    std::int32_t target_x) noexcept {
+    std::size_t x_bit_offset{};
+    std::uint32_t translation_bits{};
+    std::int32_t current_x{};
+    if (!locate_matrix_translation_x_bits(
+            bytes, tag.body_start + 6, tag.body_end,
+            x_bit_offset, translation_bits, current_x) ||
+        current_x != expected_x) {
+        return false;
+    }
+    const std::int64_t minimum = -(std::int64_t{1} << (translation_bits - 1U));
+    const std::int64_t maximum = (std::int64_t{1} << (translation_bits - 1U)) - 1;
+    if (target_x < minimum || target_x > maximum) return false;
+    return write_bits(
+        bytes, x_bit_offset,
+        static_cast<std::uint32_t>(target_x) &
+            ((std::uint32_t{1} << translation_bits) - 1U),
+        translation_bits);
+}
+
+[[nodiscard]] bool ensure_mod_settings_tab_row_centred(
+    std::vector<std::uint8_t>& output,
+    std::string& error,
+    bool& added) {
+    added = false;
+    ParsedGfx parsed{};
+    ErrorCode code{};
+    if (!parse_gfx(output, parsed, code, error)) return false;
+    const std::optional<Placement> tab_list =
+        find_root_placement(output, parsed, "TabList");
+    const std::optional<Placement> back_list =
+        find_root_placement(output, parsed, "BackTabList");
+    if (!tab_list || !back_list || !back_list->has_character) {
+        error = "the TabList/BackTabList placements were not found";
+        return false;
+    }
+    const Sprite* const back_sprite = find_sprite(parsed, back_list->character_id);
+    std::int32_t bar_x{};
+    const TagView* const bar = back_sprite
+        ? find_depth1_image_placement(output, *back_sprite, bar_x)
+        : nullptr;
+    if (!bar) {
+        error = "the tab bar image placement was not found";
+        return false;
+    }
+    const Sprite* const tab_sprite = tab_list->has_character
+        ? find_sprite(parsed, tab_list->character_id)
+        : nullptr;
+    const Placement* const left_arrow = tab_sprite
+        ? find_unique_placement(*tab_sprite, "LeftArrow")
+        : nullptr;
+    const Placement* const right_arrow = tab_sprite
+        ? find_unique_placement(*tab_sprite, "RightArrow")
+        : nullptr;
+    if (!left_arrow || !right_arrow) {
+        error = "the LB/RB prompt placements were not found in TabList";
+        return false;
+    }
+    // RB keeps whichever base the tab step chose (native PC or expanded generic).
+    const std::int32_t right_base =
+        is_right_arrow_x(right_arrow->translation.x, kNativeRightArrowX)
+            ? kNativeRightArrowX
+            : kExpandedRightArrowX;
+    constexpr std::int32_t centred_list_x = kTabListNativeX + kTabRowCentringShift;
+    constexpr std::int32_t centred_bar_x = kTabBarImageNativeX - kTabRowCentringShift;
+    constexpr std::int32_t spaced_left_x = kNativeLeftArrowX + kLeftArrowSpacingShift;
+    const std::int32_t spaced_right_x = right_base + kRightArrowSpacingShift;
+
+    // Slot offsets apply to the PC movie only (its icon set was measured).
+    const bool pc_movie = right_base == kNativeRightArrowX;
+    std::vector<Placement> slots{};
+    std::vector<std::int32_t> slot_targets{};
+    bool slots_done = true;
+    if (pc_movie) {
+        for (const Sprite* sprite : {tab_sprite, back_sprite}) {
+            for (std::uint16_t index = 0; index < kModSettingsPatchedTabSlotCount; ++index) {
+                const std::string name =
+                    std::string(kModSettingsTabSlotPrefix) + std::to_string(index);
+                const Placement* const slot = find_unique_placement(*sprite, name);
+                const std::int32_t base = -9760 +
+                    static_cast<std::int32_t>(index) * kModSettingsTabSlotStride;
+                const std::int32_t target = base + kTabSlotSpacingOffsets[index];
+                if (!slot || (slot->translation.x != base && slot->translation.x != target)) {
+                    error = "a tab slot is not at its native position";
+                    return false;
+                }
+                if (slot->translation.x != target) {
+                    slots_done = false;
+                    slots.push_back(*slot);
+                    slot_targets.push_back(target);
+                }
+            }
+        }
+    }
+    if (tab_list->translation.x == centred_list_x &&
+        back_list->translation.x == centred_list_x &&
+        bar_x == centred_bar_x &&
+        left_arrow->translation.x == spaced_left_x &&
+        right_arrow->translation.x == spaced_right_x && slots_done) {
+        return true;
+    }
+    for (std::size_t index = 0; index < slots.size(); ++index) {
+        const std::int32_t base = slots[index].translation.x;
+        if (!set_place_object2_translation_x(output, slots[index], base, slot_targets[index])) {
+            error = "a tab slot could not be moved";
+            return false;
+        }
+    }
+    // Copy before writing: the writes do not move tags, so offsets stay valid.
+    const TagView bar_tag = *bar;
+    const Placement left_copy = *left_arrow;
+    const Placement right_copy = *right_arrow;
+    if (!set_place_object2_translation_x(
+            output, *tab_list, kTabListNativeX, centred_list_x) ||
+        !set_place_object2_translation_x(
+            output, *back_list, kTabListNativeX, centred_list_x) ||
+        !set_place_object3_image_translation_x(
+            output, bar_tag, kTabBarImageNativeX, centred_bar_x) ||
+        !set_place_object2_translation_x(
+            output, left_copy, kNativeLeftArrowX, spaced_left_x) ||
+        !set_place_object2_translation_x(
+            output, right_copy, right_base, spaced_right_x)) {
+        error = "the tab row placements are not at their native positions";
+        return false;
+    }
+    added = true;
+    return true;
+}
+
+// The Hub panel is built on the native Game Options shell, which binds the
+// WindowList.ControllSetting clip. Sharing that clip with General lets the
+// panel switch's hide/show sweep and row writes of one page clobber the other,
+// so ERNativeUI.dll redirects the Hub's lookup to this dedicated sibling: a
+// second placement of the same panel character, hidden until the native
+// switch shows the Hub.
+constexpr std::string_view kModSettingsHubPanelName = "ERModSettingsHub";
+
+[[nodiscard]] bool ensure_mod_settings_hub_panel_clip(
+    std::vector<std::uint8_t>& output,
+    std::string& error,
+    bool& added) {
+    added = false;
+    ParsedGfx parsed{};
+    ErrorCode code{};
+    if (!parse_gfx(output, parsed, code, error)) return false;
+
+    const Sprite* window_list{};
+    const Placement* general{};
+    for (const Sprite& sprite : parsed.sprites) {
+        if (const Placement* placement =
+                find_unique_placement(sprite, "ControllSetting")) {
+            if (window_list) {
+                error = "multiple ControllSetting panel placements were found";
+                return false;
+            }
+            window_list = &sprite;
+            general = placement;
+        }
+    }
+    if (!window_list || !general || !general->has_character) {
+        error = "WindowList.ControllSetting was not found";
+        return false;
+    }
+    if (const std::size_t existing =
+            placement_name_count(*window_list, kModSettingsHubPanelName)) {
+        const Placement* hub =
+            find_unique_placement(*window_list, kModSettingsHubPanelName);
+        if (existing != 1 || !hub ||
+            hub->character_id != general->character_id) {
+            error = "an incompatible ERModSettingsHub panel placement exists";
+            return false;
+        }
+        return true;
+    }
+    if (window_list->frame_count != 1) {
+        error = "WindowList is no longer a single-frame container";
+        return false;
+    }
+
+    // Keep the Hub directly above General in the display list.
+    std::uint16_t depth = static_cast<std::uint16_t>(general->depth + 1);
+    const auto depth_used = [window_list](std::uint16_t candidate) {
+        return std::any_of(
+            window_list->placements.begin(),
+            window_list->placements.end(),
+            [candidate](const Placement& placement) {
+                return placement.depth == candidate;
+            });
+    };
+    while (depth_used(depth)) {
+        if (depth == std::numeric_limits<std::uint16_t>::max()) {
+            error = "there is no free WindowList depth for the Hub panel";
+            return false;
+        }
+        ++depth;
+    }
+    const auto frame_end = show_frame_offset(*window_list);
+    if (!frame_end) {
+        error = "WindowList has no ShowFrame tag";
+        return false;
+    }
+
+    std::vector<std::uint8_t> body{};
+    body.push_back(0x26U); // character, matrix, name
+    body.push_back(0x20U); // HasVisible
+    append_u16(body, depth);
+    append_u16(body, general->character_id);
+    body.push_back(0); // identity MATRIX, as ControllSetting
+    body.insert(
+        body.end(),
+        kModSettingsHubPanelName.begin(),
+        kModSettingsHubPanelName.end());
+    body.push_back(0);
+    body.push_back(0); // hidden until the native panel switch shows the Hub
+
+    std::vector<SpriteTagInsertion> insertions{};
+    insertions.push_back({
+        .sprite_tag = window_list->tag,
+        .insertion_offset = *frame_end,
+        .bytes = make_tag(kTagPlaceObject3, body),
+    });
+    if (!apply_sprite_tag_insertions(
+            output, parsed, std::move(insertions), error)) {
+        return false;
+    }
+    ParsedGfx verified{};
+    if (!parse_gfx(output, verified, code, error)) return false;
+    const Sprite* verified_list = find_sprite(verified, window_list->id);
+    const Placement* hub = verified_list
+        ? find_unique_placement(*verified_list, kModSettingsHubPanelName)
+        : nullptr;
+    if (!hub || hub->character_id != general->character_id ||
+        !hub->is_place_object3 || !hub->has_visible || hub->visible) {
+        error = "the hidden ERModSettingsHub panel placement did not verify";
+        return false;
+    }
     added = true;
     return true;
 }
@@ -3269,7 +5565,8 @@ Inspection inspect_game_options_panel(std::span<const std::uint8_t> input) noexc
 PatchResult patch_widget_presentations(
     std::span<const std::uint8_t> input,
     TextInputPresentation text_input_presentation,
-    ColorPickerPresentation color_picker_presentation) noexcept {
+    ColorPickerPresentation color_picker_presentation,
+    bool wide_slider_values) noexcept {
     try {
         if (text_input_presentation != TextInputPresentation::native &&
             text_input_presentation != TextInputPresentation::character_name) {
@@ -3308,6 +5605,20 @@ PatchResult patch_widget_presentations(
                 result.output, error, color_picker_added)) {
             return fail(ErrorCode::unsupported_gfx, std::move(error));
         }
+        // Fork: provider pages hosted in Advanced Settings use this movie's
+        // own Slider widget, so it needs the same value-field widening.
+        bool slider_values_widened = false;
+        if (wide_slider_values &&
+            !ensure_wide_slider_values(
+                result.output, error, slider_values_widened)) {
+            return fail(ErrorCode::unsupported_gfx, std::move(error));
+        }
+        // The bottom help line is widened together with the value fields.
+        bool line_help_widened = false;
+        if (wide_slider_values &&
+            !ensure_wide_line_help(result.output, error, line_help_widened)) {
+            return fail(ErrorCode::unsupported_gfx, std::move(error));
+        }
 
         result.report.after = inspect_text_input_host(result.output);
         if (!result.report.after.success() ||
@@ -3325,9 +5636,17 @@ PatchResult patch_widget_presentations(
                     ? "patched widget presentations did not verify"
                     : result.report.after.message);
         }
-        result.report.bytes_added = result.output.size() - input.size();
-        result.report.already_satisfied = !text_input_added && !color_picker_added;
-        result.message = color_picker_added
+        result.report.bytes_added = result.output.size() > input.size()
+            ? result.output.size() - input.size()
+            : 0;
+        result.report.already_satisfied =
+            !text_input_added && !color_picker_added && !slider_values_widened &&
+            std::equal(input.begin(), input.end(),
+                result.output.begin(), result.output.end());
+        result.message = slider_values_widened && !color_picker_added &&
+                !text_input_added
+            ? "Slider value fields widened successfully"
+            : color_picker_added
             ? "Standalone character-creation ColorPicker added successfully"
             : text_input_added
             ? "Character-name TextInput presentation added successfully"
@@ -3421,7 +5740,11 @@ PatchResult patch_game_options_panel(
         }
 
         bool label_added = false;
-        if (!ensure_game_options_button_label(
+        // The dedicated category replaces the older in-panel entry. Do not
+        // inject Text_1 into the shared row-cursor artwork (symbol 97): that
+        // text field is visible across unrelated vanilla settings pages.
+        if (!options.mod_settings_top_level_tab &&
+            !ensure_game_options_button_label(
                 result.output, error, label_added)) {
             return fail(ErrorCode::unsupported_gfx, std::move(error));
         }
@@ -3435,11 +5758,57 @@ PatchResult patch_game_options_panel(
         bool color_picker_added = false;
         if (options.color_picker_presentation ==
                 ColorPickerPresentation::character_creation &&
-            !ensure_character_creation_color_picker(
-                result.output, error, color_picker_added)) {
+                !ensure_character_creation_color_picker(
+                    result.output, error, color_picker_added)) {
             return fail(ErrorCode::unsupported_gfx, std::move(error));
         }
-        result.report.bytes_added = result.output.size() - input.size();
+        bool mod_settings_tab_added = false;
+        if (options.mod_settings_top_level_tab &&
+            !ensure_mod_settings_top_level_tab(
+                result.output, error, mod_settings_tab_added)) {
+            return fail(ErrorCode::unsupported_gfx, std::move(error));
+        }
+        bool hub_panel_added = false;
+        if (options.mod_settings_top_level_tab &&
+            !ensure_mod_settings_hub_panel_clip(
+                result.output, error, hub_panel_added)) {
+            return fail(ErrorCode::unsupported_gfx, std::move(error));
+        }
+        bool tab_row_centred = false;
+        if (options.mod_settings_top_level_tab &&
+            !ensure_mod_settings_tab_row_centred(
+                result.output, error, tab_row_centred)) {
+            return fail(ErrorCode::unsupported_gfx, std::move(error));
+        }
+        bool slider_values_widened = false;
+        if (options.wide_slider_values &&
+            !ensure_wide_slider_values(
+                result.output, error, slider_values_widened)) {
+            return fail(ErrorCode::unsupported_gfx, std::move(error));
+        }
+        // The bottom help line is widened together with the value fields.
+        bool line_help_widened = false;
+        if (options.wide_slider_values &&
+            !ensure_wide_line_help(result.output, error, line_help_widened)) {
+            return fail(ErrorCode::unsupported_gfx, std::move(error));
+        }
+        mod_settings_tab_added =
+            mod_settings_tab_added || hub_panel_added || tab_row_centred;
+        ParsedGfx final_parsed{};
+        ErrorCode final_code{};
+        std::string final_error{};
+        if (!parse_gfx(result.output, final_parsed, final_code, final_error)) {
+            return fail(final_code, std::move(final_error));
+        }
+        if (!sprite_reference_graph_is_acyclic(final_parsed)) {
+            return fail(
+                ErrorCode::output_verification_failed,
+                "patched GFX contains duplicate sprite IDs or recursive references");
+        }
+        // The slider widening can shrink the movie by a byte or two.
+        result.report.bytes_added = result.output.size() > input.size()
+            ? result.output.size() - input.size()
+            : 0;
         result.report.after = inspect_game_options_panel(result.output);
         if (!result.report.after.success() ||
             result.report.after.game_options_rows != options.game_options_rows ||
@@ -3450,7 +5819,15 @@ PatchResult patch_game_options_panel(
                 !result.report.after.character_name_text_input) ||
             (options.color_picker_presentation ==
                     ColorPickerPresentation::character_creation &&
-                !result.report.after.character_creation_color_picker)) {
+                !result.report.after.character_creation_color_picker) ||
+            (options.mod_settings_top_level_tab && [&]() {
+                ParsedGfx patched{};
+                ErrorCode patched_code{};
+                std::string patched_error{};
+                return !parse_gfx(
+                        result.output, patched, patched_code, patched_error) ||
+                    !mod_settings_top_tab_matches(result.output, patched);
+            }())) {
             return fail(
                 ErrorCode::output_verification_failed,
                 result.report.after.message.empty()
@@ -3459,11 +5836,18 @@ PatchResult patch_game_options_panel(
         }
         result.report.already_satisfied =
             !game_options_rows_added && !camera_options_rows_added &&
-            !label_added && !presentation_added && !color_picker_added;
-        result.message = camera_options_rows_added
+            !label_added && !presentation_added && !color_picker_added &&
+            !mod_settings_tab_added && !slider_values_widened &&
+            std::equal(input.begin(), input.end(),
+                result.output.begin(), result.output.end());
+        result.message = slider_values_widened
+            ? "Slider value field widened successfully"
+            : camera_options_rows_added
             ? "CameraSetting expanded successfully"
             : game_options_rows_added
             ? "ControllSetting expanded successfully"
+            : mod_settings_tab_added
+            ? "Dedicated Mod Settings top-level tab added successfully"
             : color_picker_added
             ? "Standalone character-creation ColorPicker added successfully"
             : presentation_added
@@ -3474,6 +5858,29 @@ PatchResult patch_game_options_panel(
         return result;
     } catch (...) {
         return fail(ErrorCode::invalid_gfx, "unexpected exception while patching the GFX");
+    }
+}
+
+PatchResult patch_mod_settings_top_level_tab(
+    std::span<const std::uint8_t> input) noexcept {
+    try {
+        const Inspection before = inspect_game_options_panel(input);
+        if (!before.success()) {
+            return fail(before.error, before.message);
+        }
+        return patch_game_options_panel(
+            input,
+            {
+                .game_options_rows = before.game_options_rows,
+                .camera_options_rows = before.camera_options_rows,
+                .text_input_presentation = TextInputPresentation::native,
+                .color_picker_presentation = ColorPickerPresentation::native,
+                .mod_settings_top_level_tab = true,
+            });
+    } catch (...) {
+        return fail(
+            ErrorCode::invalid_gfx,
+            "unexpected exception while adding the Mod Settings tab");
     }
 }
 
