@@ -122,6 +122,10 @@ int main() {
         erui::native::identify_elden_ring_build(
             0x6A96BA95, 0x5E0DA00) ==
         EldenRingBuild::v2_7_1_1);
+    static_assert(
+        erui::native::identify_elden_ring_build(
+            0x6AABF7E7, 0x5DFD600) ==
+        EldenRingBuild::v2_7_2_0);
 
     // A timestamp or image-size match by itself is not accepted. This keeps
     // an accidental hybrid profile from reaching any native call boundary.
@@ -138,6 +142,10 @@ int main() {
             0x6A96BA95, 0x5E09600) ==
         EldenRingBuild::unsupported);
     ERUI_TEST_CHECK(
+        erui::native::identify_elden_ring_build(
+            0x6AABF7E7, 0x5E0DA00) ==
+        EldenRingBuild::unsupported);
+    ERUI_TEST_CHECK(
         erui::native::identify_elden_ring_build(0, 0) ==
         EldenRingBuild::unsupported);
 
@@ -150,6 +158,9 @@ int main() {
     ERUI_TEST_CHECK(
         erui::native::elden_ring_build_name(
             EldenRingBuild::v2_7_1_1) == "2.7.1.1");
+    ERUI_TEST_CHECK(
+        erui::native::elden_ring_build_name(
+            EldenRingBuild::v2_7_2_0) == "2.7.2.0");
     ERUI_TEST_CHECK(
         erui::native::elden_ring_build_name(
             EldenRingBuild::unsupported) == "unsupported");
@@ -264,6 +275,97 @@ int main() {
         erui::native::find_input_bindings_address_profile(
             EldenRingBuild::v2_7_1_1),
         *input_271));
+
+    // Menu objects: 2.7.0.0 and 2.7.1.x share every address; 2.7.2.0 moves
+    // code by +0x4B0 and .rdata by +0x20F0.
+    {
+        const auto* const menu_271 =
+            erui::native::find_menu_object_address_profile(
+                EldenRingBuild::v2_7_1_0);
+        const auto* const menu_272 =
+            erui::native::find_menu_object_address_profile(
+                EldenRingBuild::v2_7_2_0);
+        ERUI_TEST_CHECK(menu_271 && menu_272);
+        for (const EldenRingBuild build :
+             {EldenRingBuild::v2_7_0_0, EldenRingBuild::v2_7_1_1}) {
+            const auto* const same =
+                erui::native::find_menu_object_address_profile(build);
+            ERUI_TEST_CHECK(same && same->build == build &&
+                same->toggle_item_constructor_rva == 0x94CD40 &&
+                same->option_setting_top_dialog_vtable_rva == 0x2B16B48 &&
+                same->software_keyboard_job_vtable_rva == 0x2AC5AD0);
+        }
+        ERUI_TEST_CHECK(menu_271->toggle_item_constructor_rva == 0x94CD40 &&
+            menu_271->slider_item_constructor_rva == 0x94D280 &&
+            menu_271->list_select_rva == 0x739B90 &&
+            menu_271->list_repaint_rva == 0x73D0D0 &&
+            menu_271->toggle_index_of_rva == 0x963A60 &&
+            menu_271->slider_refresh_rva == 0x74FA20 &&
+            menu_271->toggle_item_vtable_rva == 0x2B14DA8 &&
+            menu_271->slider_item_vtable_rva == 0x2B14D68 &&
+            menu_271->option_setting_top_dialog_vtable_rva == 0x2B16B48 &&
+            menu_271->option_setting_dialog_vtable_rva == 0x2B14888 &&
+            menu_271->pad_setting_dialog_vtable_rva == 0x2B16DD8 &&
+            menu_271->edit_property_vtable_rva == 0x2AD73D0 &&
+            menu_271->text_input_controller_vtable_rva == 0x2B1B128 &&
+            menu_271->software_keyboard_job_vtable_rva == 0x2AC5AD0);
+        ERUI_TEST_CHECK(menu_272->toggle_item_constructor_rva == 0x94D1F0 &&
+            menu_272->slider_item_constructor_rva == 0x94D730 &&
+            menu_272->list_select_rva == 0x73A040 &&
+            menu_272->list_repaint_rva == 0x73D580 &&
+            menu_272->toggle_index_of_rva == 0x963F10 &&
+            menu_272->slider_refresh_rva == 0x74FED0 &&
+            menu_272->toggle_item_vtable_rva == 0x2B16E98 &&
+            menu_272->slider_item_vtable_rva == 0x2B16E58 &&
+            menu_272->option_setting_top_dialog_vtable_rva == 0x2B18C38 &&
+            menu_272->option_setting_dialog_vtable_rva == 0x2B16978 &&
+            menu_272->pad_setting_dialog_vtable_rva == 0x2B18EC8 &&
+            menu_272->edit_property_vtable_rva == 0x2AD94C0 &&
+            menu_272->text_input_controller_vtable_rva == 0x2B1D218 &&
+            menu_272->software_keyboard_job_vtable_rva == 0x2AC7BC0);
+        // The input-binding profile carries the same keyboard job vtable.
+        ERUI_TEST_CHECK(
+            erui::native::find_input_bindings_address_profile(
+                EldenRingBuild::v2_7_2_0)->software_keyboard_job_vtable_rva ==
+            menu_272->software_keyboard_job_vtable_rva);
+        ERUI_TEST_CHECK(
+            erui::native::find_menu_object_address_profile(
+                EldenRingBuild::unsupported) == nullptr);
+    }
+
+    // 2.7.2.0: the same function bodies, moved.
+    ERUI_TEST_CHECK(same_profile(
+        *erui::native::find_core_ui_address_profile(
+            EldenRingBuild::v2_7_2_0),
+        erui::native::CoreUiAddressProfile{
+            EldenRingBuild::v2_7_2_0, 0xD82CF0}));
+    ERUI_TEST_CHECK(same_profile(
+        *erui::native::find_text_input_address_profile(
+            EldenRingBuild::v2_7_2_0),
+        erui::native::TextInputAddressProfile{
+            EldenRingBuild::v2_7_2_0,
+            0x9773A0, 0x5EE5A0, 0x676BA0, 0x1BCC60,
+            0x916220, 0x81DAC0}));
+    ERUI_TEST_CHECK(same_profile(
+        *erui::native::find_color_picker_address_profile(
+            EldenRingBuild::v2_7_2_0),
+        erui::native::ColorPickerAddressProfile{
+            EldenRingBuild::v2_7_2_0,
+            0x7ADE30, 0x7AA580, 0x7A85D0, 0x1EBD430,
+            0x77CAD0, 0x77CEC0, 0x77D440, 0x746580,
+            0xD82CF0, 0x8B7440, 0x2ABAED8, 0x74B5F0,
+            0x86BDF0, 0x734640, 0x734450, 0xD86D70}));
+    ERUI_TEST_CHECK(same_profile(
+        *erui::native::find_input_bindings_address_profile(
+            EldenRingBuild::v2_7_2_0),
+        erui::native::InputBindingsAddressProfile{
+            EldenRingBuild::v2_7_2_0,
+            0x869A30, 0x869B60, 0x86A480, 0x8684B0,
+            0x869110, 0x868C80, 0x868CC0, 0x868110,
+            0x242960, 0x240220, 0x2403C0, 0x2413F0,
+            0x2669270, 0x266BC20, 0x4864D50, 0x81D160,
+            0x81D2F0, 0x9BA2B0, 0x9BA470, 0x2B0FDB0,
+            0x2AD8F60, 0x2AD89C0, 0x2AC7BC0, 0x2B2D9F8}));
 
     ERUI_TEST_CHECK(
         erui::native::find_core_ui_address_profile(

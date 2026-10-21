@@ -16,6 +16,7 @@
 #include "submenu_navigation.hpp"
 #include "submenu_runtime.hpp"
 #include "color_picker.hpp"
+#include "running_build.hpp"
 
 #include <Windows.h>
 #include <MinHook.h>
@@ -90,7 +91,12 @@ constexpr std::uint32_t kSubmenuFaultLogLimit = 32;
 constexpr std::uint32_t kTitleFaultLogLimit = 4;
 constexpr std::uint8_t kModSettingsNativeCategory = 4;
 constexpr std::uint32_t kModSettingsNativeTitleId = 0x1AE78;
-constexpr std::uintptr_t kOptionSettingTopDialogVtableRva = 0x2B16B48;
+// Vtables of the running build (MenuObjectAddressProfile); 0 on an
+// unsupported build, so every comparison against them fails closed.
+std::uintptr_t option_setting_top_dialog_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->option_setting_top_dialog_vtable_rva : 0;
+}
 constexpr std::size_t kOptionSettingTopCategoryListOffset = 0x1208;
 constexpr std::size_t kOptionSettingCategoryCountOffset = 0x558;
 constexpr std::size_t kOptionSettingCategoryRecordSize = 0x88;
@@ -535,16 +541,28 @@ constexpr std::size_t kPanelVisualCapacityOffset = 0xB14;
 constexpr std::size_t kPanelObservedFieldD84Offset = 0xD84;
 constexpr std::size_t kPanelObservedFieldD88Offset = 0xD88;
 constexpr std::size_t kPanelNativeCountOffset = 0x1AF0;
-constexpr std::uintptr_t kOptionSettingDialogVtableRva = 0x2B14888;
-constexpr std::uintptr_t kPadSettingDialogVtableRva = 0x2B16DD8;
+std::uintptr_t option_setting_dialog_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->option_setting_dialog_vtable_rva : 0;
+}
+std::uintptr_t pad_setting_dialog_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->pad_setting_dialog_vtable_rva : 0;
+}
 constexpr std::size_t kPadSettingDialogEmbeddedObjectOffset = 0x1DA8;
 constexpr std::size_t kPadPropertyCollectionOffset = 0x1268;
 constexpr std::size_t kPadPropertyRowStride = 0x88;
 constexpr std::size_t kPadPropertyCountOffset = 0x1AF0;
 constexpr std::size_t kPadPropertyControllerOffset = 0x78;
 constexpr std::size_t kPadControllerBoundValueOffset = 0x1D0;
-constexpr std::uintptr_t kEditPropertyVtableRva = 0x2AD73D0;
-constexpr std::uintptr_t kTextInputControllerVtableRva = 0x2B1B128;
+std::uintptr_t edit_property_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->edit_property_vtable_rva : 0;
+}
+std::uintptr_t text_input_controller_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->text_input_controller_vtable_rva : 0;
+}
 constexpr std::size_t kOptionSettingTabSelectorOffset = 0x10;
 constexpr std::size_t kOptionSettingTabManagerOffset = 0x18;
 constexpr std::size_t kCompositeCurrentPanelOffset = 0xB8;
@@ -631,9 +649,9 @@ BuiltinPanelSnapshot inspect_builtin_panel(void* page) noexcept {
         const std::uintptr_t image =
             reinterpret_cast<std::uintptr_t>(g_addresses.game_image_base);
         const void* expected_vtable = reinterpret_cast<const void*>(
-            image + kOptionSettingDialogVtableRva);
+            image + option_setting_dialog_vtable_rva());
         result.vtable_match = image &&
-            kOptionSettingDialogVtableRva < g_addresses.game_image_size &&
+            option_setting_dialog_vtable_rva() < g_addresses.game_image_size &&
             result.vtable == expected_vtable;
         result.capacity_in_range = result.visual_capacity >= 1 &&
             result.visual_capacity <=
@@ -691,7 +709,7 @@ void log_scoped_panel_identity(void* page, const char* phase) noexcept {
         "diagnostic: scoped panel identity phase=%s page=%p read=%u vtable=%p vtableRva=0x%llX expectedOptionSettingRva=0x%llX vtableMatch=%u capacity@B14=%u d84=%u d88=%u count@1AF0=%llu",
         phase, page, read_ok ? 1u : 0u, panel.vtable,
         rva_of(vtable),
-        static_cast<unsigned long long>(kOptionSettingDialogVtableRva),
+        static_cast<unsigned long long>(option_setting_dialog_vtable_rva()),
         panel.vtable_match ? 1u : 0u,
         static_cast<unsigned>(panel.visual_capacity),
         static_cast<unsigned>(panel.observed_field_d84),
@@ -998,14 +1016,14 @@ TopCategoryListSnapshot inspect_top_category_list_for_diagnostics(
             reinterpret_cast<std::uintptr_t>(g_addresses.game_image_base);
         const auto list_address = reinterpret_cast<std::uintptr_t>(list);
         if (!image ||
-            kOptionSettingTopDialogVtableRva >= g_addresses.game_image_size ||
+            option_setting_top_dialog_vtable_rva() >= g_addresses.game_image_size ||
             list_address < kOptionSettingTopCategoryListOffset) {
             return result;
         }
         const auto* const top = reinterpret_cast<const std::byte*>(
             list_address - kOptionSettingTopCategoryListOffset);
         if (*reinterpret_cast<void* const*>(top) != reinterpret_cast<void*>(
-                image + kOptionSettingTopDialogVtableRva)) {
+                image + option_setting_top_dialog_vtable_rva())) {
             return result;
         }
         const auto* const list_bytes = static_cast<const std::byte*>(list);
@@ -1191,13 +1209,13 @@ struct DiagnosticPadPage {
 DiagnosticPadPage inspect_pad_setting_page(void* page) noexcept {
     DiagnosticPadPage result{};
     if (!page || !g_addresses.game_image_base ||
-        kPadSettingDialogVtableRva >= g_addresses.game_image_size) {
+        pad_setting_dialog_vtable_rva() >= g_addresses.game_image_size) {
         return result;
     }
     result.page_vtable_read = read_diagnostic_value(page, result.page_vtable);
     result.page_vtable_match = result.page_vtable_read &&
         result.page_vtable == g_addresses.game_image_base +
-            kPadSettingDialogVtableRva;
+            pad_setting_dialog_vtable_rva();
     if (!result.page_vtable_match) return result;
 
     result.row_count_read = read_diagnostic_value(
@@ -1252,12 +1270,12 @@ void log_pad_setting_page(
     const std::uintptr_t image = reinterpret_cast<std::uintptr_t>(
         g_addresses.game_image_base);
     const void* const expected_row_vtable =
-        kEditPropertyVtableRva < g_addresses.game_image_size
-        ? reinterpret_cast<const void*>(image + kEditPropertyVtableRva)
+        edit_property_vtable_rva() < g_addresses.game_image_size
+        ? reinterpret_cast<const void*>(image + edit_property_vtable_rva())
         : nullptr;
     const void* const expected_controller_vtable =
-        kTextInputControllerVtableRva < g_addresses.game_image_size
-        ? reinterpret_cast<const void*>(image + kTextInputControllerVtableRva)
+        text_input_controller_vtable_rva() < g_addresses.game_image_size
+        ? reinterpret_cast<const void*>(image + text_input_controller_vtable_rva())
         : nullptr;
     if (!snapshot.row_count_valid) return;
     auto* const page_bytes = static_cast<std::byte*>(page);
@@ -1356,10 +1374,10 @@ void observe_option_setting_tab_frame(safetyhook::Context& context) noexcept {
     const std::uintptr_t image =
         reinterpret_cast<std::uintptr_t>(g_addresses.game_image_base);
     const void* const expected_option_panel_vtable = reinterpret_cast<void*>(
-        image + kOptionSettingDialogVtableRva);
+        image + option_setting_dialog_vtable_rva());
     if (snapshot.active_panel && snapshot.panel_vtable ==
             expected_option_panel_vtable &&
-        kOptionSettingDialogVtableRva < g_addresses.game_image_size) {
+        option_setting_dialog_vtable_rva() < g_addresses.game_image_size) {
         ordinary_panel = inspect_builtin_panel(snapshot.active_panel);
         ordinary_panel_snapshot = ordinary_panel.fields_read;
     }
@@ -1369,8 +1387,8 @@ void observe_option_setting_tab_frame(safetyhook::Context& context) noexcept {
     void* pad_embedded_vtable = nullptr;
     if (category == 6 && snapshot.active_panel &&
         snapshot.panel_vtable == reinterpret_cast<void*>(
-            image + kPadSettingDialogVtableRva) &&
-        kPadSettingDialogVtableRva < g_addresses.game_image_size) {
+            image + pad_setting_dialog_vtable_rva()) &&
+        pad_setting_dialog_vtable_rva() < g_addresses.game_image_size) {
         pad_page = inspect_pad_setting_page(snapshot.active_panel);
         const auto* const panel_bytes =
             static_cast<const std::byte*>(snapshot.active_panel);
@@ -1460,7 +1478,7 @@ bool inspect_top_category_list(
         const std::uintptr_t image =
             reinterpret_cast<std::uintptr_t>(g_addresses.game_image_base);
         if (!image ||
-            kOptionSettingTopDialogVtableRva >= g_addresses.game_image_size) {
+            option_setting_top_dialog_vtable_rva() >= g_addresses.game_image_size) {
             return false;
         }
         const auto list_address = reinterpret_cast<std::uintptr_t>(list);
@@ -1468,7 +1486,7 @@ bool inspect_top_category_list(
         const auto top = reinterpret_cast<const std::byte*>(
             list_address - kOptionSettingTopCategoryListOffset);
         if (*reinterpret_cast<void* const*>(top) != reinterpret_cast<void*>(
-                image + kOptionSettingTopDialogVtableRva)) {
+                image + option_setting_top_dialog_vtable_rva())) {
             return false;
         }
         const auto* const list_bytes = static_cast<const std::byte*>(list);
@@ -1554,6 +1572,16 @@ void try_insert_mod_settings_category(
     bool contains_mod_settings{};
     const bool valid_list =
         inspect_top_category_list(list, count, contains_mod_settings);
+    if (!valid_list && !option_setting_top_dialog_vtable_rva()) {
+        // Other category lists also pass through here, so only a missing
+        // profile (the options dialog can never be recognised) is reported.
+        static std::atomic_bool warned{};
+        if (!warned.exchange(true, std::memory_order_acq_rel)) {
+            erui::detail::logf(
+                erui::LogLevel::warning,
+                "Mod Settings category cannot be inserted: no options-dialog address profile for this game build");
+        }
+    }
     if (!valid_list || contains_mod_settings) {
         if (diagnostics && event <= 64) {
             erui::detail::logf(
@@ -2021,8 +2049,8 @@ bool read_native_row_count_for_diagnostics(
     count = 0;
     if (!page || !g_addresses.game_image_base) return false;
     const std::uintptr_t expected_rva = category == 6
-        ? kPadSettingDialogVtableRva
-        : kOptionSettingDialogVtableRva;
+        ? pad_setting_dialog_vtable_rva()
+        : option_setting_dialog_vtable_rva();
     if (expected_rva >= g_addresses.game_image_size) return false;
     void* page_vtable{};
     if (!read_diagnostic_value(page, page_vtable) ||
@@ -2751,7 +2779,7 @@ void __fastcall line_help_text_detour(void* value, const wchar_t* text) noexcept
 void install_wide_line_help(const GameAddresses& addresses) noexcept {
     if (!addresses.status_bar_binder || !addresses.scaleform_text_setter ||
         !addresses.scaleform_value_exists || !addresses.title_bridge_complete()) {
-        erui::detail::logf(erui::LogLevel::info,
+        erui::detail::logf(erui::LogLevel::warning,
             "Wide provider help unavailable: status bar or Scaleform interfaces unresolved");
         return;
     }

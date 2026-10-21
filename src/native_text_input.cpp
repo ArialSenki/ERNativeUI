@@ -1,6 +1,7 @@
 #include "native_text_input.hpp"
 
 #include "runtime_log.hpp"
+#include "running_build.hpp"
 
 #include <Windows.h>
 
@@ -26,11 +27,28 @@ constexpr std::size_t kPropertyCountOffset = 0x1AF0;
 constexpr std::size_t kPropertyControllerOffset = 0x78;
 constexpr std::size_t kControllerBoundValueOffset = 0x1D0;
 constexpr std::size_t kMaximumPropertyRows = 16;
-constexpr std::uintptr_t kOptionSettingDialogVtableRva = 0x2B14888;
-constexpr std::uintptr_t kPadSettingDialogVtableRva = 0x2B16DD8;
-constexpr std::uintptr_t kEditPropertyVtableRva = 0x2AD73D0;
-constexpr std::uintptr_t kTextInputControllerVtableRva = 0x2B1B128;
-constexpr std::uintptr_t kSoftwareKeyboardJobVtableRva = 0x2AC5AD0;
+// Vtables of the running build (MenuObjectAddressProfile); 0 on an
+// unsupported build, so every comparison against them fails closed.
+std::uintptr_t option_setting_dialog_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->option_setting_dialog_vtable_rva : 0;
+}
+std::uintptr_t pad_setting_dialog_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->pad_setting_dialog_vtable_rva : 0;
+}
+std::uintptr_t edit_property_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->edit_property_vtable_rva : 0;
+}
+std::uintptr_t text_input_controller_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->text_input_controller_vtable_rva : 0;
+}
+std::uintptr_t software_keyboard_job_vtable_rva() noexcept {
+    const auto* const profile = erui::native::running_menu_object_profile();
+    return profile ? profile->software_keyboard_job_vtable_rva : 0;
+}
 constexpr std::size_t kSoftwareKeyboardJobConfigOffset = 0x60;
 constexpr std::size_t kConfigPrimaryLimitOffset = 0x60;
 constexpr std::size_t kConfigSecondaryLimitOffset = 0x6C;
@@ -297,7 +315,7 @@ bool apply_maximum_length(
         void* vtable{};
         std::memcpy(&vtable, observation.job, sizeof(vtable));
         if (vtable != binding.addresses.game_image_base +
-                kSoftwareKeyboardJobVtableRva) {
+                software_keyboard_job_vtable_rva()) {
             return false;
         }
 
@@ -401,9 +419,9 @@ bool page_preconditions(
         void* page_vtable{};
         std::memcpy(&page_vtable, page, sizeof(page_vtable));
         if (page_vtable != addresses.game_image_base +
-                kOptionSettingDialogVtableRva &&
+                option_setting_dialog_vtable_rva() &&
             page_vtable != addresses.game_image_base +
-                kPadSettingDialogVtableRva) {
+                pad_setting_dialog_vtable_rva()) {
             return false;
         }
         std::memcpy(&row_count,
@@ -441,7 +459,7 @@ bool postconditions(
             native_row + kPropertyControllerOffset,
             sizeof(controller));
         if (row_vtable != addresses.game_image_base +
-                kEditPropertyVtableRva || !controller) {
+                edit_property_vtable_rva() || !controller) {
             return false;
         }
 
@@ -454,7 +472,7 @@ bool postconditions(
                 kControllerBoundValueOffset,
             sizeof(bound_value));
         return controller_vtable == addresses.game_image_base +
-                kTextInputControllerVtableRva &&
+                text_input_controller_vtable_rva() &&
             bound_value == binding.state->native_value.data();
 #if defined(_MSC_VER)
     } __except (EXCEPTION_EXECUTE_HANDLER) {

@@ -219,7 +219,7 @@ DWORD run_host() noexcept {
         erui::detail::set_log_filter(logging_enabled, false);
         log::write("============================================================");
         log::write("ERNativeUI host v%s starting", ER_NATIVE_UI_BUILD_VERSION);
-        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.2.1) build=r128");
+        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.2.1) build=r133");
         log::write("Offline / EAC-disabled use only; hot unloading is unsupported");
 
         // Before anything waits: Scaleform may open the settings movies early.

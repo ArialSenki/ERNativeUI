@@ -1,5 +1,6 @@
 #include "native_value_refresh.hpp"
 
+#include "running_build.hpp"
 #include "runtime_log.hpp"
 
 #include <Windows.h>
@@ -10,19 +11,24 @@
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <string_view>
 
 namespace erui::native {
 namespace {
 
-// Elden Ring 2.7.1.0 (see tools/aob_scan.ps1 in NativeTweaks for the scan).
-constexpr std::uintptr_t kToggleItemCtorRva = 0x94CD40;   // size 0x978
-constexpr std::uintptr_t kSliderItemCtorRva = 0x94D280;   // size 0xE50
-constexpr std::uintptr_t kListSelectRva = 0x739B90;       // (list, index, flag)
-constexpr std::uintptr_t kListRepaintRva = 0x73D0D0;      // (list)
-constexpr std::uintptr_t kToggleIndexOfRva = 0x963A60;    // (item, const char* value)
-constexpr std::uintptr_t kSliderRefreshRva = 0x74FA20;    // SliderCtrl slot 13
-constexpr std::uintptr_t kToggleItemVtableRva = 0x2B14DA8;
-constexpr std::uintptr_t kSliderItemVtableRva = 0x2B14D68;
+// Per-build addresses (MenuObjectAddressProfile and ColorPickerAddressProfile),
+// set by install_native_value_refresh. Item constructors are 0x978 (toggle)
+// and 0xE50 (slider) bytes; list select is (list, index, flag), list repaint
+// (list), toggle index-of (item, const char* value), slider refresh is
+// SliderCtrl slot 13.
+std::uintptr_t g_toggle_item_ctor_rva{};
+std::uintptr_t g_slider_item_ctor_rva{};
+std::uintptr_t g_list_select_rva{};
+std::uintptr_t g_list_repaint_rva{};
+std::uintptr_t g_toggle_index_of_rva{};
+std::uintptr_t g_slider_refresh_rva{};
+std::uintptr_t g_toggle_item_vtable_rva{};
+std::uintptr_t g_slider_item_vtable_rva{};
 
 constexpr std::size_t kToggleListOffset = 0xF0;
 constexpr std::size_t kToggleBoundOffset = 0x8B8;
@@ -31,31 +37,33 @@ constexpr std::size_t kSliderBoundOffset = 0xE40;
 constexpr std::size_t kSliderCurrentOffset = 0xD28;  // inside SliderCtrl
 
 struct Prologue {
-    std::uintptr_t rva;
+    const std::uintptr_t* rva;
     std::array<std::uint8_t, 12> bytes;
 };
 constexpr Prologue kPrologues[]{
-    {kToggleItemCtorRva, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
-    {kSliderItemCtorRva, {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x48, 0x08, 0x56, 0x57, 0x41, 0x56, 0x48}},
-    {kListSelectRva, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
-    {kListRepaintRva, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x83, 0xB9, 0x18, 0x07, 0x00}},
-    {kToggleIndexOfRva, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {&g_toggle_item_ctor_rva, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41}},
+    {&g_slider_item_ctor_rva, {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x48, 0x08, 0x56, 0x57, 0x41, 0x56, 0x48}},
+    {&g_list_select_rva, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
+    {&g_list_repaint_rva, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x83, 0xB9, 0x18, 0x07, 0x00}},
+    {&g_toggle_index_of_rva, {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89}},
 };
 
-// Label colouring (same Scaleform calls as the colour picker preview).
-constexpr std::uintptr_t kPathResolverRva = 0x74B140;     // (source, dest, path) -> dest
-constexpr std::uintptr_t kValueExistsRva = 0x733FA0;      // (proxy)
-constexpr std::uintptr_t kColorTransformRva = 0xD85680;   // (value, 0xAABBGGRR)
-constexpr std::uintptr_t kProxyDestructorRva = 0xD81600;  // (proxy + 0x28)
+// Label colouring (same Scaleform calls as the colour picker preview):
+// path resolver (source, dest, path) -> dest, value exists (proxy), colour
+// transform (value, 0xAABBGGRR), proxy destructor (proxy + 0x28).
+std::uintptr_t g_path_resolver_rva{};
+std::uintptr_t g_value_exists_rva{};
+std::uintptr_t g_color_transform_rva{};
+std::uintptr_t g_proxy_destructor_rva{};
 struct ShortPrologue {
-    std::uintptr_t rva;
+    const std::uintptr_t* rva;
     std::array<std::uint8_t, 8> bytes;
 };
 constexpr ShortPrologue kColorPrologues[]{
-    {kPathResolverRva, {0x4C, 0x89, 0x44, 0x24, 0x18, 0x4C, 0x89, 0x4C}},
-    {kValueExistsRva, {0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x01, 0xFF}},
-    {kColorTransformRva, {0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x48, 0x81}},
-    {kProxyDestructorRva, {0x48, 0x89, 0x4C, 0x24, 0x08, 0x53, 0x48, 0x83}},
+    {&g_path_resolver_rva, {0x4C, 0x89, 0x44, 0x24, 0x18, 0x4C, 0x89, 0x4C}},
+    {&g_value_exists_rva, {0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x01, 0xFF}},
+    {&g_color_transform_rva, {0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x48, 0x81}},
+    {&g_proxy_destructor_rva, {0x48, 0x89, 0x4C, 0x24, 0x08, 0x53, 0x48, 0x83}},
 };
 constexpr std::size_t kProxyStorageSize = 0x60;
 constexpr std::size_t kProxyValueOffset = 0x28;
@@ -181,24 +189,24 @@ bool refresh_item(std::uint8_t* item, Kind kind, const volatile std::uint8_t* bo
 #endif
         const auto vtable = *reinterpret_cast<std::uint8_t* const*>(item);
         if (kind == Kind::toggle) {
-            if (vtable != g_base + kToggleItemVtableRva ||
+            if (vtable != g_base + g_toggle_item_vtable_rva ||
                 *reinterpret_cast<const volatile std::uint8_t* const*>(item + kToggleBoundOffset) != bound) {
                 return false;
             }
-            const int index = reinterpret_cast<ToggleIndexOfFn>(g_base + kToggleIndexOfRva)(item, bound);
+            const int index = reinterpret_cast<ToggleIndexOfFn>(g_base + g_toggle_index_of_rva)(item, bound);
             std::uint8_t* const list = item + kToggleListOffset;
-            (void)reinterpret_cast<ListSelectFn>(g_base + kListSelectRva)(list, index, 0);
-            reinterpret_cast<ListRepaintFn>(g_base + kListRepaintRva)(list);
+            (void)reinterpret_cast<ListSelectFn>(g_base + g_list_select_rva)(list, index, 0);
+            reinterpret_cast<ListRepaintFn>(g_base + g_list_repaint_rva)(list);
             return true;
         }
-        if (vtable != g_base + kSliderItemVtableRva ||
+        if (vtable != g_base + g_slider_item_vtable_rva ||
             *reinterpret_cast<const volatile std::uint8_t* const*>(item + kSliderBoundOffset) != bound) {
             return false;
         }
         std::uint8_t* const ctrl = item + kSliderCtrlOffset;
         *reinterpret_cast<std::int32_t*>(ctrl + kSliderCurrentOffset) = *bound;
         // Through the hooked entry so formatted-slider texts are reapplied.
-        (void)reinterpret_cast<SliderRefreshFn>(g_base + kSliderRefreshRva)(ctrl);
+        (void)reinterpret_cast<SliderRefreshFn>(g_base + g_slider_refresh_rva)(ctrl);
         return true;
 #if defined(_MSC_VER)
     } __except (seh = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
@@ -215,7 +223,7 @@ bool read_live_value(std::uint8_t* item, Kind kind, const volatile std::uint8_t*
 #endif
         const auto vtable = *reinterpret_cast<std::uint8_t* const*>(item);
         const std::size_t offset = kind == Kind::toggle ? kToggleBoundOffset : kSliderBoundOffset;
-        const std::uintptr_t expected = kind == Kind::toggle ? kToggleItemVtableRva : kSliderItemVtableRva;
+        const std::uintptr_t expected = kind == Kind::toggle ? g_toggle_item_vtable_rva : g_slider_item_vtable_rva;
         if (vtable != g_base + expected ||
             *reinterpret_cast<const volatile std::uint8_t* const*>(item + offset) != bound) {
             return false;
@@ -257,10 +265,10 @@ int tint_label_from(void* source, int tint, Slot& slot) noexcept {
 #if defined(_MSC_VER)
     __try {
 #endif
-        if (reinterpret_cast<PathResolverFn>(g_base + kPathResolverRva)(
+        if (reinterpret_cast<PathResolverFn>(g_base + g_path_resolver_rva)(
                 source, proxy.data(), kLabelPath) == proxy.data()) {
             constructed = true;
-            if (reinterpret_cast<ValueExistsFn>(g_base + kValueExistsRva)(proxy.data())) {
+            if (reinterpret_cast<ValueExistsFn>(g_base + g_value_exists_rva)(proxy.data())) {
                 auto*** const object = reinterpret_cast<void***>(proxy.data());
                 using AccessorFn = void*(__fastcall*)(void*);
                 auto* const value = static_cast<std::uint8_t*>((*object && (*object)[1])
@@ -297,7 +305,7 @@ int tint_label_from(void* source, int tint, Slot& slot) noexcept {
     }
     if (constructed) {
         __try {
-            reinterpret_cast<ProxyDestructorFn>(g_base + kProxyDestructorRva)(
+            reinterpret_cast<ProxyDestructorFn>(g_base + g_proxy_destructor_rva)(
                 proxy.data() + kProxyValueOffset);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             result = -1;
@@ -373,17 +381,35 @@ void install_native_value_refresh() noexcept {
     if (g_active.load(std::memory_order_acquire)) return;
     g_base = reinterpret_cast<std::uint8_t*>(GetModuleHandleW(nullptr));
     if (!g_base) return;
+    const EldenRingBuild build = running_elden_ring_build();
+    const std::string_view build_name = elden_ring_build_name(build);
+    const MenuObjectAddressProfile* const menu = find_menu_object_address_profile(build);
+    if (!menu) {
+        erui::detail::logf(erui::LogLevel::warning,
+            "Live value refresh unavailable: no address profile for this game build "
+            "(menu values only update when a page is reopened)");
+        return;
+    }
+    g_toggle_item_ctor_rva = menu->toggle_item_constructor_rva;
+    g_slider_item_ctor_rva = menu->slider_item_constructor_rva;
+    g_list_select_rva = menu->list_select_rva;
+    g_list_repaint_rva = menu->list_repaint_rva;
+    g_toggle_index_of_rva = menu->toggle_index_of_rva;
+    g_slider_refresh_rva = menu->slider_refresh_rva;
+    g_toggle_item_vtable_rva = menu->toggle_item_vtable_rva;
+    g_slider_item_vtable_rva = menu->slider_item_vtable_rva;
     for (const Prologue& p : kPrologues) {
-        if (std::memcmp(g_base + p.rva, p.bytes.data(), p.bytes.size()) != 0) {
-            erui::detail::logf(erui::LogLevel::info,
-                "Live value refresh unavailable: entry RVA 0x%llX does not match this game build",
-                static_cast<unsigned long long>(p.rva));
+        if (std::memcmp(g_base + *p.rva, p.bytes.data(), p.bytes.size()) != 0) {
+            erui::detail::logf(erui::LogLevel::warning,
+                "Live value refresh unavailable: entry RVA 0x%llX does not match Elden Ring %.*s",
+                static_cast<unsigned long long>(*p.rva),
+                static_cast<int>(build_name.size()), build_name.data());
             return;
         }
     }
-    auto toggle = SafetyHookInline::create(g_base + kToggleItemCtorRva,
+    auto toggle = SafetyHookInline::create(g_base + g_toggle_item_ctor_rva,
         reinterpret_cast<void*>(&toggle_ctor_detour), SafetyHookInline::StartDisabled);
-    auto slider = SafetyHookInline::create(g_base + kSliderItemCtorRva,
+    auto slider = SafetyHookInline::create(g_base + g_slider_item_ctor_rva,
         reinterpret_cast<void*>(&slider_ctor_detour), SafetyHookInline::StartDisabled);
     if (!toggle || !slider) {
         erui::detail::logf(erui::LogLevel::warning, "Live value refresh hooks could not be prepared");
@@ -400,14 +426,25 @@ void install_native_value_refresh() noexcept {
     }
     g_active.store(true, std::memory_order_release);
     erui::detail::logf(erui::LogLevel::info, "Live value refresh hooks installed");
-    bool color_ok = true;
-    for (const ShortPrologue& p : kColorPrologues) {
-        color_ok = color_ok && std::memcmp(g_base + p.rva, p.bytes.data(), p.bytes.size()) == 0;
+    const ColorPickerAddressProfile* const color = find_color_picker_address_profile(build);
+    bool color_ok = color != nullptr;
+    if (color) {
+        g_path_resolver_rva = color->scaleform_path_resolver_rva;
+        g_value_exists_rva = color->scaleform_value_exists_rva;
+        g_color_transform_rva = color->scaleform_color_transform_setter_rva;
+        g_proxy_destructor_rva = color->scene_obj_proxy_destructor_rva;
+        for (const ShortPrologue& p : kColorPrologues) {
+            color_ok = color_ok && std::memcmp(g_base + *p.rva, p.bytes.data(), p.bytes.size()) == 0;
+        }
     }
     g_color_ready.store(color_ok, std::memory_order_release);
-    erui::detail::logf(erui::LogLevel::info, color_ok
-        ? "Changed-value label colour available"
-        : "Changed-value label colour unavailable: Scaleform entry points do not match");
+    if (color_ok) {
+        erui::detail::logf(erui::LogLevel::info, "Changed-value label colour available");
+    } else {
+        erui::detail::logf(erui::LogLevel::warning,
+            "Changed-value label colour unavailable: Scaleform entry points do not match Elden Ring %.*s",
+            static_cast<int>(build_name.size()), build_name.data());
+    }
 }
 
 void reset_native_value_refresh() noexcept {

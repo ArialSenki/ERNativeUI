@@ -140,10 +140,27 @@ void test_locate() {
         std::printf("     opener vtable 0x%llX OpenFile 0x%llX MemoryFile vtable 0x%llX\n",
             rva(targets.file_opener_vtable), rva(targets.open_file),
             rva(targets.memory_file_vtable));
-        // Exact values for Elden Ring 2.7.1.0 (the build analysed offline).
-        check(rva(targets.open_file) == 0xD6D280, "OpenFile RVA matches static analysis");
-        check(rva(targets.memory_file_vtable) == 0x2BA7D70,
-            "MemoryFile vtable RVA matches static analysis");
+        // Exact values for the builds analysed offline: 2.7.1.0 (and its
+        // 2.7.1.1 rebuild) and 2.7.2.0.
+        const auto* const dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(game.base());
+        const auto* const nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+            game.base() + dos->e_lfanew);
+        const DWORD stamp = nt->FileHeader.TimeDateStamp;
+        unsigned long long open_file = 0, memory_file = 0;
+        if (stamp == 0x6A96B418 || stamp == 0x6A96BA95) {
+            open_file = 0xD6D280;
+            memory_file = 0x2BA7D70;
+        } else if (stamp == 0x6AABF7E7) {
+            open_file = 0xD6E970;
+            memory_file = 0x2BAA020;
+        }
+        if (open_file) {
+            check(rva(targets.open_file) == open_file, "OpenFile RVA matches static analysis");
+            check(rva(targets.memory_file_vtable) == memory_file,
+                "MemoryFile vtable RVA matches static analysis");
+        } else {
+            std::printf("skip exact RVAs: build 0x%lX not analysed offline\n", stamp);
+        }
     }
     FreeLibrary(image);
 #else
