@@ -83,12 +83,79 @@ int main() {
         L"Button help",
         {.callback = &pressed});
 
-    erui::Page& tab = menu.add_tab(L"Extra", L"Tab help");
+    erui::TabMetadata tab_metadata{};
+    tab_metadata.provider_id = "menu-model";
+    tab_metadata.tab_id = "extra";
+    tab_metadata.preferred_order = 25;
+    tab_metadata.effective_order = 25;
+    erui::Page& tab = menu.add_tab(std::move(tab_metadata), L"Extra");
     tab.add_slider(
         L"Tab level",
         L"Tab slider help",
         level,
         {.minimum = 0, .maximum = 100, .step = 5});
+
+    menu.add_title_screen_text({
+        .provider_id = "menu-model",
+        .text = L"Default title-screen line",
+        .corner = ERUI_TITLE_SCREEN_CORNER_TOP_LEFT,
+    });
+    menu.add_title_screen_text({
+        .provider_id = "menu-model",
+        .text = L"Colored title-screen line",
+        .color = erui::detail::RgbColor{216u, 167u, 103u},
+        .corner = ERUI_TITLE_SCREEN_CORNER_BOTTOM_RIGHT,
+    });
+    bool invalid_title_corner_rejected = false;
+    try {
+        menu.add_title_screen_text({
+            .provider_id = "menu-model",
+            .text = L"Invalid title-screen corner",
+            .corner = 0u,
+        });
+    } catch (const std::invalid_argument&) {
+        invalid_title_corner_rejected = true;
+    }
+    ERUI_TEST_CHECK(invalid_title_corner_rejected);
+
+    const auto invalid_title_text_rejected = [&](std::wstring value) {
+        try {
+            menu.add_title_screen_text({
+                .provider_id = "menu-model",
+                .text = std::move(value),
+                .corner = ERUI_TITLE_SCREEN_CORNER_TOP_LEFT,
+            });
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    ERUI_TEST_CHECK(invalid_title_text_rejected(
+        std::wstring{L'A', L'\0', L'B'}));
+    for (const wchar_t separator : {
+             L'\r', L'\n', static_cast<wchar_t>(0x0085u),
+             static_cast<wchar_t>(0x2028u),
+             static_cast<wchar_t>(0x2029u)}) {
+        ERUI_TEST_CHECK(invalid_title_text_rejected(
+            std::wstring{L'A', separator, L'B'}));
+    }
+    ERUI_TEST_CHECK(invalid_title_text_rejected(
+        std::wstring{static_cast<wchar_t>(0xD800u)}));
+    ERUI_TEST_CHECK(invalid_title_text_rejected(
+        std::wstring{static_cast<wchar_t>(0xDC00u)}));
+    ERUI_TEST_CHECK(invalid_title_text_rejected(std::wstring{
+        static_cast<wchar_t>(0xD800u), L'A'}));
+
+    erui::Menu supplementary_text_menu(L"Supplementary", L"Validation");
+    supplementary_text_menu.add_title_screen_text({
+        .provider_id = "menu-model",
+        .text = std::wstring{
+            static_cast<wchar_t>(0xD83Du),
+            static_cast<wchar_t>(0xDE80u)},
+        .corner = ERUI_TITLE_SCREEN_CORNER_TOP_LEFT,
+    });
+    ERUI_TEST_CHECK(supplementary_text_menu.title_screen_text_count() == 1);
+    ERUI_TEST_CHECK(menu.title_screen_text_count() == 2);
 
     erui::InputBindingSection& bindings = menu.add_input_binding_section(
         "menu-model", L"Example Controls");
@@ -115,6 +182,20 @@ int main() {
     ERUI_TEST_CHECK(compiled);
     ERUI_TEST_CHECK(menu.frozen());
     ERUI_TEST_CHECK(compiled->pages.size() == 3);
+    const auto title_lines = menu.title_screen_texts();
+    ERUI_TEST_CHECK(title_lines.size() == 2);
+    ERUI_TEST_CHECK(title_lines[0].provider_id ==
+        "menu-model");
+    ERUI_TEST_CHECK(title_lines[0].text ==
+        L"Default title-screen line");
+    ERUI_TEST_CHECK(!title_lines[0].color.has_value());
+    ERUI_TEST_CHECK(title_lines[0].corner ==
+        ERUI_TITLE_SCREEN_CORNER_TOP_LEFT);
+    ERUI_TEST_CHECK(title_lines[1].color.has_value());
+    ERUI_TEST_CHECK(*title_lines[1].color ==
+        (erui::detail::RgbColor{216u, 167u, 103u}));
+    ERUI_TEST_CHECK(title_lines[1].corner ==
+        ERUI_TITLE_SCREEN_CORNER_BOTTOM_RIGHT);
     ERUI_TEST_CHECK(compiled->root_page().rows.size() == 6);
     ERUI_TEST_CHECK(compiled->root_page().rows[2].choice_ids.size() == 3);
     ERUI_TEST_CHECK(compiled->root_page().rows[2].kind ==
@@ -122,6 +203,17 @@ int main() {
     ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
         compiled->root_page().rows[2].choice_ids[1])) == L"Balanced");
     ERUI_TEST_CHECK(compiled->tab_page_indices.size() == 1);
+    ERUI_TEST_CHECK(compiled->tabs.size() == 1);
+    ERUI_TEST_CHECK(compiled->tabs.front().page_index ==
+        compiled->tab_page_indices.front());
+    ERUI_TEST_CHECK(compiled->tabs.front().metadata.has_value());
+    ERUI_TEST_CHECK(compiled->tabs.front().metadata->provider_id ==
+        "menu-model");
+    ERUI_TEST_CHECK(compiled->tabs.front().metadata->tab_id == "extra");
+    ERUI_TEST_CHECK(compiled->tabs.front().metadata->preferred_order == 25);
+    ERUI_TEST_CHECK(compiled->tabs.front().metadata->effective_order == 25);
+    ERUI_TEST_CHECK(compiled->tabs.front().metadata->icon.source ==
+        erui::TabIconSource::fallback);
     ERUI_TEST_CHECK(compiled->modeled_button_count == 2);
     ERUI_TEST_CHECK(compiled->modeled_submenu_count == 1);
     ERUI_TEST_CHECK(compiled->modeled_popup_choice_count == 1);
@@ -462,5 +554,80 @@ int main() {
     presentation_fails_closed(
         erui::detail::PageRoute::builtin_continuation(
             builtin_pagination_compiled->root_page_index, 0u, 1u, 1u));
+
+    // Custom-tab main panels also reveal their visual row capacity only at
+    // runtime. A two-slot carrier with 20 rows yields one row plus Next,
+    // thirteen rows between Previous/Next, then six rows plus Previous.
+    erui::Menu tab_pagination(L"Tab Capacity");
+    erui::Page& capacity_tab = tab_pagination.add_tab(L"Capacity Tab");
+    for (int index = 0; index < 20; ++index) {
+        capacity_tab.add_button(
+            L"Tab row " + std::to_wstring(index),
+            L"Tab row help",
+            {.callback = &pressed});
+    }
+    auto tab_pagination_compiled =
+        erui::detail::MenuCompiler::compile(tab_pagination);
+    ERUI_TEST_CHECK(tab_pagination_compiled->tab_page_indices.size() == 1);
+    const std::size_t capacity_tab_index =
+        tab_pagination_compiled->tab_page_indices.front();
+    ERUI_TEST_CHECK(capacity_tab_index < tab_pagination_compiled->pages.size());
+    const erui::detail::CompiledPage& compiled_capacity_tab =
+        tab_pagination_compiled->pages[capacity_tab_index];
+    ERUI_TEST_CHECK(compiled_capacity_tab.kind == erui::PageKind::tab);
+    ERUI_TEST_CHECK(compiled_capacity_tab.rows.size() == 20);
+    ERUI_TEST_CHECK(compiled_capacity_tab.tab_physical_title_plan != nullptr);
+
+    const auto capacity_tab_main = erui::detail::PageRoute::tab_main(
+        capacity_tab_index, 2u);
+    const auto capacity_tab_second =
+        erui::detail::PageRoute::tab_continuation(
+            capacity_tab_index, 2u, 1u);
+    const auto capacity_tab_third =
+        erui::detail::PageRoute::tab_continuation(
+            capacity_tab_index, 2u, 2u);
+    ERUI_TEST_CHECK(
+        tab_pagination_compiled->resolve_slice(capacity_tab_main) == nullptr);
+    ERUI_TEST_CHECK(tab_pagination_compiled->resolve_slice(
+        capacity_tab_second) == nullptr);
+    const auto capacity_tab_main_presentation =
+        tab_pagination_compiled->resolve_presentation(capacity_tab_main);
+    ERUI_TEST_CHECK(capacity_tab_main_presentation.outer_title_id == 0);
+    ERUI_TEST_CHECK(capacity_tab_main_presentation.page_title_id == 0);
+    const auto capacity_tab_second_presentation =
+        tab_pagination_compiled->resolve_presentation(capacity_tab_second);
+    const auto capacity_tab_third_presentation =
+        tab_pagination_compiled->resolve_presentation(capacity_tab_third);
+    ERUI_TEST_CHECK(std::wstring(tab_pagination_compiled->texts.lookup(
+        capacity_tab_second_presentation.outer_title_id)) == L"Tab Capacity");
+    ERUI_TEST_CHECK(std::wstring(tab_pagination_compiled->texts.lookup(
+        capacity_tab_second_presentation.page_title_id)) ==
+        L"Capacity Tab (2/3)");
+    ERUI_TEST_CHECK(std::wstring(tab_pagination_compiled->texts.lookup(
+        capacity_tab_third_presentation.page_title_id)) ==
+        L"Capacity Tab (3/3)");
+
+    const auto tab_presentation_fails_closed =
+        [&](erui::detail::PageRoute route) {
+            const auto presentation =
+                tab_pagination_compiled->resolve_presentation(route);
+            ERUI_TEST_CHECK(presentation.outer_title_id == 0);
+            ERUI_TEST_CHECK(presentation.page_title_id == 0);
+        };
+    tab_presentation_fails_closed(
+        erui::detail::PageRoute::tab_continuation(
+            capacity_tab_index, 0u, 1u));
+    tab_presentation_fails_closed(
+        erui::detail::PageRoute::tab_continuation(
+            capacity_tab_index,
+            static_cast<std::uint8_t>(
+                erui::detail::builtin_page_max_first_capacity + 1u),
+            1u));
+    tab_presentation_fails_closed(
+        erui::detail::PageRoute::tab_continuation(
+            capacity_tab_index, 2u, 3u));
+    tab_presentation_fails_closed(
+        erui::detail::PageRoute::tab_continuation(
+            tab_pagination_compiled->root_page_index, 2u, 1u));
     return 0;
 }

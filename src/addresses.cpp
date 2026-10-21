@@ -5,60 +5,104 @@
 
 #include <cinttypes>
 #include <cstring>
+#include <limits>
 #include <string_view>
 
 namespace erui::native {
 namespace {
-
-constexpr std::uintptr_t kGameOptionsHandlerRva = 0x959DF0;
+// Fork: interfaces only this fork resolves (Mod Settings tab, LineHelpWide,
+// diagnostics). Fixed RVAs are 2.7.1.0 fallbacks behind unique AOBs.
 constexpr std::uintptr_t kOptionSettingTabFrameDispatchRva = 0x9680D0;
 constexpr std::uintptr_t kOptionSettingTabSelectedIndexRva = 0x73AC70;
-constexpr std::uintptr_t kCameraPanelMaterializerRva = 0x959320;
-constexpr std::uintptr_t kDisplayPanelMaterializerRva = 0x95D540;
-constexpr std::uintptr_t kSoundPanelMaterializerRva = 0x959090;
-constexpr std::uintptr_t kNetworkPanelMaterializerRva = 0x95AD00;
-constexpr std::uintptr_t kKeyboardMousePanelMaterializerRva = 0x95CB30;
-constexpr std::uintptr_t kGraphicsPanelMaterializerRva = 0x95C050;
 constexpr std::uintptr_t kModSettingsPanelMaterializerRva = 0x95D200;
 constexpr std::uintptr_t kModSettingsCategoryBuilderRva = 0x807E10;
 constexpr std::uintptr_t kModSettingsCategoryDestructorRva = 0x86A190;
 constexpr std::uintptr_t kConfigurationCategoryAppendRva = 0x968CF0;
 constexpr std::uintptr_t kModSettingsPanelRouteSiteRva = 0x93CB22;
 constexpr std::uintptr_t kModSettingsPanelRouteReturnSiteRva = 0x93CB34;
-constexpr std::uintptr_t kSubHandlerRva = 0x95B770;
-constexpr std::uintptr_t kOpenSubPageRva = 0x950850;
-constexpr std::uintptr_t kOnOffListRva = 0x955550;
-constexpr std::uintptr_t kMenuContextRva = 0x86A2F0;
-constexpr std::uintptr_t kTextRefHelpRva = 0x7615E0;
-constexpr std::uintptr_t kTextRefLabelRva = 0x7617C0;
-constexpr std::uintptr_t kRootButtonTextReferencesRva = 0x958210;
-constexpr std::uintptr_t kRootButtonDisplayTextRva = 0x763BA0;
-constexpr std::uintptr_t kAddToggleRva = 0x94A140;
-constexpr std::uintptr_t kAddChoiceRva = 0x94A2C0;
-constexpr std::uintptr_t kAddSliderRva = 0x94A590;
-constexpr std::uintptr_t kSliderRefreshRva = 0x74FA20;
-constexpr std::uintptr_t kAddButtonRva = 0x92AA40;
 constexpr std::uintptr_t kAddUnclassifiedRowBuilderDiagnosticRva = 0x94A430;
-constexpr std::uintptr_t kDestroyTextReferencesRva = 0x743AE0;
-constexpr std::uintptr_t kTextResolverRva = 0x764220;
-constexpr std::uintptr_t kNativeBackRva = 0x747CD0;
-constexpr std::uintptr_t kPageFrameRva = 0x958FF0;
-constexpr std::uintptr_t kScaleformPathResolverRva = 0x74B140;
-constexpr std::uintptr_t kScaleformTextSetterRva = 0x74AE50;
 constexpr std::uintptr_t kScaleformVisibilitySetterRva = 0x734190;
 constexpr std::uintptr_t kScaleformValueExistsRva = 0x733FA0;
 constexpr std::uintptr_t kStatusBarBinderRva = 0x746110;
 constexpr std::uintptr_t kScaleformMaxHScrollRva = 0x74AF90;
 constexpr std::uintptr_t kScaleformSetHScrollRva = 0x74B080;
-
-constexpr std::string_view kGameOptionsHandlerPattern =
-    "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 E0 F2 FF FF";
 constexpr std::string_view kOptionSettingTabFrameDispatchPattern =
     "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 30 48 8B D9 "
     "0F 29 74 24 20 48 8B 49 10 49 8B F8 0F 28 F1 E8 ?? ?? ?? ?? "
     "48 8B 4B 18 8B F0 E8 ?? ?? ?? ??";
 constexpr std::string_view kOptionSettingTabSelectedIndexPattern =
     "8B 81 D4 00 00 00 C3";
+constexpr std::string_view kModSettingsPanelMaterializerPattern =
+    "40 55 56 57 48 8D AC 24 60 FE FF FF 48 81 EC A0 02 00 00 "
+    "48 C7 44 24 50 FE FF FF FF 48 89 9C 24 D0 02 00 00";
+constexpr std::string_view kModSettingsCategoryBuilderPattern =
+    "4C 8B DC 49 89 4B 08 57 48 81 EC B0 00 00 00 "
+    "48 C7 44 24 28 FE FF FF FF";
+constexpr std::string_view kModSettingsCategoryDestructorPattern =
+    "48 89 4C 24 08 57 48 83 EC 30 "
+    "48 C7 44 24 20 FE FF FF FF 48 89 5C 24 50";
+constexpr std::string_view kConfigurationCategoryAppendPattern =
+    "40 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF "
+    "48 89 5C 24 48 48 8B FA 48 8B D9";
+constexpr std::string_view kModSettingsPanelRouteSitePattern =
+    "44 0F B6 CF 4C 8B C3 48 8B D0 48 8B CE E8 ?? ?? ?? ??";
+constexpr std::string_view kModSettingsPanelRouteReturnSitePattern =
+    "48 8B D8 48 8D 8C 24 80 00 00 00 E8 ?? ?? ?? ??";
+constexpr std::string_view kAddUnclassifiedRowBuilderDiagnosticPrologue =
+    "4C 8B DC 53 55 56 57 41 56 41 57 48 81 EC 98 01 00 00";
+constexpr std::string_view kScaleformVisibilitySetterPattern =
+    "40 53 48 83 EC 20 48 8B 01 0F B6 DA FF 50 08 8B 48 20 "
+    "81 E1 8F 00 00 00 83 F9 02";
+constexpr std::string_view kScaleformValueExistsPattern =
+    "48 83 EC 28 48 8B 01 FF 10 F6 40 20 8F "
+    "0F 95 C0 48 83 C4 28 C3";
+// Status bar binder: resolves the base proxy, then "LineHelp" into +0x60 and
+// "KeyGuide" into +0xC0 (verified on 2.7.1.0).
+constexpr std::string_view kStatusBarBinderPattern =
+    "48 8B C4 48 89 48 08 57 48 81 EC 50 01 00 00 "
+    "48 C7 44 24 28 FE FF FF FF 48 89 58 10 48 89 70 18 "
+    "48 8B DA 48 8B F1 C7 44 24 20 00 00 00 00";
+constexpr std::string_view kScaleformMaxHScrollPattern =
+    "48 83 EC 28 48 8B 09 48 8B 01 FF 50 08 8B 48 20 "
+    "81 E1 8F 00 00 00 83 F9 02 72 0C 48 8B C8 48 83 C4 28 E9";
+constexpr std::string_view kScaleformSetHScrollPattern =
+    "40 53 48 83 EC 20 48 8B 09 8B DA 48 8B 01 FF 50 08 8B 48 20 "
+    "81 E1 8F 00 00 00 83 F9 02 72 0F 8B D3 48 8B C8 48 83 C4 20";
+// Fork (r122): game-update resilience. These interfaces used to fall back to
+// 2.7.1.0 RVAs because their AOBs were ambiguous or absent. Each lookup below
+// is unique on 2.7.1.0 (relative displacements wildcarded, never crossing the
+// function end) and resolves to the same RVA as the fallback; ERNativeUIAudit
+// verifies that. Call-target lookups also validate the target's prologue.
+// The historical pattern + fallback path still runs when these fail.
+constexpr std::string_view kModSettingsCategoryBuilderUniquePattern =
+    "4C 8B DC 49 89 4B 08 57 48 81 EC B0 00 00 00 48 C7 44 24 28 FE FF FF FF "
+    "49 89 5B 18 48 8B F9 C7 44 24 20 00 00 00 00 49 8D 43 C0 49 89 43 10 "
+    "BA 78 AE 01 00";
+constexpr std::string_view kModSettingsCategoryDestructorUniquePattern =
+    "48 89 4C 24 08 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 50 "
+    "48 8B F9 48 8D 05 ?? ?? ?? ?? 48 89 01 48 8D 41 08";
+constexpr std::string_view kConfigurationCategoryAppendUniquePattern =
+    "40 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 48 48 8B FA "
+    "48 8B D9 48 8B 81 58 05 00 00";
+// Argument setup before the panel-route call; the site is 30 bytes in and the
+// return site follows the call, 0x12 bytes after the site.
+constexpr std::string_view kModSettingsPanelRouteContextPattern =
+    "C6 44 24 38 01 48 8D 4C 24 50 48 89 4C 24 30 48 8D 4C 24 60 48 89 4C 24 28 "
+    "C6 44 24 20 06 44 0F B6 CF 4C 8B C3";
+constexpr std::size_t kModSettingsPanelRouteSiteOffset = 30;
+constexpr std::size_t kModSettingsPanelRouteReturnDelta = 0x12;
+// The tab frame dispatcher's first call reads the selected tab index.
+constexpr std::size_t kTabSelectedIndexCallOffset = 0x21;
+constexpr std::string_view kScaleformMaxHScrollCallsite =
+    "88 87 5C 0B 00 00 C7 87 60 0B 00 00 00 00 00 00 E8 ?? ?? ?? ??";
+constexpr std::size_t kScaleformMaxHScrollCallOffset = 16;
+constexpr std::string_view kScaleformSetHScrollCallsite =
+    "33 D2 C7 87 60 0B 00 00 00 00 00 00 E8 ?? ?? ?? ??";
+constexpr std::size_t kScaleformSetHScrollCallOffset = 12;
+
+
+constexpr std::string_view kGameOptionsHandlerPattern =
+    "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 E0 F2 FF FF";
 // Category 1's CameraSetting row materializer. The wrapper at 0x93CB70
 // stores this target in the same two-argument callback slot used by the other
 // ordinary OptionSetting panels.
@@ -87,22 +131,6 @@ constexpr std::string_view kGraphicsPanelMaterializerPattern =
     "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 50 F5 FF FF "
     "48 81 EC B0 0B 00 00 48 C7 45 80 FE FF FF FF "
     "48 89 9C 24 00 0C 00 00";
-constexpr std::string_view kModSettingsPanelMaterializerPattern =
-    "40 55 56 57 48 8D AC 24 60 FE FF FF 48 81 EC A0 02 00 00 "
-    "48 C7 44 24 50 FE FF FF FF 48 89 9C 24 D0 02 00 00";
-constexpr std::string_view kModSettingsCategoryBuilderPattern =
-    "4C 8B DC 49 89 4B 08 57 48 81 EC B0 00 00 00 "
-    "48 C7 44 24 28 FE FF FF FF";
-constexpr std::string_view kModSettingsCategoryDestructorPattern =
-    "48 89 4C 24 08 57 48 83 EC 30 "
-    "48 C7 44 24 20 FE FF FF FF 48 89 5C 24 50";
-constexpr std::string_view kConfigurationCategoryAppendPattern =
-    "40 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF "
-    "48 89 5C 24 48 48 8B FA 48 8B D9";
-constexpr std::string_view kModSettingsPanelRouteSitePattern =
-    "44 0F B6 CF 4C 8B C3 48 8B D0 48 8B CE E8 ?? ?? ?? ??";
-constexpr std::string_view kModSettingsPanelRouteReturnSitePattern =
-    "48 8B D8 48 8D 8C 24 80 00 00 00 E8 ?? ?? ?? ??";
 constexpr std::string_view kSubHandlerPattern =
     "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 20 F7 FF FF "
     "48 81 EC E0 09 00 00 48 C7 44 24 40 FE FF FF FF";
@@ -147,22 +175,11 @@ constexpr std::string_view kAddChoiceCallsitePattern =
     "4D 8D 46 01 48 8D 4C 24 31 48 89 4C 24 20 "
     "4C 8B CB 48 8B D0 48 8B CE E8 ?? ?? ?? ??";
 constexpr std::size_t kAddChoiceCallOffset = 23;
-constexpr std::uintptr_t kChoiceContextConstructorRva = 0x86A410;
 constexpr std::string_view kChoiceContextConstructorPrologue =
     "40 53 48 81 EC A0 00 00 00 48 C7 44 24 20 FE FF FF FF";
-constexpr std::uintptr_t kChoiceListBuilderRva = 0x956CF0;
 constexpr std::string_view kChoiceListBuilderPrologue =
     "48 8B C4 55 41 56 41 57 48 8D 68 A1 48 81 EC A0 00 00 00 "
     "48 C7 45 D7 FE FF FF FF";
-
-constexpr std::uintptr_t kPopupChoiceConstructorRva = 0x95D010;
-constexpr std::uintptr_t kPopupChoiceListProviderRva = 0x9623A0;
-constexpr std::uintptr_t kPopupChoiceListTemplateRva = 0x86A610;
-constexpr std::uintptr_t kPopupChoiceValueInvokeRva = 0x962520;
-constexpr std::uintptr_t kPopupChoiceSelectionInvokeRva = 0x962330;
-constexpr std::uintptr_t kPopupChoiceValueVtableRva = 0x2B15A78;
-constexpr std::uintptr_t kPopupChoiceSelectionVtableRva = 0x2B15AB0;
-constexpr std::uintptr_t kPopupChoicePresentationVtableRva = 0x2B15AE8;
 
 constexpr std::string_view kPopupChoiceConstructorPattern =
     "40 55 53 56 57 41 54 41 55 41 56 41 57 "
@@ -199,8 +216,6 @@ constexpr std::string_view kAddChoicePrologue =
     "48 81 EC E8 01 00 00";
 constexpr std::string_view kAddButtonPrologue =
     "40 53 55 56 57 48 81 EC 18 01 00 00";
-constexpr std::string_view kAddUnclassifiedRowBuilderDiagnosticPrologue =
-    "4C 8B DC 53 55 56 57 41 56 41 57 48 81 EC 98 01 00 00";
 constexpr std::string_view kDestroyTextReferencesPrologue =
     "48 89 4C 24 08 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF "
     "48 89 5C 24 50 48 89 74 24 58 48 8B F1 48 8D 41 38";
@@ -217,9 +232,27 @@ constexpr std::string_view kPageFramePattern =
     "E8 ?? ?? ?? ?? 48 8B C8 48 8D 97 38 1B 00 00 "
     "E8 ?? ?? ?? ?? 80 BF E2 1C 00 00 00 75 ?? "
     "80 BF E1 1C 00 00 00 75 ??";
-constexpr std::string_view kScaleformVisibilitySetterPattern =
-    "40 53 48 83 EC 20 48 8B 01 0F B6 DA FF 50 08 8B 48 20 "
-    "81 E1 8F 00 00 00 83 F9 02";
+
+constexpr std::array<unsigned char, 16> kGameOptionsEntryPrefix{
+    0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
+    0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24,
+};
+constexpr std::array<unsigned char, 16> kSubHandlerEntryPrefix{
+    0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
+    0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24,
+};
+constexpr std::array<unsigned char, 16> kTextResolverEntryPrefix{
+    0x48, 0x89, 0x4C, 0x24, 0x08, 0x57, 0x48, 0x83,
+    0xEC, 0x40, 0x48, 0xC7, 0x44, 0x24, 0x38, 0xFE,
+};
+constexpr std::array<unsigned char, 16> kSliderRefreshEntryPrefix{
+    0x40, 0x57, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00,
+    0x00, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF,
+};
+constexpr std::array<unsigned char, 16> kSelectorSelectEntryPrefix{
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
+    0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48,
+};
 
 // These interfaces were recovered from the current Game Options construction
 // path. The resolver receives MenuTitle/Text_0 at the page constructor and
@@ -235,87 +268,16 @@ constexpr std::string_view kScaleformPathResolverPattern =
 constexpr std::string_view kScaleformTextSetterPattern =
     "40 53 48 83 EC 20 48 8B 09 48 8B DA 48 8B 01 FF 50 08 "
     "8B 48 20 81 E1 8F 00 00 00 83 F9 02 72 1B";
-constexpr std::string_view kScaleformValueExistsPattern =
-    "48 83 EC 28 48 8B 01 FF 10 F6 40 20 8F "
-    "0F 95 C0 48 83 C4 28 C3";
-// Status bar binder: resolves the base proxy, then "LineHelp" into +0x60 and
-// "KeyGuide" into +0xC0 (verified on 2.7.1.0).
-constexpr std::string_view kStatusBarBinderPattern =
-    "48 8B C4 48 89 48 08 57 48 81 EC 50 01 00 00 "
-    "48 C7 44 24 28 FE FF FF FF 48 89 58 10 48 89 70 18 "
-    "48 8B DA 48 8B F1 C7 44 24 20 00 00 00 00";
-constexpr std::string_view kScaleformMaxHScrollPattern =
-    "48 83 EC 28 48 8B 09 48 8B 01 FF 50 08 8B 48 20 "
-    "81 E1 8F 00 00 00 83 F9 02 72 0C 48 8B C8 48 83 C4 28 E9";
-constexpr std::string_view kScaleformSetHScrollPattern =
-    "40 53 48 83 EC 20 48 8B 09 8B DA 48 8B 01 FF 50 08 8B 48 20 "
-    "81 E1 8F 00 00 00 83 F9 02 72 0F 8B D3 48 8B C8 48 83 C4 20";
 constexpr std::string_view kScaleformResultDestructorPattern =
     "48 89 4C 24 08 53 48 83 EC 30 48 C7 44 24 20 FE FF FF FF "
     "48 8D 05 ?? ?? ?? ?? 48 89 01 48 8D 59 08 8B 43 18 "
     "C1 E8 06 A8 01 74 1A";
 
-// Fork (r122): game-update resilience. These interfaces used to fall back to
-// 2.7.1.0 RVAs because their AOBs were ambiguous or absent. Each lookup below
-// is unique on 2.7.1.0 (relative displacements wildcarded, never crossing the
-// function end) and resolves to the same RVA as the fallback; ERNativeUIAudit
-// verifies that. Call-target lookups also validate the target's prologue.
-// The historical pattern + fallback path still runs when these fail.
-constexpr std::string_view kModSettingsCategoryBuilderUniquePattern =
-    "4C 8B DC 49 89 4B 08 57 48 81 EC B0 00 00 00 48 C7 44 24 28 FE FF FF FF "
-    "49 89 5B 18 48 8B F9 C7 44 24 20 00 00 00 00 49 8D 43 C0 49 89 43 10 "
-    "BA 78 AE 01 00";
-constexpr std::string_view kModSettingsCategoryDestructorUniquePattern =
-    "48 89 4C 24 08 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 50 "
-    "48 8B F9 48 8D 05 ?? ?? ?? ?? 48 89 01 48 8D 41 08";
-constexpr std::string_view kConfigurationCategoryAppendUniquePattern =
-    "40 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 48 48 8B FA "
-    "48 8B D9 48 8B 81 58 05 00 00";
-// Argument setup before the panel-route call; the site is 30 bytes in and the
-// return site follows the call, 0x12 bytes after the site.
-constexpr std::string_view kModSettingsPanelRouteContextPattern =
-    "C6 44 24 38 01 48 8D 4C 24 50 48 89 4C 24 30 48 8D 4C 24 60 48 89 4C 24 28 "
-    "C6 44 24 20 06 44 0F B6 CF 4C 8B C3";
-constexpr std::size_t kModSettingsPanelRouteSiteOffset = 30;
-constexpr std::size_t kModSettingsPanelRouteReturnDelta = 0x12;
-// The tab frame dispatcher's first call reads the selected tab index.
-constexpr std::size_t kTabSelectedIndexCallOffset = 0x21;
-constexpr std::string_view kScaleformMaxHScrollCallsite =
-    "88 87 5C 0B 00 00 C7 87 60 0B 00 00 00 00 00 00 E8 ?? ?? ?? ??";
-constexpr std::size_t kScaleformMaxHScrollCallOffset = 16;
-constexpr std::string_view kScaleformSetHScrollCallsite =
-    "33 D2 C7 87 60 0B 00 00 00 00 00 00 E8 ?? ?? ?? ??";
-constexpr std::size_t kScaleformSetHScrollCallOffset = 12;
-constexpr std::string_view kRootButtonTextReferencesUniquePattern =
-    "4C 8B DC 57 48 81 EC 80 00 00 00 49 C7 43 A8 FE FF FF FF 49 89 5B 10 "
-    "49 89 73 18 48 8B 05 ?? ?? ?? ??";
-// root button text refs calls the display-text builder at +0x40.
-constexpr std::size_t kRootButtonDisplayCallOffset = 0x40;
-constexpr std::string_view kChoiceContextUniquePattern =
-    "40 53 48 81 EC A0 00 00 00 48 C7 44 24 20 FE FF FF FF 48 8B D9 "
-    "48 C7 01 00 00 00 00";
-// The subpage handler's first call builds the inline choice list.
-constexpr std::size_t kChoiceListBuilderCallOffset = 0x56;
-constexpr std::string_view kPopupChoiceConstructorCallsite =
-    "4C 8D 85 A0 08 00 00 48 8B D0 49 8B CE E8 ?? ?? ?? ??";
-constexpr std::size_t kPopupChoiceConstructorCallOffset = 13;
-// Graphics panel stores the popup list vtable (lea rax, [rip+disp]); its
-// slot 2 is the list provider.
-constexpr std::string_view kPopupListVtableContextPattern =
-    "4C 89 AD 18 09 00 00 48 8D 85 E0 08 00 00 48 89 44 24 48 48 8D 85 E0 08 00 00 "
-    "48 89 44 24 50 48 8D 05 ?? ?? ?? ?? 48 89 85 E0 08 00 00 48 8D 05 ?? ?? ?? ?? "
-    "48 89 85 E0 08 00 00";
-constexpr std::size_t kPopupListVtableLeaOffset = 45;
-constexpr std::string_view kPopupChoiceListTemplateUniquePattern =
-    "48 8B C4 55 57 41 54 41 56 41 57 48 8D 68 A1 48 81 EC C0 00 00 00 "
-    "48 C7 45 9F FE FF FF FF 48 89 58 10 48 89 70 18 48 8B 05 ?? ?? ?? ?? "
-    "48 33 C4 48 89 45 2F";
-
 // TextInput retains owner-relative state and callbacks, so a locally matching
 // byte sequence is accepted only after a recognized PE identity selects an
 // explicitly verified build profile.
-// Both supported profiles currently use the same six RVAs. Keeping two
-// explicit records makes a future divergence visible and unit-testable.
+// Every recognized build keeps an explicit record, even where individual
+// RVAs coincide, so later divergence remains visible and unit-testable.
 
 constexpr std::string_view kTextInputRowProducerPattern =
     "40 55 53 56 57 41 54 41 55 41 56 41 57 "
@@ -351,7 +313,7 @@ std::uint8_t* resolve_direct(
     const ScanResult scan = game.scan_executable(scan_pattern);
     if (scan.address && scan.matches == 1) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s = %p (AOB, RVA 0x%" PRIXPTR ")",
             name,
             static_cast<void*>(scan.address),
@@ -362,13 +324,13 @@ std::uint8_t* resolve_direct(
 
     if (scan.matches > 1) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s AOB was ambiguous (%zu matches)",
             name,
             scan.matches);
     } else {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s AOB was not found",
             name);
     }
@@ -378,7 +340,7 @@ std::uint8_t* resolve_direct(
         (fallback_validation.empty() || game.matches(fallback, fallback_validation));
     if (valid) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s = %p (validated fallback RVA 0x%" PRIXPTR ")",
             name,
             static_cast<void*>(fallback),
@@ -405,7 +367,7 @@ std::uint8_t* resolve_call_target(
     if (scan.address && scan.matches == 1) {
         if (auto* target = resolve_rel32_call(game, scan.address + call_offset)) {
             erui::detail::logf(
-                erui::LogLevel::info,
+                erui::LogLevel::verbose,
                 "Address %-22s = %p (AOB call target, RVA 0x%" PRIXPTR ")",
                 name,
                 static_cast<void*>(target),
@@ -414,18 +376,18 @@ std::uint8_t* resolve_call_target(
             return target;
         }
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s callsite matched but rel32 resolution failed",
             name);
     } else if (scan.matches > 1) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s callsite AOB was ambiguous (%zu matches)",
             name,
             scan.matches);
     } else {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s callsite AOB was not found",
             name);
     }
@@ -443,7 +405,7 @@ std::uint8_t* resolve_call_target(
         game.is_executable(fallback) && game.matches(fallback, fallback_validation);
     if (valid) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s = %p (validated fallback RVA 0x%" PRIXPTR ")",
             name,
             static_cast<void*>(fallback),
@@ -468,7 +430,7 @@ std::uint8_t* resolve_optional_direct(
     const ScanResult scan = game.scan_executable(scan_pattern);
     if (scan.address && scan.matches == 1) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s = %p (AOB, RVA 0x%" PRIXPTR ")",
             name,
             static_cast<void*>(scan.address),
@@ -482,7 +444,7 @@ std::uint8_t* resolve_optional_direct(
         game.is_executable(fallback) && game.matches(fallback, fallback_validation);
     if (valid) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s = %p (validated fallback RVA 0x%" PRIXPTR ")",
             name,
             static_cast<void*>(fallback),
@@ -499,14 +461,44 @@ std::uint8_t* resolve_optional_direct(
     return nullptr;
 }
 
-std::uint8_t* resolve_text_resolver(const ModuleView& game) noexcept {
+std::uint8_t* resolve_optional_call_target(
+    const ModuleView& game,
+    const char* name,
+    std::string_view callsite_pattern,
+    std::size_t call_offset) noexcept {
+    const ScanResult scan = game.scan_executable(callsite_pattern);
+    if (scan.address && scan.matches == 1) {
+        if (auto* target = resolve_rel32_call(
+                game, scan.address + call_offset)) {
+            erui::detail::logf(
+                erui::LogLevel::verbose,
+                "Optional address %-13s = %p (AOB call target, RVA 0x%" PRIXPTR ")",
+                name,
+                static_cast<void*>(target),
+                reinterpret_cast<std::uintptr_t>(target) -
+                    reinterpret_cast<std::uintptr_t>(game.base()));
+            return target;
+        }
+    }
+    erui::detail::logf(
+        erui::LogLevel::warning,
+        "Optional address %-13s unavailable (callsite AOB matches=%zu)",
+        name,
+        scan.matches);
+    return nullptr;
+}
+
+std::uint8_t* resolve_text_resolver(
+    const ModuleView& game,
+    std::uintptr_t fallback_rva) noexcept {
     return resolve_direct(
         game,
         "native text resolver",
         kTextResolverPrologue,
-        kTextResolverRva,
+        fallback_rva,
         kTextResolverPrologue);
 }
+
 
 // Fork (r122): build-independent lookups; nullptr lets the caller continue
 // with its historical pattern + fallback path.
@@ -588,7 +580,7 @@ void** resolve_callable_vtable(
 
     if (matches == 1) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s = %p (callable vtable scan, RVA 0x%" PRIXPTR ")",
             name,
             static_cast<void*>(match),
@@ -600,7 +592,7 @@ void** resolve_callable_vtable(
     auto** fallback = reinterpret_cast<void**>(game.at_rva(fallback_rva));
     if (valid_callable_vtable(game, fallback, invoke)) {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address %-22s = %p (validated fallback RVA 0x%" PRIXPTR ")",
             name,
             static_cast<void*>(fallback),
@@ -615,6 +607,224 @@ void** resolve_callable_vtable(
         matches,
         fallback_rva);
     return nullptr;
+}
+
+[[nodiscard]] bool preserved_entry_matches_profile(
+    const ModuleView& game,
+    const void* address,
+    std::uintptr_t expected_rva) noexcept {
+    return address != nullptr &&
+        address == game.at_rva(expected_rva) &&
+        game.contains(address) &&
+        game.is_executable(address);
+}
+
+[[nodiscard]] bool live_prefix_matches(
+    const void* address,
+    const std::array<unsigned char, 16>& approved) noexcept {
+    return address &&
+        std::memcmp(address, approved.data(), approved.size()) == 0;
+}
+
+[[nodiscard]] const void* absolute_indirect_jump_target(
+    const unsigned char* entry) noexcept {
+    if (!entry || entry[0] != 0xFF || entry[1] != 0x25) return nullptr;
+    std::int32_t displacement{};
+    std::memcpy(&displacement, entry + 2, sizeof(displacement));
+    const std::uintptr_t instruction_end =
+        reinterpret_cast<std::uintptr_t>(entry) + 6U;
+    std::uintptr_t slot_value{};
+    if (displacement >= 0) {
+        const auto distance = static_cast<std::uintptr_t>(displacement);
+        if (instruction_end >
+            (std::numeric_limits<std::uintptr_t>::max)() - distance) {
+            return nullptr;
+        }
+        slot_value = instruction_end + distance;
+    } else {
+        const auto distance = static_cast<std::uintptr_t>(
+            -static_cast<std::int64_t>(displacement));
+        if (instruction_end < distance) return nullptr;
+        slot_value = instruction_end - distance;
+    }
+
+    const auto* const slot = reinterpret_cast<const void*>(slot_value);
+    MEMORY_BASIC_INFORMATION memory{};
+    if (VirtualQuery(slot, &memory, sizeof(memory)) != sizeof(memory) ||
+        memory.State != MEM_COMMIT ||
+        (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) {
+        return nullptr;
+    }
+    const auto region_end = reinterpret_cast<std::uintptr_t>(
+        memory.BaseAddress) + memory.RegionSize;
+    if (slot_value > region_end ||
+        sizeof(void*) > region_end - slot_value) {
+        return nullptr;
+    }
+
+    const void* target{};
+#if defined(_MSC_VER)
+    __try {
+#endif
+    std::memcpy(&target, slot, sizeof(target));
+#if defined(_MSC_VER)
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+#endif
+    return target;
+}
+
+[[nodiscard]] bool approved_detour_target_matches(
+    const void* entry,
+    const std::array<unsigned char, 16>& pristine,
+    const std::array<unsigned char, 16>& approved,
+    const void* approved_target) noexcept {
+    if (approved == pristine) return approved_target == nullptr;
+    return approved_target &&
+        absolute_indirect_jump_target(
+            static_cast<const unsigned char*>(entry)) == approved_target;
+}
+
+template <typename Function>
+[[nodiscard]] bool capture_attach_entry(
+    std::uint8_t* image_base,
+    std::size_t image_size,
+    std::uintptr_t rva,
+    const std::array<unsigned char, 16>& expected_prefix,
+    Function& function,
+    std::array<unsigned char, 16>& pristine_prefix) noexcept {
+    if (!image_base || rva >= image_size ||
+        pristine_prefix.size() > image_size - rva) {
+        return false;
+    }
+    auto* const entry = image_base + rva;
+    pristine_prefix = expected_prefix;
+    function = reinterpret_cast<Function>(entry);
+    return true;
+}
+
+[[nodiscard]] bool canonical_prefixes_are_complete(
+    const PreservedSharedMenuAddresses& preserved) noexcept {
+    return preserved.game_options_pristine_prefix ==
+            kGameOptionsEntryPrefix &&
+        preserved.sub_pristine_prefix == kSubHandlerEntryPrefix &&
+        preserved.text_pristine_prefix == kTextResolverEntryPrefix &&
+        (!preserved.slider_refresh ||
+            preserved.slider_pristine_prefix == kSliderRefreshEntryPrefix);
+}
+
+[[nodiscard]] bool validate_preserved_shared_menu_entry(
+    const ModuleView& game,
+    const PreservedSharedMenuAddresses& preserved,
+    const SharedMenuAddressProfile* profile,
+    PreservedSharedMenuEntry entry) noexcept {
+    if (!profile || !preserved.required_complete() ||
+        !preserved.required_entries_approved ||
+        preserved.game_image_base != game.base() ||
+        preserved.game_image_size != game.image_size()) {
+        return false;
+    }
+
+    const void* address{};
+    std::uintptr_t expected_rva{};
+    const std::array<unsigned char,
+        PreservedSharedMenuAddresses::entry_prefix_size>* pristine{};
+    const std::array<unsigned char,
+        PreservedSharedMenuAddresses::entry_prefix_size>* approved{};
+    const void* approved_target{};
+
+    switch (entry) {
+    case PreservedSharedMenuEntry::game_options:
+        address = reinterpret_cast<const void*>(
+            preserved.game_options_handler);
+        expected_rva = profile->game_options_handler_rva;
+        pristine = &preserved.game_options_pristine_prefix;
+        approved = &preserved.game_options_approved_prefix;
+        approved_target = preserved.approved_detour_targets[0];
+        if (*pristine != kGameOptionsEntryPrefix) return false;
+        break;
+    case PreservedSharedMenuEntry::sub_handler:
+        address = reinterpret_cast<const void*>(preserved.sub_handler);
+        expected_rva = profile->sub_handler_rva;
+        pristine = &preserved.sub_pristine_prefix;
+        approved = &preserved.sub_approved_prefix;
+        approved_target = preserved.approved_detour_targets[1];
+        if (*pristine != kSubHandlerEntryPrefix) return false;
+        break;
+    case PreservedSharedMenuEntry::text_resolver:
+        address = reinterpret_cast<const void*>(preserved.text_resolver);
+        expected_rva = profile->text_resolver_rva;
+        pristine = &preserved.text_pristine_prefix;
+        approved = &preserved.text_approved_prefix;
+        approved_target = preserved.approved_detour_targets[2];
+        if (*pristine != kTextResolverEntryPrefix) return false;
+        break;
+    case PreservedSharedMenuEntry::slider_refresh:
+        if (!preserved.slider_refresh ||
+            !preserved.slider_entry_approved) {
+            return false;
+        }
+        address = reinterpret_cast<const void*>(preserved.slider_refresh);
+        expected_rva = profile->slider_refresh_rva;
+        pristine = &preserved.slider_pristine_prefix;
+        approved = &preserved.slider_approved_prefix;
+        approved_target = preserved.slider_approved_detour_target;
+        if (*pristine != kSliderRefreshEntryPrefix) return false;
+        break;
+    case PreservedSharedMenuEntry::selector_select:
+        if (!preserved.selector_select ||
+            !preserved.selector_select_entry_approved) {
+            return false;
+        }
+        address = preserved.selector_select;
+        expected_rva = profile->selector_select_rva;
+        pristine = &preserved.selector_select_pristine_prefix;
+        approved = &preserved.selector_select_approved_prefix;
+        approved_target =
+            preserved.selector_select_approved_detour_target;
+        if (*pristine != kSelectorSelectEntryPrefix) return false;
+        break;
+    default:
+        return false;
+    }
+
+    return preserved_entry_matches_profile(game, address, expected_rva) &&
+        live_prefix_matches(address, *approved) &&
+        approved_detour_target_matches(
+            address, *pristine, *approved, approved_target);
+}
+
+[[nodiscard]] bool validate_preserved_shared_menu_addresses(
+    const ModuleView& game,
+    const PreservedSharedMenuAddresses& preserved,
+    const SharedMenuAddressProfile* profile) noexcept {
+    return profile && preserved.required_complete() &&
+        preserved.required_entries_approved &&
+        canonical_prefixes_are_complete(preserved) &&
+        preserved.game_image_base == game.base() &&
+        preserved.game_image_size == game.image_size() &&
+        validate_preserved_shared_menu_entry(
+            game,
+            preserved,
+            profile,
+            PreservedSharedMenuEntry::game_options) &&
+        validate_preserved_shared_menu_entry(
+            game,
+            preserved,
+            profile,
+            PreservedSharedMenuEntry::sub_handler) &&
+        validate_preserved_shared_menu_entry(
+            game,
+            preserved,
+            profile,
+            PreservedSharedMenuEntry::text_resolver) &&
+        (!preserved.slider_refresh ||
+            validate_preserved_shared_menu_entry(
+                game,
+                preserved,
+                profile,
+                PreservedSharedMenuEntry::slider_refresh));
 }
 
 } // namespace
@@ -728,6 +938,188 @@ void fill_missing_addresses(
     fill(target.text_input_editor_factory, source.text_input_editor_factory);
 }
 
+bool capture_preserved_shared_menu_addresses_at_attach(
+    HMODULE game_module,
+    PreservedSharedMenuAddresses& output) noexcept {
+    output = {};
+    auto* const image_base = reinterpret_cast<std::uint8_t*>(game_module);
+    if (!image_base) return false;
+
+    const auto* const dos =
+        reinterpret_cast<const IMAGE_DOS_HEADER*>(image_base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 ||
+        static_cast<std::uint64_t>(dos->e_lfanew) > UINT64_C(0x100000)) {
+        return false;
+    }
+    const auto* const nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+        image_base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+        nt->OptionalHeader.SizeOfImage < 0x1000U) {
+        return false;
+    }
+
+    const std::size_t image_size = nt->OptionalHeader.SizeOfImage;
+    const EldenRingBuild build = identify_elden_ring_build(
+        nt->FileHeader.TimeDateStamp, image_size);
+    const SharedMenuAddressProfile* const profile =
+        find_shared_menu_address_profile(build);
+    if (!profile) return false;
+
+    PreservedSharedMenuAddresses captured{};
+    captured.game_image_base = image_base;
+    captured.game_image_size = image_size;
+    if (!capture_attach_entry(
+            image_base,
+            image_size,
+            profile->game_options_handler_rva,
+            kGameOptionsEntryPrefix,
+            captured.game_options_handler,
+            captured.game_options_pristine_prefix) ||
+        !capture_attach_entry(
+            image_base,
+            image_size,
+            profile->sub_handler_rva,
+            kSubHandlerEntryPrefix,
+            captured.sub_handler,
+            captured.sub_pristine_prefix) ||
+        !capture_attach_entry(
+            image_base,
+            image_size,
+            profile->text_resolver_rva,
+            kTextResolverEntryPrefix,
+            captured.text_resolver,
+            captured.text_pristine_prefix) ||
+        !capture_attach_entry(
+            image_base,
+            image_size,
+            profile->selector_select_rva,
+            kSelectorSelectEntryPrefix,
+            captured.selector_select,
+            captured.selector_select_pristine_prefix)) {
+        return false;
+    }
+
+    // Slider presentation is optional at installation time, but its exact
+    // address and canonical prefix are available for every recognized shared
+    // profile. Later ownership validation decides whether the live entry is
+    // pristine, an approved detour, or unavailable.
+    (void)capture_attach_entry(
+        image_base,
+        image_size,
+        profile->slider_refresh_rva,
+        kSliderRefreshEntryPrefix,
+        captured.slider_refresh,
+        captured.slider_pristine_prefix);
+    output = captured;
+    return true;
+}
+
+bool capture_preserved_shared_menu_addresses(
+    const ModuleView& game,
+    PreservedSharedMenuAddresses& output) noexcept {
+    const EldenRingBuild build = identify_elden_ring_build(
+        game.timestamp(), game.image_size());
+    const SharedMenuAddressProfile* const profile =
+        find_shared_menu_address_profile(build);
+    if (!profile) {
+        erui::detail::logf(
+            erui::LogLevel::verbose,
+            "Shared menu snapshot unavailable: unsupported game image timestamp=0x%08X size=0x%zX",
+            static_cast<unsigned>(game.timestamp()),
+            game.image_size());
+        return false;
+    }
+
+    if (!capture_preserved_shared_menu_addresses_at_attach(
+            reinterpret_cast<HMODULE>(game.base()), output) ||
+        output.game_image_base != game.base() ||
+        output.game_image_size != game.image_size() ||
+        !game.is_executable(
+            reinterpret_cast<const void*>(output.game_options_handler)) ||
+        !game.is_executable(
+            reinterpret_cast<const void*>(output.sub_handler)) ||
+        !game.is_executable(
+            reinterpret_cast<const void*>(output.text_resolver)) ||
+        !game.is_executable(output.selector_select) ||
+        !game.matches(
+            reinterpret_cast<const void*>(output.game_options_handler),
+            kGameOptionsHandlerPattern) ||
+        !game.matches(
+            reinterpret_cast<const void*>(output.sub_handler),
+            kSubHandlerPattern) ||
+        !game.matches(
+            reinterpret_cast<const void*>(output.text_resolver),
+            kTextResolverPrologue) ||
+        std::memcmp(
+            output.selector_select,
+            kSelectorSelectEntryPrefix.data(),
+            kSelectorSelectEntryPrefix.size()) != 0) {
+        output = {};
+        erui::detail::logf(
+            erui::LogLevel::verbose,
+            "Shared menu snapshot rejected: one or more required pristine prologues did not match Elden Ring %.*s",
+            static_cast<int>(elden_ring_build_name(build).size()),
+            elden_ring_build_name(build).data());
+        return false;
+    }
+
+    if (output.slider_refresh &&
+        (!game.is_executable(
+             reinterpret_cast<const void*>(output.slider_refresh)) ||
+         !game.matches(
+             reinterpret_cast<const void*>(output.slider_refresh),
+             kSliderRefreshPattern))) {
+        output.slider_refresh = nullptr;
+        output.slider_pristine_prefix = {};
+    }
+
+    output.game_options_approved_prefix =
+        output.game_options_pristine_prefix;
+    output.sub_approved_prefix = output.sub_pristine_prefix;
+    output.text_approved_prefix = output.text_pristine_prefix;
+    output.selector_select_approved_prefix =
+        output.selector_select_pristine_prefix;
+    output.required_entries_approved = true;
+    output.selector_select_entry_approved = true;
+    if (output.slider_refresh) {
+        output.slider_approved_prefix = output.slider_pristine_prefix;
+        output.slider_entry_approved = true;
+    }
+
+    erui::detail::logf(
+        erui::LogLevel::verbose,
+        "Shared menu snapshot captured: Elden Ring %.*s slider=%u",
+        static_cast<int>(elden_ring_build_name(build).size()),
+        elden_ring_build_name(build).data(),
+        output.slider_refresh ? 1U : 0U);
+    return true;
+}
+
+bool revalidate_preserved_shared_menu_addresses(
+    const ModuleView& game,
+    const PreservedSharedMenuAddresses& preserved) noexcept {
+    const EldenRingBuild build = identify_elden_ring_build(
+        game.timestamp(), game.image_size());
+    return validate_preserved_shared_menu_addresses(
+        game,
+        preserved,
+        find_shared_menu_address_profile(build));
+}
+
+bool revalidate_preserved_shared_menu_entry(
+    const ModuleView& game,
+    const PreservedSharedMenuAddresses& preserved,
+    PreservedSharedMenuEntry entry) noexcept {
+    const EldenRingBuild build = identify_elden_ring_build(
+        game.timestamp(), game.image_size());
+    return validate_preserved_shared_menu_entry(
+        game,
+        preserved,
+        find_shared_menu_address_profile(build),
+        entry);
+}
+
 bool resolve_game_addresses(
     const ModuleView& game,
     GameAddresses& output,
@@ -737,7 +1129,8 @@ bool resolve_game_addresses(
     bool require_native_back,
     bool require_popup_choices,
     bool require_text_inputs,
-    bool require_custom_text) noexcept {
+    bool require_custom_text,
+    const PreservedSharedMenuAddresses* preserved_shared) noexcept {
     output = {};
     output.game_image_base = game.base();
     output.game_image_size = game.image_size();
@@ -745,6 +1138,10 @@ bool resolve_game_addresses(
         game.timestamp(), game.image_size());
     const CoreUiAddressProfile* const core_ui_profile =
         find_core_ui_address_profile(game_build);
+    const SharedMenuAddressProfile* const shared_menu_profile =
+        find_shared_menu_address_profile(game_build);
+    const MenuRuntimeAddressProfile* const menu_runtime_profile =
+        find_menu_runtime_address_profile(game_build);
     const std::uintptr_t scaleform_result_destructor_fallback_rva =
         core_ui_profile
             ? core_ui_profile->scaleform_result_destructor_rva
@@ -757,14 +1154,46 @@ bool resolve_game_addresses(
         return false;
     }
 
+    // Address scans are used to prove the selected exact profile, not to
+    // admit an otherwise unknown executable. A unique byte pattern in a new
+    // build is not sufficient evidence that every associated ABI, vtable and
+    // object layout is still compatible.
+    if (!core_ui_profile || !shared_menu_profile ||
+        !menu_runtime_profile) {
+        erui::detail::logf(
+            erui::LogLevel::error,
+            "Unsupported Elden Ring executable identity timestamp=0x%08X imageSize=0x%zX; native UI hooks were not installed",
+            game.timestamp(),
+            game.image_size());
+        return false;
+    }
+
+    if (preserved_shared &&
+        !validate_preserved_shared_menu_addresses(
+            game, *preserved_shared, shared_menu_profile)) {
+        erui::detail::logf(
+            erui::LogLevel::error,
+            "Preserved shared menu interfaces do not match the selected exact game profile");
+        return false;
+    }
+
+    if (preserved_shared) {
+        erui::detail::logf(
+            erui::LogLevel::info,
+            "Using approved exact-profile shared menu interfaces for cooperative hook chaining");
+    }
+
     if (require_rows) {
-        output.game_options_handler =
-            reinterpret_cast<GameOptionsHandlerFn>(resolve_direct(
-            game,
-            "Game Options handler",
-            kGameOptionsHandlerPattern,
-            kGameOptionsHandlerRva,
-            kGameOptionsHandlerPattern));
+        output.game_options_handler = preserved_shared
+            ? preserved_shared->game_options_handler
+            : reinterpret_cast<GameOptionsHandlerFn>(resolve_direct(
+                game,
+                "Game Options handler",
+                kGameOptionsHandlerPattern,
+                shared_menu_profile
+                    ? shared_menu_profile->game_options_handler_rva
+                    : std::uintptr_t{0},
+                kGameOptionsHandlerPattern));
         output.option_setting_tab_frame_dispatch = resolve_optional_direct(
             game,
             "Configuration tab frame dispatch",
@@ -798,28 +1227,36 @@ bool resolve_game_addresses(
                 game,
                 "Camera panel rows",
                 kCameraPanelMaterializerPattern,
-                kCameraPanelMaterializerRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->camera_panel_materializer_rva
+                    : std::uintptr_t{0},
                 kCameraPanelMaterializerPattern));
         output.display_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
                 "Display panel rows",
                 kDisplayPanelMaterializerPattern,
-                kDisplayPanelMaterializerRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->display_panel_materializer_rva
+                    : std::uintptr_t{0},
                 kDisplayPanelMaterializerPattern));
         output.sound_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
                 "Sound panel rows",
                 kSoundPanelMaterializerPattern,
-                kSoundPanelMaterializerRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->sound_panel_materializer_rva
+                    : std::uintptr_t{0},
                 kSoundPanelMaterializerPattern));
         output.network_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
                 "Network panel rows",
                 kNetworkPanelMaterializerPattern,
-                kNetworkPanelMaterializerRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->network_panel_materializer_rva
+                    : std::uintptr_t{0},
                 kNetworkPanelMaterializerPattern));
         output.keyboard_mouse_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(
@@ -827,14 +1264,18 @@ bool resolve_game_addresses(
                     game,
                     "Keyboard panel rows",
                     kKeyboardMousePanelMaterializerPattern,
-                    kKeyboardMousePanelMaterializerRva,
+                    menu_runtime_profile
+                        ? menu_runtime_profile->keyboard_mouse_panel_materializer_rva
+                        : std::uintptr_t{0},
                     kKeyboardMousePanelMaterializerPattern));
         output.graphics_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
                 "Graphics panel rows",
                 kGraphicsPanelMaterializerPattern,
-                kGraphicsPanelMaterializerRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->graphics_panel_materializer_rva
+                    : std::uintptr_t{0},
                 kGraphicsPanelMaterializerPattern));
         output.mod_settings_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
@@ -910,31 +1351,12 @@ bool resolve_game_addresses(
                 kModSettingsPanelRouteReturnSiteRva,
                 kModSettingsPanelRouteReturnSitePattern);
         }
-        // Path observation is also used by diagnostics on builds without
-        // native submenu rows, so resolve this optional interface separately.
-        output.scaleform_path_resolver =
-            reinterpret_cast<ScaleformPathResolverFn>(resolve_optional_direct(
-                game,
-                "Scaleform path",
-                kScaleformPathResolverPattern,
-                kScaleformPathResolverRva,
-                kScaleformPathResolverPattern));
         output.scaleform_visibility_setter = resolve_optional_direct(
             game,
             "Scaleform visibility setter (diagnostics)",
             kScaleformVisibilitySetterPattern,
             kScaleformVisibilitySetterRva,
             kScaleformVisibilitySetterPattern);
-        // Text-write diagnostics need this optional setter even when the
-        // provider declares no native submenu rows. Resolving it here keeps
-        // observation independent from the custom-title bridge lifecycle.
-        output.scaleform_text_setter =
-            reinterpret_cast<ScaleformTextSetterFn>(resolve_optional_direct(
-                game,
-                "Scaleform text setter",
-                kScaleformTextSetterPattern,
-                kScaleformTextSetterRva,
-                kScaleformTextSetterPattern));
         output.scaleform_value_exists =
             reinterpret_cast<ScaleformValueExistsFn>(resolve_optional_direct(
                 game,
@@ -980,21 +1402,45 @@ bool resolve_game_addresses(
         }
         output.scaleform_set_hscroll = reinterpret_cast<ScaleformSetHScrollFn>(set_hscroll);
         if (require_submenus) {
-            output.sub_handler = reinterpret_cast<SubHandlerFn>(resolve_direct(
-                game,
-                "subpage handler",
-                kSubHandlerPattern,
-                kSubHandlerRva,
-                kSubHandlerPattern));
+            output.sub_handler = preserved_shared
+                ? preserved_shared->sub_handler
+                : reinterpret_cast<SubHandlerFn>(resolve_direct(
+                    game,
+                    "subpage handler",
+                    kSubHandlerPattern,
+                    shared_menu_profile
+                        ? shared_menu_profile->sub_handler_rva
+                        : std::uintptr_t{0},
+                    kSubHandlerPattern));
             output.open_sub_page = reinterpret_cast<OpenSubPageFn>(resolve_direct(
                 game,
                 "open subpage",
                 kOpenSubPagePattern,
-                kOpenSubPageRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->open_sub_page_rva
+                    : std::uintptr_t{0},
                 kOpenSubPagePattern));
 
             // Presentation is deliberately optional. A game update may disable
             // custom titles without preventing page construction or row input.
+            output.scaleform_path_resolver =
+                reinterpret_cast<ScaleformPathResolverFn>(resolve_optional_direct(
+                    game,
+                    "Scaleform path",
+                    kScaleformPathResolverPattern,
+                    menu_runtime_profile
+                        ? menu_runtime_profile->scaleform_path_resolver_rva
+                        : std::uintptr_t{0},
+                    kScaleformPathResolverPattern));
+            output.scaleform_text_setter =
+                reinterpret_cast<ScaleformTextSetterFn>(resolve_optional_direct(
+                    game,
+                    "Scaleform text setter",
+                    kScaleformTextSetterPattern,
+                    menu_runtime_profile
+                        ? menu_runtime_profile->scaleform_text_setter_rva
+                        : std::uintptr_t{0},
+                    kScaleformTextSetterPattern));
             output.scaleform_result_destructor =
                 reinterpret_cast<ScaleformResultDestructorFn>(resolve_optional_direct(
                     game,
@@ -1004,7 +1450,7 @@ bool resolve_game_addresses(
                     kScaleformResultDestructorPattern));
         } else {
             erui::detail::logf(
-                erui::LogLevel::info,
+                erui::LogLevel::verbose,
                 "Address resolution: no native submenu rows declared");
 
             // API 1.2 formatted sliders reuse the same narrow Scaleform text
@@ -1016,14 +1462,18 @@ bool resolve_game_addresses(
                     game,
                     "Scaleform path",
                     kScaleformPathResolverPattern,
-                    kScaleformPathResolverRva,
+                    menu_runtime_profile
+                        ? menu_runtime_profile->scaleform_path_resolver_rva
+                        : std::uintptr_t{0},
                     kScaleformPathResolverPattern));
             output.scaleform_text_setter =
                 reinterpret_cast<ScaleformTextSetterFn>(resolve_optional_direct(
                     game,
                     "Scaleform text setter",
                     kScaleformTextSetterPattern,
-                    kScaleformTextSetterRva,
+                    menu_runtime_profile
+                        ? menu_runtime_profile->scaleform_text_setter_rva
+                        : std::uintptr_t{0},
                     kScaleformTextSetterPattern));
             output.scaleform_result_destructor =
                 reinterpret_cast<ScaleformResultDestructorFn>(
@@ -1038,118 +1488,116 @@ bool resolve_game_addresses(
             game,
             "on/off list",
             kOnOffListPattern,
-            kOnOffListRva,
+            menu_runtime_profile
+                ? menu_runtime_profile->on_off_list_rva
+                : std::uintptr_t{0},
             kOnOffListPattern));
         output.menu_context = reinterpret_cast<BufferConstructorFn>(resolve_direct(
             game,
             "menu context",
             kMenuContextPattern,
-            kMenuContextRva,
+            menu_runtime_profile
+                ? menu_runtime_profile->menu_context_rva
+                : std::uintptr_t{0},
             kMenuContextPattern));
         output.text_ref_help = reinterpret_cast<TextReferenceFn>(resolve_direct(
             game,
             "text ref help",
             kTextRefHelpPattern,
-            kTextRefHelpRva,
+            menu_runtime_profile
+                ? menu_runtime_profile->text_ref_help_rva
+                : std::uintptr_t{0},
             "4C 8B DC 57 48 81 EC 90 00 00 00"));
         output.text_ref_label = reinterpret_cast<TextReferenceFn>(resolve_call_target(
             game,
             "text ref label",
             kTextRefLabelCallsitePattern,
             kTextRefLabelCallOffset,
-            kTextRefLabelRva));
+            menu_runtime_profile
+                ? menu_runtime_profile->text_ref_label_rva
+                : std::uintptr_t{0}));
         if (require_buttons) {
-            std::uint8_t* root_refs = report_resilient(
-                game, "root button text refs",
-                unique_at(game, kRootButtonTextReferencesUniquePattern, 0), "unique AOB");
-            if (!root_refs) {
-                root_refs = resolve_direct(
+            output.root_button_text_references =
+                reinterpret_cast<BufferConstructorFn>(resolve_direct(
                     game,
                     "root button text refs",
                     kRootButtonTextReferencesPattern,
-                    kRootButtonTextReferencesRva,
-                    kRootButtonTextReferencesPattern);
-            }
-            output.root_button_text_references =
-                reinterpret_cast<BufferConstructorFn>(root_refs);
-            std::uint8_t* root_display = report_resilient(
-                game, "root button display",
-                root_refs
-                    ? call_target_at(game, root_refs + kRootButtonDisplayCallOffset,
-                        kRootButtonDisplayTextPattern)
-                    : nullptr,
-                "text refs call");
-            if (!root_display) {
-                root_display = resolve_direct(
+                    menu_runtime_profile
+                        ? menu_runtime_profile->root_button_text_references_rva
+                        : std::uintptr_t{0},
+                    kRootButtonTextReferencesPattern));
+            output.root_button_display_text =
+                reinterpret_cast<TextReferenceFn>(resolve_direct(
                     game,
                     "root button display",
                     kRootButtonDisplayTextPattern,
-                    kRootButtonDisplayTextRva,
-                    kRootButtonDisplayTextPattern);
-            }
-            output.root_button_display_text =
-                reinterpret_cast<TextReferenceFn>(root_display);
+                    menu_runtime_profile
+                        ? menu_runtime_profile->root_button_display_text_rva
+                        : std::uintptr_t{0},
+                    kRootButtonDisplayTextPattern));
         }
         output.add_toggle = reinterpret_cast<AddToggleFn>(resolve_call_target(
             game,
             "add toggle",
             kAddToggleCallsitePattern,
             kAddToggleCallOffset,
-            kAddToggleRva,
+            menu_runtime_profile
+                ? menu_runtime_profile->add_toggle_rva
+                : std::uintptr_t{0},
             kAddTogglePrologue));
         output.add_inline_choice =
             reinterpret_cast<AddInlineChoiceFn>(resolve_call_target(
             game, "add inline choice", kAddChoiceCallsitePattern,
-            kAddChoiceCallOffset, kAddChoiceRva, kAddChoicePrologue));
-        std::uint8_t* choice_context = report_resilient(
-            game, "choice context",
-            unique_at(game, kChoiceContextUniquePattern, 0), "unique AOB");
-        if (!choice_context) {
-            choice_context = resolve_optional_direct(
-                game, "choice context", kChoiceContextConstructorPrologue,
-                kChoiceContextConstructorRva,
-                kChoiceContextConstructorPrologue);
-        }
+            kAddChoiceCallOffset,
+            menu_runtime_profile
+                ? menu_runtime_profile->add_inline_choice_rva
+                : std::uintptr_t{0},
+            kAddChoicePrologue));
         output.choice_context_constructor =
-            reinterpret_cast<ChoiceContextConstructorFn>(choice_context);
-        std::uint8_t* choice_list = report_resilient(
-            game, "choice list builder",
-            output.sub_handler
-                ? call_target_at(game,
-                    reinterpret_cast<std::uint8_t*>(output.sub_handler) +
-                        kChoiceListBuilderCallOffset,
-                    kChoiceListBuilderPrologue)
-                : nullptr,
-            "subpage handler call");
-        if (!choice_list) {
-            choice_list = resolve_optional_direct(
+            reinterpret_cast<ChoiceContextConstructorFn>(resolve_optional_direct(
+                game, "choice context", kChoiceContextConstructorPrologue,
+                menu_runtime_profile
+                    ? menu_runtime_profile->choice_context_constructor_rva
+                    : std::uintptr_t{0},
+                kChoiceContextConstructorPrologue));
+        output.choice_list_builder = reinterpret_cast<ChoiceListBuilderFn>(
+            resolve_optional_direct(
                 game, "choice list builder", kChoiceListBuilderPrologue,
-                kChoiceListBuilderRva, kChoiceListBuilderPrologue);
-        }
-        output.choice_list_builder = reinterpret_cast<ChoiceListBuilderFn>(choice_list);
+                menu_runtime_profile
+                    ? menu_runtime_profile->choice_list_builder_rva
+                    : std::uintptr_t{0},
+                kChoiceListBuilderPrologue));
         output.add_slider = reinterpret_cast<AddSliderFn>(resolve_call_target(
             game,
             "add slider",
             kAddSliderCallsitePattern,
             kAddSliderCallOffset,
-            kAddSliderRva,
+            menu_runtime_profile
+                ? menu_runtime_profile->add_slider_rva
+                : std::uintptr_t{0},
             kAddSliderPrologue));
         // Optional until a compiled API 1.2 NumericSlider or CustomSlider
         // requests formatted presentation. An unresolved formatter must not
         // disable ordinary API 1.0/1.1 integer sliders.
-        output.slider_refresh = reinterpret_cast<SliderRefreshFn>(
-            resolve_optional_direct(
+        output.slider_refresh = preserved_shared
+            ? preserved_shared->slider_refresh
+            : reinterpret_cast<SliderRefreshFn>(resolve_optional_direct(
                 game,
                 "slider value refresh",
                 kSliderRefreshPattern,
-                kSliderRefreshRva,
+                shared_menu_profile
+                    ? shared_menu_profile->slider_refresh_rva
+                    : std::uintptr_t{0},
                 kSliderRefreshPattern));
         output.add_unclassified_row_builder_diagnostic =
             resolve_optional_direct(
                 game,
                 "unclassified row builder (diagnostic)",
                 kAddUnclassifiedRowBuilderDiagnosticPrologue,
-                kAddUnclassifiedRowBuilderDiagnosticRva,
+                // Its AOB has a twin; 2.7.2.0 moved the menu code by +0x4B0.
+                game_build == EldenRingBuild::v2_7_2_0
+                    ? kAddUnclassifiedRowBuilderDiagnosticRva + 0x4B0
+                    : kAddUnclassifiedRowBuilderDiagnosticRva,
                 kAddUnclassifiedRowBuilderDiagnosticPrologue);
 
         // Inline and popup selectors both clone their text references during
@@ -1159,7 +1607,9 @@ bool resolve_game_addresses(
                 game,
                 "destroy text refs",
                 kDestroyTextReferencesPrologue,
-                kDestroyTextReferencesRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->destroy_text_references_rva
+                    : std::uintptr_t{0},
                 kDestroyTextReferencesPrologue));
 
         if (require_buttons) {
@@ -1167,87 +1617,68 @@ bool resolve_game_addresses(
                 game,
                 "add button",
                 kAddButtonPrologue,
-                kAddButtonRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->add_button_rva
+                    : std::uintptr_t{0},
                 kAddButtonPrologue));
         } else {
             erui::detail::logf(
-                erui::LogLevel::info,
+                erui::LogLevel::verbose,
                 "Address resolution: no native button rows declared");
         }
 
         if (require_popup_choices) {
-            std::uint8_t* popup_ctor = report_resilient(
-                game, "popup choice ctor",
-                call_target_at(game,
-                    unique_at(game, kPopupChoiceConstructorCallsite,
-                        kPopupChoiceConstructorCallOffset),
-                    kPopupChoiceConstructorPattern),
-                "callsite AOB");
-            if (!popup_ctor) {
-                popup_ctor = resolve_direct(
+            output.popup_choice_constructor =
+                reinterpret_cast<PopupChoiceConstructorFn>(resolve_direct(
                     game,
                     "popup choice ctor",
                     kPopupChoiceConstructorPattern,
-                    kPopupChoiceConstructorRva,
-                    kPopupChoiceConstructorPattern);
-            }
-            output.popup_choice_constructor =
-                reinterpret_cast<PopupChoiceConstructorFn>(popup_ctor);
-            std::uint8_t* popup_provider = nullptr;
-            if (std::uint8_t* lea = unique_at(
-                    game, kPopupListVtableContextPattern, kPopupListVtableLeaOffset)) {
-                auto* vtable = reinterpret_cast<void**>(resolve_rip_relative(game, lea, 3, 7));
-                if (vtable && game.contains(vtable, 3 * sizeof(void*))) {
-                    auto* candidate = static_cast<std::uint8_t*>(vtable[2]);
-                    if (game.is_executable(candidate) &&
-                        game.matches(candidate, kPopupChoiceListProviderPattern)) {
-                        popup_provider = candidate;
-                    }
-                }
-            }
-            popup_provider = report_resilient(
-                game, "popup list provider", popup_provider, "graphics vtable");
-            if (!popup_provider) {
-                popup_provider = resolve_direct(
+                    menu_runtime_profile
+                        ? menu_runtime_profile->popup_choice_constructor_rva
+                        : std::uintptr_t{0},
+                    kPopupChoiceConstructorPattern));
+            output.popup_choice_list_provider =
+                reinterpret_cast<PopupChoiceListProviderFn>(resolve_direct(
                     game,
                     "popup list provider",
                     kPopupChoiceListProviderPattern,
-                    kPopupChoiceListProviderRva,
-                    kPopupChoiceListProviderPattern);
-            }
-            output.popup_choice_list_provider =
-                reinterpret_cast<PopupChoiceListProviderFn>(popup_provider);
-            std::uint8_t* popup_template = report_resilient(
-                game, "popup list template",
-                unique_at(game, kPopupChoiceListTemplateUniquePattern, 0), "unique AOB");
-            if (!popup_template) {
-                popup_template = resolve_direct(
+                    menu_runtime_profile
+                        ? menu_runtime_profile->popup_choice_list_provider_rva
+                        : std::uintptr_t{0},
+                    kPopupChoiceListProviderPattern));
+            output.popup_choice_list_template =
+                reinterpret_cast<PopupChoiceListTemplateFn>(resolve_direct(
                     game,
                     "popup list template",
                     kPopupChoiceListTemplatePattern,
-                    kPopupChoiceListTemplateRva,
-                    kPopupChoiceListTemplatePattern);
-            }
-            output.popup_choice_list_template =
-                reinterpret_cast<PopupChoiceListTemplateFn>(popup_template);
+                    menu_runtime_profile
+                        ? menu_runtime_profile->popup_choice_list_template_rva
+                        : std::uintptr_t{0},
+                    kPopupChoiceListTemplatePattern));
             auto* value_invoke = resolve_direct(
                 game,
                 "popup value invoke",
                 kPopupChoiceValueInvokePattern,
-                kPopupChoiceValueInvokeRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->popup_choice_value_invoke_rva
+                    : std::uintptr_t{0},
                 kPopupChoiceValueInvokePattern);
             auto* selection_invoke = resolve_direct(
                 game,
                 "popup commit invoke",
                 kPopupChoiceSelectionInvokePattern,
-                kPopupChoiceSelectionInvokeRva,
+                menu_runtime_profile
+                    ? menu_runtime_profile->popup_choice_selection_invoke_rva
+                    : std::uintptr_t{0},
                 kPopupChoiceSelectionInvokePattern);
             if (value_invoke) {
                 output.popup_choice_value_vtable = resolve_callable_vtable(
                     game,
                     "popup value vtable",
                     value_invoke,
-                    kPopupChoiceValueVtableRva);
+                    menu_runtime_profile
+                        ? menu_runtime_profile->popup_choice_value_vtable_rva
+                        : std::uintptr_t{0});
             }
             if (selection_invoke) {
                 output.popup_choice_selection_vtable =
@@ -1255,7 +1686,9 @@ bool resolve_game_addresses(
                         game,
                         "popup commit vtable",
                         selection_invoke,
-                        kPopupChoiceSelectionVtableRva);
+                        menu_runtime_profile
+                            ? menu_runtime_profile->popup_choice_selection_vtable_rva
+                            : std::uintptr_t{0});
             }
             if (output.popup_choice_list_provider) {
                 output.popup_choice_presentation_vtable =
@@ -1264,25 +1697,32 @@ bool resolve_game_addresses(
                         "popup list vtable",
                         reinterpret_cast<const void*>(
                             output.popup_choice_list_provider),
-                        kPopupChoicePresentationVtableRva);
+                        menu_runtime_profile
+                            ? menu_runtime_profile->popup_choice_presentation_vtable_rva
+                            : std::uintptr_t{0});
             }
         } else {
             erui::detail::logf(
-                erui::LogLevel::info,
+                erui::LogLevel::verbose,
                 "Address resolution: no popup-choice rows declared");
         }
     } else {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address resolution: native row path disabled");
     }
 
     if (require_custom_text) {
-        output.text_resolver = reinterpret_cast<TextResolverFn>(
-            resolve_text_resolver(game));
+        output.text_resolver = preserved_shared
+            ? preserved_shared->text_resolver
+            : reinterpret_cast<TextResolverFn>(resolve_text_resolver(
+                game,
+                shared_menu_profile
+                    ? shared_menu_profile->text_resolver_rva
+                    : std::uintptr_t{0}));
     } else {
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "Address resolution: custom text hook disabled");
     }
 
@@ -1297,14 +1737,14 @@ bool resolve_game_addresses(
                 game.image_size());
         } else {
             erui::detail::logf(
-                erui::LogLevel::info,
+                erui::LogLevel::verbose,
                 "Address resolution: no compatible TextInput path for this game image");
         }
     } else {
         const std::string_view build_name =
             elden_ring_build_name(game_build);
         erui::detail::logf(
-            erui::LogLevel::info,
+            erui::LogLevel::verbose,
             "TextInput address profile selected: Elden Ring %.*s",
             static_cast<int>(build_name.size()),
             build_name.data());
@@ -1348,6 +1788,16 @@ bool resolve_game_addresses(
                     kTextInputEditorFactoryPattern,
                     text_input_profile->editor_factory_rva,
                     kTextInputEditorFactoryPattern));
+        output.option_setting_dialog_vtable =
+            game.at_rva(text_input_profile->option_setting_dialog_vtable_rva);
+        output.pad_setting_dialog_vtable =
+            game.at_rva(text_input_profile->pad_setting_dialog_vtable_rva);
+        output.edit_property_vtable =
+            game.at_rva(text_input_profile->edit_property_vtable_rva);
+        output.text_input_controller_vtable =
+            game.at_rva(text_input_profile->text_input_controller_vtable_rva);
+        output.software_keyboard_job_vtable =
+            game.at_rva(text_input_profile->software_keyboard_job_vtable_rva);
         if (require_text_inputs && !output.text_input_complete()) {
             erui::detail::logf(
                 erui::LogLevel::error,
@@ -1358,7 +1808,10 @@ bool resolve_game_addresses(
     if (require_native_back) {
         output.native_back = reinterpret_cast<NativeBackFn>(resolve_direct(
             game, "native Back", kNativeBackPattern,
-            kNativeBackRva, kNativeBackPattern));
+            menu_runtime_profile
+                ? menu_runtime_profile->native_back_rva
+                : std::uintptr_t{0},
+            kNativeBackPattern));
         if (!output.native_back) {
             return false;
         }
@@ -1368,14 +1821,20 @@ bool resolve_game_addresses(
         output.native_back = reinterpret_cast<NativeBackFn>(
             resolve_optional_direct(
                 game, "native Back", kNativeBackPattern,
-                kNativeBackRva, kNativeBackPattern));
+                menu_runtime_profile
+                    ? menu_runtime_profile->native_back_rva
+                    : std::uintptr_t{0},
+                kNativeBackPattern));
     }
 
     if (require_custom_text || require_text_inputs) {
         output.page_frame = reinterpret_cast<PageFrameFn>(
             resolve_optional_direct(
                 game, "page frame", kPageFramePattern,
-                kPageFrameRva, kPageFramePattern));
+                menu_runtime_profile
+                    ? menu_runtime_profile->page_frame_rva
+                    : std::uintptr_t{0},
+                kPageFramePattern));
     }
 
     if (!output.complete(

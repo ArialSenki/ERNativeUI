@@ -5,6 +5,7 @@
 #include "logger.hpp"
 #include "module.hpp"
 #include "movie_cache.hpp"
+#include "native_gfx_loader.hpp"
 #include "runtime_gfx_locate.hpp"
 #include "settings_movie.hpp"
 
@@ -57,6 +58,9 @@ std::atomic<OpenFileFn> g_original_open_file{};
 void** g_memory_file_vtable{};
 std::array<void*, kMemoryFileSlots> g_wrapper_vtable{};
 std::atomic<bool> g_installed{false};
+// The upstream OpenFile completion runs first (settings rows, TextInput,
+// ColorPicker, title text); this stage only adds the fork's own changes.
+std::atomic<bool> g_after_upstream{false};
 std::atomic<bool> g_ready{false};
 std::atomic<bool> g_spanish{false};
 std::atomic<bool> g_trace_urls{false};
@@ -166,6 +170,13 @@ const std::vector<std::uint8_t>* patched_bytes(
         if (const MovieCache::Lookup cached = g_cache.find(hash, size, 0); cached.found) return cached.output;
 
         erui::gfx::SettingsMovieOptions options{};
+        if (g_after_upstream.load(std::memory_order_acquire)) {
+            // The upstream completion already ran on these bytes and owns
+            // the TextInput/ColorPicker presentation; add only the fork's own
+            // changes (tab, wide slider, backdrop).
+            options.advanced_text_input = erui::gfx::TextInputPresentation::native;
+            options.advanced_color_picker = erui::gfx::ColorPickerPresentation::native;
+        }
         options.menu_background_alpha_percent = static_cast<std::uint8_t>(
             g_menu_background_alpha.load(std::memory_order_relaxed));
         const erui::gfx::PatchResult result = erui::gfx::patch_settings_movie(
@@ -420,9 +431,7 @@ void* route_hud_movie(erui::gfx::HudMovie movie, const char* url, void* file) no
     }
 }
 
-void* __fastcall open_file_detour(void* opener, const char* url, int flags, int mode) noexcept {
-    const OpenFileFn original = g_original_open_file.load(std::memory_order_acquire);
-    void* file = original(opener, url, flags, mode);
+void* adapt_opened_file(const char* url, void* file) noexcept {
     if (!file || !url) return file;
     if (g_trace_urls.load(std::memory_order_relaxed) &&
         g_traced_urls.fetch_add(1, std::memory_order_relaxed) < 400) {
@@ -441,6 +450,15 @@ void* __fastcall open_file_detour(void* opener, const char* url, int flags, int 
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return file;
     }
+}
+
+void* __fastcall open_file_detour(void* opener, const char* url, int flags, int mode) noexcept {
+    const OpenFileFn original = g_original_open_file.load(std::memory_order_acquire);
+    return adapt_opened_file(url, original(opener, url, flags, mode));
+}
+
+void* open_file_extension(const char* path, void* file) noexcept {
+    return adapt_opened_file(path, file);
 }
 
 // The movie player's constructor builds a full-screen Scaleform viewport from
@@ -524,6 +542,17 @@ bool install_runtime_gfx(bool trace_urls, unsigned menu_background_alpha_percent
         g_wrapper_vtable[kSlotGetFilePath] = reinterpret_cast<void*>(&wrapper_path);
         g_memory_file_vtable = memory_file;
         locate_screen_size(game);
+        if (erui::native::native_gfx_loader_installed()) {
+            // One OpenFile hook: run after the upstream completion inside it.
+            g_after_upstream.store(true, std::memory_order_release);
+            erui::native::set_native_gfx_open_extension(&open_file_extension);
+            g_installed.store(true, std::memory_order_release);
+            log::write(
+                "Runtime GFX: fork stage chained after the upstream OpenFile completion (MemoryFile vtable RVA 0x%llX)",
+                static_cast<unsigned long long>(
+                    reinterpret_cast<std::uint8_t*>(memory_file) - game.base()));
+            return true;
+        }
         void* target = targets.open_file;
         const MH_STATUS init = MH_Initialize();
         if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {

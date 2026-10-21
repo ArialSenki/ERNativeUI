@@ -8,8 +8,7 @@ ordinary client mods.
 ## Requirements
 
 - Elden Ring for Windows x64, run offline with Easy Anti-Cheat disabled.
-- Mod Engine 2 or another compatible DLL loader; a loose-file loader is needed
-  only for the optional GFX presentation.
+- Mod Engine 2 or another compatible DLL loader.
 - An ERNativeUI release that explicitly supports your Elden Ring executable.
   Check the [release notes](https://github.com/Flammrock/ERNativeUI/releases)
   after every game update.
@@ -32,24 +31,30 @@ To try the full demonstration, add
 `mod\ERNativeUI\examples\TarnishedUIShowcase.dll` after the host. Do not load
 the example DLLs unless you want their example menus.
 
-## Optional GFX presentation
+## Runtime GFX completion
 
-The bundled `menu/win/*.gfx` files add expanded settings capacity and native
-TextInput/ColorPicker presentation. Core menu behavior has native fallbacks,
-so this directory is optional. To enable it, add the extracted ERNativeUI
-directory to the existing mod-loader list:
+By default, ERNativeUI expands supported settings pages and supplies its
+TextInput and ColorPicker presentation in memory while the game loads the
+effective GFX. No loose ERNativeUI GFX files or mod-loader entry are normally
+required.
 
-```toml
-[extension.mod_loader]
-enabled = true
-mods = [
-    { enabled = true, name = "ERNativeUI", path = "mod\\ERNativeUI" },
-]
-```
+Structurally compatible GFX replacements from other mods remain supported.
+Unrecognized layouts are left unchanged instead of being patched by guesswork.
+Read [Runtime GFX completion and presentation](https://github.com/Flammrock/ERNativeUI/blob/main/docs/guides/presentation-and-gfx.md)
+when combining ERNativeUI with another mod that replaces the same movies.
 
-Another mod can replace the same GFX paths; Mod Engine 2 does not merge binary
-GFX edits. Read [Presentation and optional GFX](https://github.com/Flammrock/ERNativeUI/blob/main/docs/guides/presentation-and-gfx.md)
-before combining such mods.
+Players can set `[GFX] EnableRuntimePatching = 0` in `ERNativeUI.ini` and
+restart to prevent ERNativeUI from installing its GFX hook. The effective GFX
+then remains untouched: custom tabs and functional TextInput/ColorPicker
+fallbacks remain available, but ERNativeUI adds no rows or widget presentation
+and API 1.3 title-screen text is disabled. Compatible structures already
+authored into the effective movie remain available.
+
+`[Tabs] MinimumTabSlots = 8` keeps the vanilla physical strip. With runtime
+GFX patching enabled, players may select 8, 9, or 10; ten is Elden Ring's hard
+native ceiling. This does not limit registered custom tabs: ERNativeUI keeps
+additional logical tabs reachable through its shifting `...` viewport. There
+is no `MaximumTabSlots` setting, and changing the minimum requires a restart.
 
 ## Configuration
 
@@ -70,8 +75,9 @@ for complete setup, runtime configuration, and verification details.
   consult the exact tested matrix in [Game and mod compatibility](https://github.com/Flammrock/ERNativeUI/blob/main/docs/COMPATIBILITY.md).
 - Seamless Co-op 2.0.1 was live-tested with Elden Ring 2.7.0.0, with no
   incompatibility observed for that exact combination.
-- Shadow of the Erdtree remains explicitly unverified until its live test
-  matrix is completed.
+- Shadow of the Erdtree title-screen layout and adaptive spacing were
+  live-tested on Elden Ring 2.7.1.0 with the DLC both absent and present; see
+  the compatibility matrix for the exact scope.
 
 If startup fails after a game update, do not reuse an old RVA or disable
 validation. Follow [Common errors](https://github.com/Flammrock/ERNativeUI/blob/main/docs/getting-started/common-errors.md),

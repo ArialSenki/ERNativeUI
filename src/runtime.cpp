@@ -5,23 +5,57 @@
 #include "hooks.hpp"
 #include "module.hpp"
 #include "runtime_log.hpp"
+#include "runtime_requirements.hpp"
 #include "runtime_state.hpp"
 #include "native_input_bindings.hpp"
+#include "native_tab_catalogue.hpp"
+#include "native_tabs.hpp"
 #include "native_text_input.hpp"
 
 #include <Windows.h>
 
 #include <algorithm>
 #include <exception>
+#include <utility>
 
 namespace erui {
 namespace {
 
+// Installation and explicit teardown mutate one process-wide native hook
+// graph. Serialize them so uninstall cannot pass a pre-exposure tab check and
+// then race the first hook enable.
+SRWLOCK g_runtime_lifecycle_lock = SRWLOCK_INIT;
+
+class ScopedRuntimeLifecycleLock final {
+public:
+    ScopedRuntimeLifecycleLock() noexcept {
+        AcquireSRWLockExclusive(&g_runtime_lifecycle_lock);
+    }
+    ~ScopedRuntimeLifecycleLock() {
+        ReleaseSRWLockExclusive(&g_runtime_lifecycle_lock);
+    }
+
+    ScopedRuntimeLifecycleLock(const ScopedRuntimeLifecycleLock&) = delete;
+    ScopedRuntimeLifecycleLock& operator=(
+        const ScopedRuntimeLifecycleLock&) = delete;
+};
+
 InstallResult fail_install(InstallError error) noexcept {
+    if (!erui::native::remove_native_tabs()) {
+        // No fallible subsystem should be rolled back after carrier or
+        // viewport hooks are exposed.
+        // Preserve the complete pinned runtime instead of invalidating an
+        // in-flight trampoline or freeing storage a callback could borrow.
+        detail::logf(
+            LogLevel::error,
+            "Install failure could not hot-remove exposed API 1.3 carrier/viewport hooks; the pinned runtime was retained intact");
+        return InstallResult{error};
+    }
     erui::native::remove_native_input_bindings();
     erui::native::remove_native_menu_hooks();
     erui::native::reset_native_text_inputs();
     detail::runtime_state().menu_published.store(false, std::memory_order_release);
+    detail::runtime_state().tab_catalogue.reset();
     detail::runtime_state().menu.reset();
     detail::runtime_state().installed.store(false, std::memory_order_release);
     return InstallResult{error};
@@ -181,7 +215,10 @@ void log_compiled_menu_diagnostics(const detail::CompiledMenu& menu) noexcept {
 InstallResult install_impl(
     Menu& menu,
     RuntimeOptions options,
-    const native::GameAddresses* resolved_addresses) noexcept {
+    const native::GameAddresses* resolved_addresses,
+    const native::PreservedSharedMenuAddresses* preserved_shared_addresses,
+    const detail::TabConfiguration* tab_configuration) noexcept {
+    const ScopedRuntimeLifecycleLock lifecycle_lock;
     detail::RuntimeState& runtime = detail::runtime_state();
     bool expected = false;
     if (!runtime.installed.compare_exchange_strong(
@@ -192,6 +229,7 @@ InstallResult install_impl(
         return InstallResult{InstallError::already_installed};
     }
 
+    detail::set_diagnostic_logging(options.enable_diagnostics);
     detail::set_log_sink(options.log_sink);
     runtime.options = options;
     runtime.custom_text_hits.store(0, std::memory_order_release);
@@ -225,6 +263,29 @@ InstallResult install_impl(
     } catch (...) {
         detail::logf(LogLevel::error, "Menu compilation failed with an unknown exception");
         return fail_install(InstallError::menu_compile_failed);
+    }
+
+    if (tab_configuration) {
+        detail::NativeTabCatalogueBuildResult catalogue =
+            detail::build_native_tab_catalogue(
+                *runtime.menu, *tab_configuration);
+        if (!catalogue) {
+            detail::logf(
+                LogLevel::error,
+                "Native-tab catalogue validation failed: error=%s tabIndex=%zu",
+                detail::native_tab_catalogue_error_name(catalogue.error),
+                catalogue.tab_index);
+            return fail_install(InstallError::menu_compile_failed);
+        }
+        runtime.tab_catalogue = std::move(catalogue.catalogue);
+    } else if (!runtime.menu->tab_page_indices.empty()) {
+        // Custom tabs are a host-owned API 1.3 facility. Never install a menu
+        // containing them without the exact player configuration used to
+        // resolve their deterministic order.
+        detail::logf(
+            LogLevel::error,
+            "Compiled menu contains custom tabs but no tab configuration was supplied");
+        return fail_install(InstallError::invalid_options);
     }
 
     detail::logf(
@@ -278,6 +339,18 @@ InstallResult install_impl(
     const bool active_pagination = options.enable_row_injection &&
         runtime.menu->pagination_required_for_capacity(
             detail::game_options_min_plan_capacity);
+    bool custom_tab_capacity_pagination = false;
+    for (const std::size_t page_index : runtime.menu->tab_page_indices) {
+        if (page_index < runtime.menu->pages.size() &&
+            runtime.menu->pages[page_index].rows.size() >
+                1u) {
+            // The Graphics carrier's live capacity is read only after its GFX
+            // object exists. Reserve continuation interfaces against the
+            // conservative one-row lower bound during address resolution.
+            custom_tab_capacity_pagination = true;
+            break;
+        }
+    }
     // A built-in panel's free slots are a live GFX property. Even a page that
     // may need a native Next action and Back-enabled continuation, so resolve
     // those shared interfaces conservatively. The dedicated Mod Settings
@@ -290,12 +363,23 @@ InstallResult install_impl(
     // Resolve that controller for a color-only menu too; otherwise the host
     // would install successfully while silently omitting every ColorPicker.
     bool require_buttons = active_pagination || runtime_capacity_pagination ||
+        custom_tab_capacity_pagination ||
         runtime.menu->modeled_color_picker_count != 0;
-    bool require_submenus = options.enable_row_injection &&
-        (runtime.menu->root_plan(detail::game_options_min_plan_capacity)
-            .pages.slices.size() > 1 || runtime_capacity_pagination);
+    // Every continuation page is constructed through the native subpage
+    // interfaces, even when its logical owner is not an explicit Submenu row
+    // (for example, an overflowing custom tab). Keep address resolution in
+    // lockstep with hooks.cpp, which enables the same route machinery for
+    // any active pagination plan.
+    bool require_submenus = detail::pagination_requires_submenus(
+        options.enable_row_injection,
+        active_pagination,
+        runtime.menu->root_plan(detail::game_options_min_plan_capacity)
+                .pages.slices.size() > 1,
+        runtime_capacity_pagination,
+        custom_tab_capacity_pagination);
     const bool require_native_back =
-        active_pagination || runtime_capacity_pagination;
+        active_pagination || runtime_capacity_pagination ||
+        custom_tab_capacity_pagination;
     const bool require_text_inputs = options.enable_row_injection &&
         runtime.menu->modeled_text_input_count != 0;
     const bool require_input_bindings =
@@ -321,6 +405,13 @@ InstallResult install_impl(
                 }
             }
         }
+    }
+
+    if (resolved_addresses && preserved_shared_addresses) {
+        detail::logf(
+            LogLevel::error,
+            "Full and partial native address overrides cannot be combined");
+        return fail_install(InstallError::invalid_options);
     }
 
     erui::native::GameAddresses addresses{};
@@ -396,7 +487,8 @@ InstallResult install_impl(
                 require_native_back,
                 runtime.menu->modeled_popup_choice_count != 0,
                 require_text_inputs,
-                options.enable_custom_text)) {
+                options.enable_custom_text,
+                preserved_shared_addresses)) {
             return fail_install(InstallError::address_resolution_failed);
         }
     }
@@ -425,8 +517,18 @@ InstallResult install_impl(
         return fail_install(InstallError::address_resolution_failed);
     }
 
+    if (preserved_shared_addresses &&
+        !erui::native::revalidate_preserved_shared_menu_addresses(
+            game, *preserved_shared_addresses)) {
+        detail::logf(
+            LogLevel::error,
+            "Approved shared menu interfaces changed before hook installation");
+        return fail_install(InstallError::address_resolution_failed);
+    }
+
     const erui::native::HookInstallStatus hook_status =
-        erui::native::install_native_menu_hooks(addresses);
+        erui::native::install_native_menu_hooks(
+            addresses, preserved_shared_addresses);
     if (hook_status != erui::native::HookInstallStatus::success) {
         return fail_install(InstallError::hook_install_failed);
     }
@@ -439,23 +541,76 @@ InstallResult install_impl(
         return fail_install(InstallError::hook_install_failed);
     }
 
+    // Native tabs become process-lifetime once their hooks are installed.
+    // Keep this as the terminal fallible install stage so a successful tab
+    // install is never followed by rollback work.
+    if (runtime.tab_catalogue &&
+        runtime.tab_catalogue->custom_count() != 0 &&
+        !erui::native::install_native_tabs(
+            *runtime.tab_catalogue, preserved_shared_addresses)) {
+        detail::logf(
+            LogLevel::error,
+            "Failed to install the native custom-tab backend after menu hooks");
+        return fail_install(InstallError::hook_install_failed);
+    }
+
     detail::logf(LogLevel::info, "ERNativeUI install completed successfully");
     return InstallResult{};
 }
 
 InstallResult install(Menu& menu, RuntimeOptions options) noexcept {
-    return install_impl(menu, options, nullptr);
+    return install_impl(menu, options, nullptr, nullptr, nullptr);
 }
 
 InstallResult install_with_resolved_addresses(
     Menu& menu,
     RuntimeOptions options,
     const native::GameAddresses& addresses) noexcept {
-    return install_impl(menu, options, &addresses);
+    return install_impl(menu, options, &addresses, nullptr, nullptr);
+}
+
+InstallResult install_with_tab_configuration(
+    Menu& menu,
+    RuntimeOptions options,
+    const detail::TabConfiguration& tab_configuration) noexcept {
+    return install_impl(
+        menu, options, nullptr, nullptr, &tab_configuration);
+}
+
+InstallResult install_with_resolved_addresses_and_tab_configuration(
+    Menu& menu,
+    RuntimeOptions options,
+    const native::GameAddresses& addresses,
+    const detail::TabConfiguration& tab_configuration) noexcept {
+    return install_impl(
+        menu, options, &addresses, nullptr, &tab_configuration);
+}
+
+InstallResult install_with_preserved_shared_addresses_and_tab_configuration(
+    Menu& menu,
+    RuntimeOptions options,
+    const native::PreservedSharedMenuAddresses& addresses,
+    const detail::TabConfiguration& tab_configuration) noexcept {
+    return install_impl(
+        menu, options, nullptr, &addresses, &tab_configuration);
 }
 
 void uninstall() noexcept {
+    const ScopedRuntimeLifecycleLock lifecycle_lock;
     detail::RuntimeState& runtime = detail::runtime_state();
+    if (!runtime.installed.load(std::memory_order_acquire)) {
+        return;
+    }
+    // Run the tab lifetime gate before changing any other subsystem. A game
+    // callback can borrow catalogue/image storage as soon as the hooks are
+    // installed, so partial teardown would leave dangling native pointers;
+    // the pinned runtime must remain intact.
+    if (!erui::native::remove_native_tabs()) {
+        detail::logf(
+            LogLevel::warning,
+            "ERNativeUI uninstall was refused after API 1.3 carrier/viewport hook exposure; close the process to release the pinned runtime safely");
+        return;
+    }
     if (!runtime.installed.exchange(false, std::memory_order_acq_rel)) {
         return;
     }
@@ -472,8 +627,10 @@ void uninstall() noexcept {
     runtime.pagination_next_hits.store(0, std::memory_order_release);
     runtime.pagination_previous_hits.store(0, std::memory_order_release);
     runtime.menu_published.store(false, std::memory_order_release);
+    runtime.tab_catalogue.reset();
     runtime.menu.reset();
     detail::set_log_sink(nullptr);
+    detail::set_diagnostic_logging(false);
 }
 
 bool installed() noexcept {

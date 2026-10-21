@@ -69,6 +69,109 @@ bool guarded_matches(
 #endif
 }
 
+// Fork: how often each byte value appears in Elden Ring's code, per million
+// bytes (2.7.2.0 .text sections). The scanner anchors memchr on the pattern's
+// rarest fixed byte: 0x48 is 8% of x64 code, the rarest values about 0.1%.
+constexpr std::uint16_t kCodeByteFrequency[256] = {
+    65535, 15203,  6819,  7592,  6078,  6748,  2312,  2673, 14315,  1919,  1998,  1942,  3043,  3880,  1506, 25167,
+    10012,  3033,  1269,  1437,  2400,  2355,  1165,  1434,  4649,  1611,  1088,  1176,  1881,  1343,  1208,  2056,
+     8874,  1120,  1145,  1222, 36761,  1328,   963,  1138,  7882,  2534,  1030,  1888,  1538,  1200,  1397,  1267,
+     6125,  1141,  1245,  4351,  2003,  1167,   913,   926,  3799,  1620,  1009,  3384,  1697,  1337,  1205,  1472,
+     7988, 10887,  2384,  3098, 12661,  7774,  1742,  1925, 65535,  7802,  1514,  2092, 14806,  4235,  1409,  1537,
+     5750,  1612,  1329,  2260,  3975,  3515,  1869,  3199,  4163,  2983,  1265,  2270,  5647,  2135,  1982,  3018,
+     3002,   931,   910,  1882,  9152,  1262,  3532,   959,  2793,   995,   969,  1156,  2146,  1004,  1084,  1248,
+     2760,  1136,  1662,  1614,  7548,  4524,  1343,  1273,  2780,  1461,  1135,  1483,  2842,  1611,  1465,  1702,
+     4088,  2491,  1433, 12385,  3622,  7313,  1309,  1885,  2786, 21877,  2933, 43195,  1558, 21770,  1281,  1222,
+     6778,   928,   957,  1011,  1311,  1403,   865,   993,  1634,   940,   957,   867,  1323,  1020,   988,  1029,
+     2486,  1573,  1537,  1554,  1504,  1425,  1377,  1486,  2075,  1515,  1814,  1586,  1600,  1498,  1460,  1574,
+     2025,   998,   922,  1020,  1373,  1029,  2491,  1646,  2987,  1768,  2729,  1518,  1237,  1083,  1295,  1432,
+     7663,  5302,  2964,  6853,  4904,  1550,  4189,  5134,  4256,  3564,  2225,  2666,  6380,  1445,  1963,  2306,
+     2876,  1644,  2379,  1819,  1221,  1131,  1468,  1561,  2849,  1931,  1539,  1915,  1204,  1032,   997,  1237,
+     2657,  1780,  1454,  1529,  1484,  1210,  1498,  1413, 12298,  7950,  2016,  3384,  4030,  1291,  1286,  1400,
+     2366,  1322,  1830,  4654,  1131,   977,  2219,  1568,  9690,  1810,  1887,  1761,  1785,  3036,  3576, 24060,
+};
+
+// Fork: finds the next byte equal to `value`; a fault while reading the
+// block is reported instead of propagated.
+const std::uint8_t* guarded_find_byte(
+    const std::uint8_t* begin,
+    std::size_t size,
+    std::uint8_t value,
+    bool& faulted) noexcept {
+    faulted = false;
+#if defined(_MSC_VER)
+    __try {
+#endif
+        return static_cast<const std::uint8_t*>(std::memchr(begin, value, size));
+#if defined(_MSC_VER)
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        faulted = true;
+        return nullptr;
+    }
+#endif
+}
+
+// Fork: memchr jumps to the next occurrence of the pattern's rarest fixed
+// byte and only those offsets are compared in full. Same matches, in the same
+// order, as comparing every offset, but about 30x faster over the game's
+// ~60 MB of code (the per-offset loop took ~150 ms per pattern at startup).
+// A block whose search faults is checked offset by offset instead.
+// on_match returns false to stop; scan_section then returns false too.
+template <typename OnMatch>
+bool scan_section(
+    std::uint8_t* begin,
+    std::size_t size,
+    const std::vector<PatternByte>& pattern,
+    OnMatch&& on_match) {
+    if (size < pattern.size()) return true;
+    const std::size_t last = size - pattern.size();
+    std::size_t anchor = pattern.size();
+    for (std::size_t i = 0; i < pattern.size(); ++i) {
+        if (pattern[i].wildcard) continue;
+        if (anchor == pattern.size() ||
+            kCodeByteFrequency[pattern[i].value] <
+                kCodeByteFrequency[pattern[anchor].value]) {
+            anchor = i;
+        }
+    }
+    if (anchor == pattern.size()) {
+        for (std::size_t offset = 0; offset <= last; ++offset) {
+            if (!on_match(begin + offset)) return false;
+        }
+        return true;
+    }
+    const std::uint8_t value = pattern[anchor].value;
+    constexpr std::size_t kBlock = std::size_t{1} << 16;
+    std::size_t offset = 0;
+    while (offset <= last) {
+        const std::size_t from = offset + anchor;
+        const std::size_t end = (std::min)(last + anchor + 1, from + kBlock);
+        bool faulted = false;
+        const std::uint8_t* const hit =
+            guarded_find_byte(begin + from, end - from, value, faulted);
+        if (faulted) {
+            for (std::size_t candidate = offset; candidate + anchor < end; ++candidate) {
+                if (guarded_matches(begin + candidate, pattern) &&
+                    !on_match(begin + candidate)) {
+                    return false;
+                }
+            }
+            offset = end - anchor;
+            continue;
+        }
+        if (!hit) {
+            offset = end - anchor;
+            continue;
+        }
+        const std::size_t candidate = static_cast<std::size_t>(hit - begin) - anchor;
+        if (guarded_matches(begin + candidate, pattern) && !on_match(begin + candidate)) {
+            return false;
+        }
+        offset = candidate + 1;
+    }
+    return true;
+}
+
 } // namespace
 
 bool ModuleView::initialize(HMODULE module) noexcept {
@@ -189,22 +292,19 @@ ScanResult ModuleView::scan_executable(std::string_view text_pattern) const {
 
     ScanResult result{};
     for (const auto& section : sections_) {
-        if (!section.executable || section.size < pattern.size()) {
+        if (!section.executable) {
             continue;
         }
-
-        const std::size_t last = section.size - pattern.size();
-        for (std::size_t offset = 0; offset <= last; ++offset) {
-            auto* candidate = section.begin + offset;
-            if (guarded_matches(candidate, pattern)) {
+        const bool keep_going = scan_section(
+            section.begin, section.size, pattern, [&](std::uint8_t* candidate) {
                 if (!result.address) {
                     result.address = candidate;
                 }
                 ++result.matches;
-                if (result.matches >= 2) {
-                    return result;
-                }
-            }
+                return result.matches < 2;
+            });
+        if (!keep_going) {
+            return result;
         }
     }
     return result;
@@ -216,14 +316,12 @@ std::vector<std::uint8_t*> ModuleView::scan_executable_all(
     std::vector<std::uint8_t*> matches;
     if (pattern.empty()) return matches;
     for (const auto& section : sections_) {
-        if (!section.executable || section.size < pattern.size()) continue;
-        const std::size_t last = section.size - pattern.size();
-        for (std::size_t offset = 0; offset <= last; ++offset) {
-            auto* const candidate = section.begin + offset;
-            if (guarded_matches(candidate, pattern)) {
+        if (!section.executable) continue;
+        (void)scan_section(
+            section.begin, section.size, pattern, [&](std::uint8_t* candidate) {
                 matches.push_back(candidate);
-            }
-        }
+                return true;
+            });
     }
     return matches;
 }

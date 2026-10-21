@@ -5,6 +5,8 @@
 namespace erui::detail {
 
 void set_log_sink(LogSink sink) noexcept;
+void set_diagnostic_logging(bool enabled) noexcept;
+[[nodiscard]] bool diagnostic_logging_enabled() noexcept;
 
 // Fork: drops messages before they are formatted. Hot paths (text resolver,
 // Scaleform bridges) log at TRACE, so formatting them only to discard them

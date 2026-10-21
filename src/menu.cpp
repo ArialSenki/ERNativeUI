@@ -4,6 +4,46 @@
 #include <utility>
 
 namespace erui {
+namespace {
+
+[[nodiscard]] bool valid_title_screen_corner(
+    ERUI_TitleScreenCorner corner) noexcept {
+    switch (corner) {
+    case ERUI_TITLE_SCREEN_CORNER_TOP_LEFT:
+    case ERUI_TITLE_SCREEN_CORNER_TOP_RIGHT:
+    case ERUI_TITLE_SCREEN_CORNER_BOTTOM_LEFT:
+    case ERUI_TITLE_SCREEN_CORNER_BOTTOM_RIGHT:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_title_screen_text(
+    std::wstring_view text) noexcept {
+    if (text.empty() ||
+        text.size() > ERUI_TITLE_SCREEN_TEXT_MAX_CODE_UNITS) {
+        return false;
+    }
+
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const auto unit = static_cast<std::uint16_t>(text[index]);
+        if (unit == 0u || unit == static_cast<std::uint16_t>(L'\r') ||
+            unit == static_cast<std::uint16_t>(L'\n') ||
+            unit == 0x0085u || unit == 0x2028u || unit == 0x2029u) {
+            return false;
+        }
+        if (unit >= 0xD800u && unit <= 0xDBFFu) {
+            if (++index >= text.size()) return false;
+            const auto low = static_cast<std::uint16_t>(text[index]);
+            if (low < 0xDC00u || low > 0xDFFFu) return false;
+        } else if (unit >= 0xDC00u && unit <= 0xDFFFu) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
 
 Page::Page(Menu& owner, PageKind kind, std::wstring title, std::wstring help)
     : owner_(&owner),
@@ -335,10 +375,51 @@ const Page* Menu::find_builtin_page(detail::BuiltinPage page) const noexcept {
     return builtin_pages_[detail::builtin_page_offset(page)];
 }
 
-Page& Menu::add_tab(std::wstring title, std::wstring help) {
-    Page& page = create_page(PageKind::tab, std::move(title), std::move(help));
+Page& Menu::add_tab(std::wstring title) {
+    Page& page = create_page(PageKind::tab, std::move(title), {});
     tab_pages_.push_back(&page);
     return page;
+}
+
+Page& Menu::add_tab(
+    TabMetadata metadata,
+    std::wstring title) {
+    if (metadata.provider_id.empty() || metadata.tab_id.empty()) {
+        throw std::invalid_argument("registered tab metadata has an empty ID");
+    }
+    if (metadata.icon.source == TabIconSource::fallback) {
+        if (!metadata.icon.rgba8_pixels.empty()) {
+            throw std::invalid_argument(
+                "fallback tab icon unexpectedly owns RGBA pixels");
+        }
+    } else if (metadata.icon.source != TabIconSource::rgba8 ||
+               metadata.icon.rgba8_pixels.size() !=
+                   ERUI_TAB_ICON_RGBA8_BYTE_COUNT) {
+        throw std::invalid_argument("registered tab icon has an invalid shape");
+    }
+
+    Page& page = create_page(PageKind::tab, std::move(title), {});
+    try {
+        page.tab_metadata_.emplace(std::move(metadata));
+        tab_pages_.push_back(&page);
+    } catch (...) {
+        pages_.pop_back();
+        throw;
+    }
+    return page;
+}
+
+void Menu::add_title_screen_text(TitleScreenTextSpec text) {
+    if (frozen_) {
+        throw std::logic_error("menu is frozen");
+    }
+    if (text.provider_id.empty() ||
+        !valid_title_screen_corner(text.corner) ||
+        !valid_title_screen_text(text.text)) {
+        throw std::invalid_argument(
+            "registered title-screen text has an invalid shape");
+    }
+    title_screen_texts_.push_back(std::move(text));
 }
 
 InputBindingSection::InputBindingSection(

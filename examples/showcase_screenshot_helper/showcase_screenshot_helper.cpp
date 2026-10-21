@@ -4,6 +4,8 @@
 
 #include <atomic>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,6 +27,8 @@ enum class ShowcaseMode {
     popup_choice,
     text_input,
     color_picker,
+    custom_tab,
+    title_screen_text,
 };
 
 struct ModeDefinition {
@@ -33,7 +37,7 @@ struct ModeDefinition {
     const wchar_t* page_title;
 };
 
-constexpr std::array<ModeDefinition, 10> kModes{{
+constexpr std::array<ModeDefinition, 12> kModes{{
     {"button", ShowcaseMode::button, L"Button Showcase"},
     {"submenu", ShowcaseMode::submenu, L"Submenu Showcase"},
     {"toggle", ShowcaseMode::toggle, L"Toggle Showcase"},
@@ -46,6 +50,9 @@ constexpr std::array<ModeDefinition, 10> kModes{{
     {"popup-choice", ShowcaseMode::popup_choice, L"Popup Choice Showcase"},
     {"text-input", ShowcaseMode::text_input, L"TextInput Showcase"},
     {"color-picker", ShowcaseMode::color_picker, L"ColorPicker Showcase"},
+    {"custom-tab", ShowcaseMode::custom_tab, L"My Mod Settings"},
+    {"title-screen-text", ShowcaseMode::title_screen_text,
+        L"Title-Screen Text Showcase"},
 }};
 
 constexpr std::array<std::wstring_view, 4> kQualityValues{
@@ -53,6 +60,52 @@ constexpr std::array<std::wstring_view, 4> kQualityValues{
 
 constexpr std::array<std::wstring_view, 7> kImpossibleValues{
     L"-7", L"3", L"7.8", L"1s", L"hello", L"18", L"x1.3"};
+
+using TabIconPixels =
+    std::array<std::uint8_t, ERUI_TAB_ICON_RGBA8_BYTE_COUNT>;
+
+// Generate the same transparent triangle icon shown in the custom-tab guide.
+// Each pixel is four consecutive bytes: red, green, blue, then opacity.
+[[nodiscard]] constexpr TabIconPixels make_triangle_tab_icon() noexcept
+{
+    constexpr std::uint8_t red = 107;
+    constexpr std::uint8_t green = 100;
+    constexpr std::uint8_t blue = 80;
+    constexpr std::size_t top = 4;
+    constexpr std::size_t bottom = 27;
+
+    TabIconPixels pixels{};
+    for (std::size_t y = 0; y < ERUI_TAB_ICON_HEIGHT; ++y) {
+        if (y < top || y > bottom) continue;
+
+        // The permitted distance from the centre grows on each row.
+        const int maximum_distance = static_cast<int>(y - top) + 1;
+
+        for (std::size_t x = 0; x < ERUI_TAB_ICON_WIDTH; ++x) {
+            // Doubled coordinates place the centre between columns 15 and
+            // 16, keeping the triangle symmetric without using floats.
+            const int from_centre = static_cast<int>(x * 2U + 1U) - 32;
+            const int distance =
+                from_centre < 0 ? -from_centre : from_centre;
+            if (distance > maximum_distance) continue;
+
+            // A translucent one-pixel boundary softens the diagonal edges.
+            const bool boundary =
+                distance + 2 > maximum_distance || y == bottom;
+            const std::uint8_t opacity = boundary ? 160 : 255;
+
+            const std::size_t offset =
+                (y * ERUI_TAB_ICON_WIDTH + x) * 4U;
+            pixels[offset + 0U] = red;
+            pixels[offset + 1U] = green;
+            pixels[offset + 2U] = blue;
+            pixels[offset + 3U] = opacity;
+        }
+    }
+    return pixels;
+}
+
+inline constexpr TabIconPixels kTriangleIcon = make_triangle_tab_icon();
 
 HMODULE g_module{};
 erui::Registration g_registration{};
@@ -285,7 +338,77 @@ void add_selected_control(
                 accent);
         }
         break;
+
+    case ShowcaseMode::custom_tab:
+        // Registered directly by add_custom_tab_showcase().
+        break;
+
+    case ShowcaseMode::title_screen_text:
+        // Registered directly by add_title_screen_text_showcase().
+        break;
     }
+}
+
+void add_title_screen_text_showcase(erui::Menu& menu) noexcept
+{
+    if (!menu.supports(erui::Capability::title_screen_text)) {
+        debug(
+            L"The title-screen-text capability is unavailable for this host.");
+        return;
+    }
+
+    // One line deliberately omits a color so the screenshot also documents
+    // Elden Ring's native presentation. The other colors are subdued enough
+    // to remain legible against the title screen without looking like debug
+    // overlays. Fixed text and RGB values keep canonical screenshots stable.
+    menu.add_title_screen_text(
+        erui::TitleScreenCorner::top_left,
+        {L"Top left - native color"});
+    menu.add_title_screen_text(
+        erui::TitleScreenCorner::top_right,
+        {
+            L"Top right - muted gold",
+            erui::Color{216U, 167U, 103U},
+        });
+    menu.add_title_screen_text(
+        erui::TitleScreenCorner::bottom_left,
+        {
+            L"Bottom left - pale blue",
+            erui::Color{132U, 168U, 192U},
+        });
+    menu.add_title_screen_text(
+        erui::TitleScreenCorner::bottom_right,
+        {
+            L"Bottom right - soft rose",
+            erui::Color{190U, 128U, 142U},
+        });
+}
+
+void add_custom_tab_showcase(erui::Menu& menu) noexcept
+{
+    if (!menu.supports(erui::Capability::custom_tabs)) {
+        debug(L"The custom-tab capability is unavailable for this host/game build.");
+        return;
+    }
+
+    erui::TabOptions options{};
+    options.tab_id = "main";
+    options.title = L"My Mod Settings";
+    options.preferred_order = 100;
+    options.icon = {
+        kTriangleIcon.data(),
+        kTriangleIcon.size(),
+        erui::TabIconFormat::rgba8};
+
+    // add_tab copies the ID, title, and icon bytes before returning. The Page
+    // it returns accepts the same rows as a submenu or built-in settings page.
+    erui::Page page = menu.add_tab(options);
+    if (!page.valid()) return;
+
+    page.add_toggle(
+        L"Enable My Feature",
+        L"Turn the example feature on or off.",
+        1);
 }
 
 DWORD WINAPI initialize(void*) noexcept
@@ -306,6 +429,15 @@ DWORD WINAPI initialize(void*) noexcept
         [](erui::Menu& menu) {
             const ShowcaseMode mode = load_mode(menu);
             const ModeDefinition& definition = definition_for(mode);
+
+            if (mode == ShowcaseMode::custom_tab) {
+                add_custom_tab_showcase(menu);
+                return;
+            }
+            if (mode == ShowcaseMode::title_screen_text) {
+                add_title_screen_text_showcase(menu);
+                return;
+            }
 
             erui::Page showcase = menu.root().add_submenu(
                 definition.page_title,

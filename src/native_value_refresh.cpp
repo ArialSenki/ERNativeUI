@@ -89,6 +89,11 @@ struct Slot {
     std::atomic<const volatile std::uint8_t*> bound{};
     std::atomic<Kind> kind{Kind::none};
     std::atomic<int> colored{-1};  // -1 unknown, 0 default colour, 1 changed colour
+    // Index into g_defaults, or -1. Looked up when the control is recorded
+    // and again only after a new default is added (default_generation), so
+    // the per-frame colour pass never searches the default table.
+    int default_index{-1};
+    std::uint32_t default_generation{};
     // Caption colour transform before the first tint (game thread only).
     std::array<float, 8> native{};
     bool has_native{};
@@ -102,20 +107,20 @@ struct DefaultEntry {
 constexpr std::size_t kDefaultCount = 256;
 std::array<DefaultEntry, kDefaultCount> g_defaults{};
 std::atomic<std::size_t> g_default_total{};
+// Bumped whenever an entry is added to g_defaults.
+std::atomic<std::uint32_t> g_default_generation{};
 std::atomic_bool g_color_ready{};
 std::atomic<int> g_toggle_source{-1};  // index into kToggleSourceOffsets that resolved
 std::atomic<std::uint32_t> g_color_logs{};
 
-bool default_for(const volatile std::uint8_t* bound, std::uint8_t& value, bool& inverted) noexcept {
+int default_index_of(const volatile std::uint8_t* bound) noexcept {
     const std::size_t total = std::min(g_default_total.load(std::memory_order_acquire), kDefaultCount);
     for (std::size_t i = 0; i < total; ++i) {
         if (g_defaults[i].bound.load(std::memory_order_acquire) == bound) {
-            value = g_defaults[i].value.load(std::memory_order_relaxed);
-            inverted = g_defaults[i].inverted.load(std::memory_order_relaxed);
-            return true;
+            return static_cast<int>(i);
         }
     }
-    return false;
+    return -1;
 }
 
 constexpr std::size_t kSlotCount = 512;
@@ -160,6 +165,8 @@ void remember(std::uint8_t* item, std::size_t bound_offset, Kind kind) noexcept 
     slot.bound.store(bound, std::memory_order_relaxed);
     slot.colored.store(-1, std::memory_order_relaxed);
     slot.has_native = false;
+    slot.default_generation = g_default_generation.load(std::memory_order_acquire);
+    slot.default_index = default_index_of(bound);
     slot.kind.store(kind, std::memory_order_release);
 }
 
@@ -345,9 +352,16 @@ void update_label_colors() noexcept {
         const Kind kind = slot.kind.load(std::memory_order_acquire);
         if (kind == Kind::none) continue;
         const volatile std::uint8_t* const bound = slot.bound.load(std::memory_order_relaxed);
-        std::uint8_t fallback{};
-        bool inverted{};
-        if (!default_for(bound, fallback, inverted)) continue;
+        if (slot.default_index < 0) {
+            const std::uint32_t generation = g_default_generation.load(std::memory_order_acquire);
+            if (slot.default_generation == generation) continue;
+            slot.default_generation = generation;
+            slot.default_index = default_index_of(bound);
+            if (slot.default_index < 0) continue;
+        }
+        const DefaultEntry& entry = g_defaults[static_cast<std::size_t>(slot.default_index)];
+        const std::uint8_t fallback = entry.value.load(std::memory_order_relaxed);
+        const bool inverted = entry.inverted.load(std::memory_order_relaxed);
         std::uint8_t* const item = slot.item.load(std::memory_order_relaxed);
         std::uint8_t value{};
         if (!read_live_value(item, kind, bound, value)) {
@@ -485,6 +499,7 @@ void set_native_value_default(const volatile std::uint8_t* bound,
     g_defaults[index].inverted.store(inverted, std::memory_order_relaxed);
     g_defaults[index].bound.store(bound, std::memory_order_release);
     g_default_total.store(index + 1, std::memory_order_release);
+    g_default_generation.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void refresh_dirty_native_values() noexcept {
