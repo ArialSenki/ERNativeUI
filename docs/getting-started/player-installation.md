@@ -43,7 +43,6 @@ Create an ERNativeUI directory inside the Mod Engine 2 `mod` directory:
         |-- ERNativeUI.dll
         |-- ERNativeUI.ini
         |-- locales\
-        |-- menu\
         `-- examples\
 ```
 
@@ -54,7 +53,6 @@ GitHub package, copy the required contents of `bin` there.
 - `ERNativeUI.ini` is optional; the DLL creates its embedded default when it
   is missing.
 - `locales` contains translations for host-owned navigation text.
-- `menu` contains optional GFX presentation assets.
 - `examples` contains demonstrations and is not required by ordinary client
   mods.
 
@@ -84,27 +82,19 @@ To try the complete demonstration, add this optional entry after the host:
 The other example DLLs are development aids. Do not load them in a normal
 player setup unless their demonstrations are wanted.
 
-## 4. Enable the optional GFX presentation
+## 4. Runtime GFX presentation
 
-Core menu behavior has native fallbacks. The bundled loose GFX files add
-expanded settings-page capacity and the enhanced TextInput and ColorPicker
-presentation.
+There is no separate GFX installation step. By default, ERNativeUI completes
+supported settings and title movies in memory while Elden Ring loads them.
+This supplies expanded ordinary-page capacity, TextInput and ColorPicker
+presentation, and registered API 1.3 title-screen text without a loose `menu`
+directory or a Mod Engine 2 mod-loader entry.
 
-To enable them, add the ERNativeUI directory to the existing Mod Engine 2
-mod-loader list:
-
-```toml
-[extension.mod_loader]
-enabled = true
-mods = [
-    { enabled = true, name = "ERNativeUI", path = "mod\\ERNativeUI" },
-]
-```
-
-Preserve other entries already present in that list. Mod Engine 2 cannot merge
-two binary replacements for the same GFX path. Read
-[Presentation and optional GFX](../guides/presentation-and-gfx.md) before
-combining ERNativeUI with another mod that replaces the same files.
+If another mod supplies one of the same movies, ERNativeUI supports it when
+the relevant layout is structurally compatible. Unrecognized layouts are left
+unchanged. Read
+[Runtime GFX completion and presentation](../guides/presentation-and-gfx.md)
+for the exact behavior.
 
 ## 5. Runtime configuration
 
@@ -126,6 +116,12 @@ RegistrationMaxWaitMs = 15000
 SteamLanguageWaitMs = 5000
 InjectionCooldownMs = 250
 
+[GFX]
+EnableRuntimePatching = 1
+
+[Tabs]
+MinimumTabSlots = 8
+
 [Diagnostics]
 EnableDiagnostics = 0
 ```
@@ -134,6 +130,28 @@ Logging is disabled for normal play. When `EnableLog = 1`, the host writes
 `ERNativeUI.log` beside the DLL. Enable logging and diagnostics only for a
 bounded troubleshooting session; with logging disabled, the host does not
 create, truncate, append to, or flush a log file.
+
+`[GFX] EnableRuntimePatching = 1` is the normal default; an existing INI that
+omits this new key also uses `1`. Set it to `0` only when a compatibility or
+troubleshooting test needs ERNativeUI to leave the effective GFX bytes
+completely unchanged, then fully restart the game. In that mode, pages
+paginate against the capacity already present in the loaded movie and custom
+tabs remain available. ERNativeUI does not add rows or TextInput/ColorPicker
+artwork, but compatible structures already authored by the effective movie
+remain usable and the controls retain their functional fallbacks.
+`MinimumTabSlots` cannot grow the movie, and API 1.3 title-screen text is
+unavailable. The host therefore does not advertise
+`Capability::title_screen_text` while the setting is disabled.
+
+`[Tabs] MinimumTabSlots = 8` is the normal default. With runtime GFX
+patching enabled, players may request a compatible physical System tab strip
+of 8, 9, or 10 slots. The value is a minimum: a validated effective movie
+that already provides more slots is not reduced. Ten is Elden Ring's hard
+native physical-slot ceiling, so there is no `MaximumTabSlots` setting and
+values outside `8..10` are rejected. This physical capacity does not limit
+custom-tab registration; additional logical tabs remain reachable through
+ERNativeUI's shifting `...` viewport. Restart the game after changing the
+value.
 
 Locale files use effective language identifiers and belong in `locales` beside
 the host. `Language = auto` follows Elden Ring's current Steam game language.
@@ -168,11 +186,13 @@ content to display.
 - Seamless Co-op 2.0.1 was live-tested with Elden Ring 2.7.0.0, with no
   incompatibility observed for that exact combination. See
   [Game and mod compatibility](../COMPATIBILITY.md#seamless-co-op).
-- Shadow of the Erdtree remains explicitly unverified until its live test
-  matrix is completed.
+- Elden Ring 2.7.1.0 title layouts and API 1.3's adaptive title spacing were
+  live-tested with Shadow of the Erdtree both absent and present; see the
+  compatibility guide for the exact scope.
 - Host and committed client DLLs must remain loaded until process exit.
-- If another mod supplies the same loose GFX paths, the configured mod-loader
-  order determines which complete file is visible; the edits are not merged.
+- If another mod supplies the same GFX path, its mod-loader order still decides
+  which complete file reaches the game. ERNativeUI then completes that file
+  only when its relevant structure is recognized.
 
 For failures, read [Common errors](common-errors.md). A useful report includes
 the ERNativeUI release, Elden Ring executable version, DLL order, other loaded

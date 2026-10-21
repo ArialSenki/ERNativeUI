@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -68,6 +70,38 @@ struct MenuLocalization {
     std::wstring previous_help{L"Return to the preceding settings page."};
     std::wstring next_label{L"Next Page"};
     std::wstring next_help{L"Open the next settings page."};
+};
+
+enum class TabIconSource : std::uint8_t {
+    fallback,
+    rgba8,
+};
+
+// Immutable catalogue data owned by the host after provider registration.
+// The RGBA image, when present, is always an exact API 1.3 32x32 wire image.
+// Native rendering conversions remain outside the public ABI.
+struct TabIconSpec {
+    TabIconSource source{TabIconSource::fallback};
+    std::vector<std::uint8_t> rgba8_pixels{};
+};
+
+struct TabMetadata {
+    std::string provider_id{};
+    std::string tab_id{};
+    std::int32_t preferred_order{};
+    std::optional<std::int32_t> player_order{};
+    std::int32_t effective_order{};
+    TabIconSpec icon{};
+};
+
+// Immutable title-screen line assembled from API 1.3 registrations. The
+// provider ID is retained for diagnostics; presentation order is the vector
+// order established by Registry during its deterministic freeze pass.
+struct TitleScreenTextSpec {
+    std::string provider_id{};
+    std::wstring text{};
+    std::optional<detail::RgbColor> color{};
+    ERUI_TitleScreenCorner corner{};
 };
 
 using ActionCallback = void (*)(void* user_data) noexcept;
@@ -261,6 +295,9 @@ public:
     [[nodiscard]] const PagePresentationSpec& presentation() const noexcept {
         return presentation_;
     }
+    [[nodiscard]] const std::optional<TabMetadata>& tab_metadata() const noexcept {
+        return tab_metadata_;
+    }
     [[nodiscard]] std::size_t row_count() const noexcept { return rows_.size(); }
 
 private:
@@ -303,6 +340,7 @@ private:
     std::wstring title_{};
     std::wstring help_{};
     PagePresentationSpec presentation_{};
+    std::optional<TabMetadata> tab_metadata_{};
     std::vector<RowDefinition> rows_{};
 };
 
@@ -379,7 +417,11 @@ public:
     [[nodiscard]] const Page* find_builtin_page(
         detail::BuiltinPage page) const noexcept;
 
-    Page& add_tab(std::wstring title, std::wstring help = {});
+    Page& add_tab(std::wstring title);
+    Page& add_tab(
+        TabMetadata metadata,
+        std::wstring title);
+    void add_title_screen_text(TitleScreenTextSpec text);
 
     InputBindingSection& add_input_binding_section(
         std::string provider_id,
@@ -390,6 +432,13 @@ public:
     [[nodiscard]] bool frozen() const noexcept { return frozen_; }
     [[nodiscard]] std::size_t page_count() const noexcept { return pages_.size(); }
     [[nodiscard]] std::size_t tab_count() const noexcept { return tab_pages_.size(); }
+    [[nodiscard]] std::size_t title_screen_text_count() const noexcept {
+        return title_screen_texts_.size();
+    }
+    [[nodiscard]] std::span<const TitleScreenTextSpec>
+    title_screen_texts() const noexcept {
+        return title_screen_texts_;
+    }
     [[nodiscard]] std::size_t input_binding_section_count() const noexcept {
         return input_binding_sections_.size();
     }
@@ -406,6 +455,7 @@ private:
     MenuLocalization localization_{};
     std::vector<std::unique_ptr<Page>> pages_{};
     std::vector<Page*> tab_pages_{};
+    std::vector<TitleScreenTextSpec> title_screen_texts_{};
     std::vector<std::unique_ptr<InputBindingSection>>
         input_binding_sections_{};
     std::array<Page*, detail::builtin_page_count> builtin_pages_{};

@@ -17,8 +17,8 @@ ctest --preset windows-release
 The suite covers:
 
 - exact Elden Ring PE identity matching, rejection of mixed timestamp/image-
-  size pairs, distinct 2.7.0.0/2.7.1.0 native profiles, and the known moved
-  core UI, ColorPicker, and Input Bindings RVAs;
+  size pairs, distinct 2.7.0.0/2.7.1.0/2.7.2.0 native profiles, and the known
+  moved core UI, ColorPicker, and Input Bindings RVAs;
 - C ABI layout, the frozen API 1.0 function-table prefix, and the additive
   API 1.1 TextInput, ColorPicker, BuiltinPage, InputBindings, and Storage
   blocks;
@@ -51,8 +51,9 @@ The suite covers:
 
 The host must use an MSVC-compatible C++ ABI because Elden Ring directly
 consumes an MSVC `std::function` object in its native action-row constructor.
-That restriction does not cross the public C boundary: MSVC, clang-cl, and
-MinGW-w64 client mods are supported.
+That restriction is not intended to cross the public C boundary: the API is
+designed for MSVC, clang-cl, and MinGW-w64 client mods. A release must not
+claim MinGW-w64 runtime compatibility until the complete gate below passes.
 
 Strict MinGW header smoke checks can be reproduced with:
 
@@ -66,6 +67,25 @@ g++ -std=c++17 -pedantic-errors -Wall -Wextra -Werror -Iinclude ^
 Those commands are compile-only smoke checks. They do not exercise dynamic
 API negotiation or prove that an MSVC-built host can safely invoke a callback
 compiled by MinGW-w64.
+
+The API 1.3 release candidate has additional isolated cross-toolchain evidence.
+On 2026-10-20 at commit `c2f7f17fd78949e7aaf573614b81332b6f2e1ab4`,
+MSVC 19.51.36243 fixtures and MinGW-w64 GCC/G++ 15.2.0 produced these results:
+
+- [x] Strict current-header C11 and C++17 compilation passed.
+- [x] Current C/C++ and frozen API 1.1/1.2 C/C++ clients negotiated,
+  registered, committed, and exercised representative accessors against the
+  production-sourced MSVC host fixture.
+- [x] A current C++ client and frozen API 1.0 C/C++ clients received and
+  verified callbacks from MSVC-built fixtures, including no-value, value, and
+  alert callbacks.
+- [x] Every audit client was PE x86-64, resolved `ERUI_GetApi` dynamically,
+  and had no `ERNativeUI.dll` import. The production-sourced current fixture
+  exported only `ERUI_GetApi`.
+
+This is strong isolated ABI evidence, but it is not the offline-game callback
+test below. The 1.3.0 compatibility matrix therefore does not claim complete
+in-game MinGW-w64 runtime qualification.
 
 The complete cross-toolchain runtime gate is manual today and is not part of
 the GitHub CI job. Before a release advertises MinGW-w64 compatibility:
@@ -101,9 +121,9 @@ production host in the offline game. Do not ship those diagnostic clients.
 After `cmake --install`, configure `examples/` and each standalone example
 directory independently with `CMAKE_PREFIX_PATH` set to the install prefix:
 `template`, `localized_greeting`, `tarnished_ui_showcase`, and
-`showcase_screenshot_helper`. Inspect each client DLL's imports: no client
-should import `ERNativeUI.dll`. Inspect the host exports: only `ERUI_GetApi` is
-public.
+`showcase_screenshot_helper`, `custom_tabs_stress`, and `title_screen_text`.
+Inspect each client DLL's imports: no client should import `ERNativeUI.dll`.
+Inspect the host exports: only `ERUI_GetApi` is public.
 
 ## Packaging validation
 
@@ -115,9 +135,10 @@ cmake --build build/preset-release --config Release --target package
 ```
 
 The resulting package must contain the MIT license, third-party notices, full
-dependency license texts, only the two documented optional patched GFX movies,
-and both `bin/examples/ShowcaseScreenshotHelper.dll` and its intentional
-source-controlled `ShowcaseScreenshotHelper.ini`. It must not contain an
+dependency license texts, and both
+`bin/examples/ShowcaseScreenshotHelper.dll` and its intentional
+source-controlled `ShowcaseScreenshotHelper.ini`. It must not contain loose
+GFX movies, `ERNativeUIGfxPatcher.exe`, the patcher's developer README, an
 import library, static library, unmodified or research-only game assets, a log,
 a runtime-generated provider configuration such as
 `mods/<provider_id>/config.ini`, an old archive, or a local build directory.
@@ -166,10 +187,13 @@ For the shipped showcase, verify:
     affecting another tab.
 11. Manual Back, reopening pages, mouse/controller input, and repeated menu
    visits do not duplicate rows or crash.
-12. Both vanilla six-row and optional patched 13-row Game Options GFX layouts
-    select the expected capacity in the log. Repeat with one compatible mod
-    row materialized first and verify the log subtracts that row from the free
-    slots rather than treating it as provider capacity.
+12. With `[GFX] EnableRuntimePatching = 1` and no loose settings movie, confirm
+    runtime GFX completion reports the original and completed capacities and
+    the constructed page exposes the completed capacity. Repeat with a
+    compatible independently modified movie and verify completed structures
+    remain unchanged while missing structures are added. With one compatible
+    mod row materialized first, verify the page planner subtracts that row
+    from the free slots rather than treating it as provider capacity.
 13. Exercise the showcase alert matrix: all seven button layouts in both bottom
    and center placement. Verify controller/mouse page movement, row activation,
    and the page's native Back path remain blocked while popup actions work.
@@ -183,12 +207,112 @@ For the shipped showcase, verify:
    and verify FIFO dismissal without page input leaking through either dialog;
    do not ship that duplicate-request test in a real mod.
 
+### Runtime GFX patching configuration
+
+Complete this A/B matrix before release. Each change requires a full process
+restart; do not treat an INI edit made while the game is running as a test.
+
+The API 1.3 release candidate was live-smoke-tested with explicit enabled and
+disabled values, and the enabled shipped default was restored. That result
+proves configuration selection, but it does not by itself prove every detailed
+fallback and capability condition below; unchecked items remain release work.
+
+- [x] Restart with explicit `EnableRuntimePatching = 1`, then with `0`, and
+  restore the repository's shipped enabled default.
+
+- [ ] Start with `[GFX] EnableRuntimePatching = 1`. Confirm the runtime loader
+  hook installs, supported settings movies reach their documented capacities,
+  TextInput and ColorPicker use their completed presentations, and an API 1.3
+  connection advertises `ERUI_CAP_TITLE_SCREEN_TEXT`.
+- [ ] Remove `EnableRuntimePatching` from an existing INI and restart. Confirm
+  the missing key preserves the enabled behavior for upgrades from older
+  installations, then restore the explicit shipped default.
+- [ ] Set `EnableRuntimePatching = 0`, restart, and confirm the ordinary log
+  reports the intentional disabled state without a warning. Confirm no
+  per-movie transformation occurs and the effective vanilla or mod-supplied
+  GFX capacities remain unchanged.
+- [ ] In the disabled run, confirm ordinary and custom pages paginate against
+  the unchanged movie's live capacity. Exercise custom-tab L1/R1 navigation,
+  wrapping, mouse selection, Back, close, and reopen to prove that the custom
+  tab backend remains independent.
+- [ ] In the disabled run with the stock, unmodified settings GFX, open
+  TextInput and ColorPicker rows. Confirm editing, confirmation, cancellation,
+  values, and callbacks remain functional through their fallback
+  presentations, while the TextInput brackets/empty state and standalone
+  ColorPicker swatch are absent.
+- [ ] In the disabled run, confirm a valid API 1.3 connection omits
+  `ERUI_CAP_TITLE_SCREEN_TEXT`, guarded clients skip their title lines cleanly,
+  and no provider title text is inserted into `05_000_title.gfx`.
+- [ ] Restore `EnableRuntimePatching = 1`, restart, and repeat the enabled
+  smoke test so the shipped default does not inherit state from the disabled
+  run.
+
+### Physical System tab-slot configuration
+
+Use the custom-tabs stress example for all three runs. Fully exit and restart
+the game after each INI change; do not compare configurations within one
+process.
+
+- [x] Set `[Tabs] MinimumTabSlots = 8`. Confirm the ordinary eight-slot strip,
+  custom-tab overflow markers, single and held L1/R1 movement, wrapping,
+  pointer selection, Back, close, and reopen.
+- [x] Set `MinimumTabSlots = 9`. Confirm nine physical slots are visible and
+  selectable, the custom-tab viewport uses the added slot, and all navigation
+  checks above remain stable.
+- [x] Set `MinimumTabSlots = 10`. Confirm ten physical slots are visible and
+  selectable without overlapping the shoulder prompts or leaving the screen,
+  and repeat the complete navigation and reopen checks.
+- [ ] For each run, confirm the ordinary log reports the requested minimum and
+  completed authored GFX capacity as the expected value, with no `WARN`,
+  `ERROR`, or `FATAL` entry. The visible selectable slots and successful
+  navigation provide the live native-record/selector check without enabling
+  high-volume diagnostics.
+- [x] After closing System, reopen it immediately and confirm the custom icons
+  are already painted on the first visible frame rather than briefly showing
+  fallback icons. Repeat after waiting before reopening.
+- [x] Restore the repository's shipped `MinimumTabSlots = 8` default after
+  testing.
+- [ ] Confirm values outside `8..10` fail closed to the default. There is no
+  `MaximumTabSlots` setting.
+
+These are physical strip capacities, not custom-tab registration limits. The
+stress example still contributes 50 logical custom tabs in every run, and the
+viewport must keep all of them reachable.
+
+### Elden Ring 2.7.2.0 live validation
+
+The 1.3.0 release candidate exposing ERUI API 1.3 was live-validated on Elden
+Ring App 1.17.2 / executable product version 2.7.2.0. The tested
+executable had SHA-256
+`F9118FEA2CFD8FA3901E8060BFADB1552CB2471771DED8A5B662C4E298FFB328`, PE
+timestamp `0x6AABF7E7`, image size `0x5DFD600`, and file size 86,973,008 bytes.
+
+- [x] The host selected the exact 2.7.2.0 native profile and installed every
+  required backend without selecting either older build profile.
+- [x] Runtime GFX completion succeeded and the completed settings interfaces
+  were usable in game.
+- [x] The 50-custom-tab stress client registered 1,000 custom rows. Together
+  with the eight native tabs, the runtime exposed 58 logical tabs.
+- [x] L1/R1 navigation, wrapping, mouse selection, Back, closing, and
+  reopening System all completed successfully.
+- [x] The validation run ended with no `WARN`, `ERROR`, or `FATAL` entries in
+  `ERNativeUI.log`.
+
+This run did not include Solid Uncapper. Its separately documented 2.7.0.0
+and 2.7.1.0 compatibility results must not be extended to 2.7.2.0 without a
+dedicated regression.
+
 ### Elden Ring 2.7.1.0 and Solid Uncapper regression
 
-The 1.1.1 compatibility work was live-validated on both Elden Ring 2.7.0.0
-and 2.7.1.0, with Solid Uncapper 2.3 loaded first and without Solid Uncapper.
-Root pagination was also confirmed with the original six-row Game Options GFX
-and the optional 13-row GFX. Keep the checks below for future release
+The original 1.1.1 compatibility work was live-validated on both Elden Ring
+2.7.0.0 and 2.7.1.0, with Solid Uncapper 2.3 loaded first and without Solid
+Uncapper. The 1.3.0 release candidate was subsequently live-regression-tested
+on 2.7.1.0 with Solid Uncapper loaded first: both title-screen text producers,
+the ERNativeUI showcase, and the custom-tab stress example remained visible
+and operational. Root pagination was also historically confirmed with both
+the original six-row Game Options GFX and a separately transformed 13-row GFX.
+Current releases complete compatible settings movies in memory, so keep both
+the game-supplied and already-modified input checks below for future
 regressions; static pattern matches alone do not prove the runtime hook chain.
 
 - [x] On 2.7.1.0 without Solid Uncapper, confirm the exact profile is selected,
@@ -217,15 +341,15 @@ regressions; static pattern matches alone do not prove the runtime hook chain.
 - [ ] With Solid Uncapper loaded, open both the root and subpage ColorPicker,
   accept different colors, and verify each bracketed swatch updates
   immediately and independently. Reopen both editors after accept and cancel.
-- [x] Remove the optional `02_040_optionsetting.gfx`. On the vanilla six-row
-  Game Options page, confirm four Elden Ring rows plus Solid Uncapper leave one
-  free slot. When ERNativeUI content overflows, that slot must contain Next
-  only; no provider row may be appended beyond it. Open Next, then verify
-  Previous restores the root correctly.
-- [x] Restore the optional 13-row `02_040_optionsetting.gfx`. Confirm the same
-  five already-materialized rows leave eight free slots. For overflowing
+- [ ] With no loose `02_040_optionsetting.gfx`, confirm runtime completion
+  expands the compatible game-supplied panel to 13 rows. The four Elden Ring
+  rows plus Solid Uncapper must leave eight free slots. For overflowing
   content, the first slice must contain seven provider rows plus Next, with no
-  fourteenth row. Verify Next/Previous and reopen behavior again.
+  fourteenth row. Verify Next/Previous and reopen behavior.
+- [ ] Supply a compatible independently modified `02_040_optionsetting.gfx`
+  that already has 13 rows. Confirm runtime completion preserves the existing
+  placements byte-for-byte, does not duplicate presentation definitions, and
+  produces the same pagination and reopen behavior.
 - [x] Repeat the supported-build startup and pagination regression on Elden
   Ring 2.7.0.0, both with Solid Uncapper 2.3 loaded first and without it.
 - [ ] Repeat navigation, TextInput, pagination, and one-/two-button dialog
@@ -256,11 +380,12 @@ plus a combining mark also consumes two units even if it appears as one glyph.
   Cancel; verify the previous value remains and no callback fires. Confirm a
   different value and verify exactly one callback fires with the new value,
   then reopen once more to verify persistence.
-- [ ] Repeat confirm and Cancel after Next/Previous pagination, with the
-  optional GFX files installed and absent. Verify focus returns to the owning
-  row, underlying navigation does not receive the editing input, and page
-  destruction/recreation does not retain a stale editor or borrowed callback
-  view.
+- [ ] Repeat confirm and Cancel after Next/Previous pagination first with the
+  game-supplied settings movies and then with compatible independently
+  modified movies. Verify runtime completion succeeds in both cases, focus
+  returns to the owning row, underlying navigation does not receive the
+  editing input, and page destruction/recreation does not retain a stale
+  editor or borrowed callback view.
 
 ### Input-binding live validation (API 1.1)
 
@@ -329,9 +454,10 @@ or log so callback counts can be checked without making input timing ambiguous.
 - [ ] Re-test an ordinary official controller row and an ordinary official
   keyboard/mouse row end to end: assign, Cancel, Clear, conflict display, save,
   close/reopen, and process restart must retain vanilla behavior.
-- [ ] Repeat with the optional GFX patches both installed and absent. Binding
-  screens must behave identically because their model extension requires no
-  `02_160_keyconfiguration.gfx` patch.
+- [ ] Repeat with the game-supplied settings movies and compatible
+  independently modified settings movies. Binding screens must behave
+  identically because their model extension requires no
+  `02_160_keyconfiguration.gfx` transformation.
 - [ ] Restore the original provider configuration after the game
   exits and confirm no client-generated provider configuration is included in
   an SDK or runtime package.

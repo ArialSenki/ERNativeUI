@@ -15,6 +15,18 @@ bool same_profile(
 }
 
 bool same_profile(
+    const erui::native::SharedMenuAddressProfile& left,
+    const erui::native::SharedMenuAddressProfile& right) noexcept {
+    return left.build == right.build &&
+        left.game_options_handler_rva ==
+            right.game_options_handler_rva &&
+        left.sub_handler_rva == right.sub_handler_rva &&
+        left.text_resolver_rva == right.text_resolver_rva &&
+        left.slider_refresh_rva == right.slider_refresh_rva &&
+        left.selector_select_rva == right.selector_select_rva;
+}
+
+bool same_profile(
     const erui::native::TextInputAddressProfile& left,
     const erui::native::TextInputAddressProfile& right) noexcept {
     return left.build == right.build &&
@@ -27,7 +39,55 @@ bool same_profile(
             right.menu_string_destructor_rva &&
         left.editor_factory_builder_rva ==
             right.editor_factory_builder_rva &&
-        left.editor_factory_rva == right.editor_factory_rva;
+        left.editor_factory_rva == right.editor_factory_rva &&
+        left.option_setting_dialog_vtable_rva ==
+            right.option_setting_dialog_vtable_rva &&
+        left.pad_setting_dialog_vtable_rva ==
+            right.pad_setting_dialog_vtable_rva &&
+        left.edit_property_vtable_rva ==
+            right.edit_property_vtable_rva &&
+        left.text_input_controller_vtable_rva ==
+            right.text_input_controller_vtable_rva &&
+        left.software_keyboard_job_vtable_rva ==
+            right.software_keyboard_job_vtable_rva;
+}
+
+bool same_profile(
+    const erui::native::MenuRuntimeAddressProfile& left,
+    const erui::native::MenuRuntimeAddressProfile& right) noexcept {
+    return left.build == right.build &&
+        left.camera_panel_materializer_rva == right.camera_panel_materializer_rva &&
+        left.display_panel_materializer_rva == right.display_panel_materializer_rva &&
+        left.sound_panel_materializer_rva == right.sound_panel_materializer_rva &&
+        left.network_panel_materializer_rva == right.network_panel_materializer_rva &&
+        left.keyboard_mouse_panel_materializer_rva == right.keyboard_mouse_panel_materializer_rva &&
+        left.graphics_panel_materializer_rva == right.graphics_panel_materializer_rva &&
+        left.open_sub_page_rva == right.open_sub_page_rva &&
+        left.on_off_list_rva == right.on_off_list_rva &&
+        left.menu_context_rva == right.menu_context_rva &&
+        left.text_ref_help_rva == right.text_ref_help_rva &&
+        left.text_ref_label_rva == right.text_ref_label_rva &&
+        left.root_button_text_references_rva == right.root_button_text_references_rva &&
+        left.root_button_display_text_rva == right.root_button_display_text_rva &&
+        left.add_toggle_rva == right.add_toggle_rva &&
+        left.add_inline_choice_rva == right.add_inline_choice_rva &&
+        left.choice_context_constructor_rva == right.choice_context_constructor_rva &&
+        left.choice_list_builder_rva == right.choice_list_builder_rva &&
+        left.add_slider_rva == right.add_slider_rva &&
+        left.add_button_rva == right.add_button_rva &&
+        left.destroy_text_references_rva == right.destroy_text_references_rva &&
+        left.native_back_rva == right.native_back_rva &&
+        left.page_frame_rva == right.page_frame_rva &&
+        left.scaleform_path_resolver_rva == right.scaleform_path_resolver_rva &&
+        left.scaleform_text_setter_rva == right.scaleform_text_setter_rva &&
+        left.popup_choice_constructor_rva == right.popup_choice_constructor_rva &&
+        left.popup_choice_list_provider_rva == right.popup_choice_list_provider_rva &&
+        left.popup_choice_list_template_rva == right.popup_choice_list_template_rva &&
+        left.popup_choice_value_invoke_rva == right.popup_choice_value_invoke_rva &&
+        left.popup_choice_selection_invoke_rva == right.popup_choice_selection_invoke_rva &&
+        left.popup_choice_value_vtable_rva == right.popup_choice_value_vtable_rva &&
+        left.popup_choice_selection_vtable_rva == right.popup_choice_selection_vtable_rva &&
+        left.popup_choice_presentation_vtable_rva == right.popup_choice_presentation_vtable_rva;
 }
 
 bool same_profile(
@@ -139,11 +199,11 @@ int main() {
         EldenRingBuild::unsupported);
     ERUI_TEST_CHECK(
         erui::native::identify_elden_ring_build(
-            0x6A96BA95, 0x5E09600) ==
+            0x6AABF7E7, 0x5E0DA00) ==
         EldenRingBuild::unsupported);
     ERUI_TEST_CHECK(
         erui::native::identify_elden_ring_build(
-            0x6AABF7E7, 0x5E0DA00) ==
+            0x6A96B418, 0x5DFD600) ==
         EldenRingBuild::unsupported);
     ERUI_TEST_CHECK(
         erui::native::identify_elden_ring_build(0, 0) ==
@@ -171,7 +231,10 @@ int main() {
     const auto* const core_271 =
         erui::native::find_core_ui_address_profile(
             EldenRingBuild::v2_7_1_0);
-    ERUI_TEST_CHECK(core_270 && core_271);
+    const auto* const core_272 =
+        erui::native::find_core_ui_address_profile(
+            EldenRingBuild::v2_7_2_0);
+    ERUI_TEST_CHECK(core_270 && core_271 && core_272);
     ERUI_TEST_CHECK(same_profile(
         *core_270,
         erui::native::CoreUiAddressProfile{
@@ -180,6 +243,36 @@ int main() {
         *core_271,
         erui::native::CoreUiAddressProfile{
             EldenRingBuild::v2_7_1_0, 0xD81600}));
+    ERUI_TEST_CHECK(same_profile(
+        *core_272,
+        erui::native::CoreUiAddressProfile{
+            EldenRingBuild::v2_7_2_0, 0xD82CF0}));
+
+    const auto* const shared_270 =
+        erui::native::find_shared_menu_address_profile(
+            EldenRingBuild::v2_7_0_0);
+    const auto* const shared_271 =
+        erui::native::find_shared_menu_address_profile(
+            EldenRingBuild::v2_7_1_0);
+    const auto* const shared_272 =
+        erui::native::find_shared_menu_address_profile(
+            EldenRingBuild::v2_7_2_0);
+    ERUI_TEST_CHECK(shared_270 && shared_271 && shared_272);
+    ERUI_TEST_CHECK(same_profile(
+        *shared_270,
+        erui::native::SharedMenuAddressProfile{
+            EldenRingBuild::v2_7_0_0,
+            0x958C50, 0x95A5D0, 0x7633D0, 0x74FA20, 0x739B90}));
+    ERUI_TEST_CHECK(same_profile(
+        *shared_271,
+        erui::native::SharedMenuAddressProfile{
+            EldenRingBuild::v2_7_1_0,
+            0x959DF0, 0x95B770, 0x764220, 0x74FA20, 0x739B90}));
+    ERUI_TEST_CHECK(same_profile(
+        *shared_272,
+        erui::native::SharedMenuAddressProfile{
+            EldenRingBuild::v2_7_2_0,
+            0x95A2A0, 0x95BC20, 0x7646D0, 0x74FED0, 0x73A040}));
 
     const auto* const text_270 =
         erui::native::find_text_input_address_profile(
@@ -187,19 +280,78 @@ int main() {
     const auto* const text_271 =
         erui::native::find_text_input_address_profile(
             EldenRingBuild::v2_7_1_0);
-    ERUI_TEST_CHECK(text_270 && text_271);
+    const auto* const text_272 =
+        erui::native::find_text_input_address_profile(
+            EldenRingBuild::v2_7_2_0);
+    ERUI_TEST_CHECK(text_270 && text_271 && text_272);
     ERUI_TEST_CHECK(same_profile(
         *text_270,
         erui::native::TextInputAddressProfile{
             EldenRingBuild::v2_7_0_0,
             0x976EF0, 0x5EE0F0, 0x6766F0, 0x1BCC60,
-            0x915D70, 0x81D610}));
+            0x915D70, 0x81D610, 0x2B14888, 0x2B16DD8,
+            0x2AD73D0, 0x2B1B128, 0x2AC5AD0}));
     ERUI_TEST_CHECK(same_profile(
         *text_271,
         erui::native::TextInputAddressProfile{
             EldenRingBuild::v2_7_1_0,
             0x976EF0, 0x5EE0F0, 0x6766F0, 0x1BCC60,
-            0x915D70, 0x81D610}));
+            0x915D70, 0x81D610, 0x2B14888, 0x2B16DD8,
+            0x2AD73D0, 0x2B1B128, 0x2AC5AD0}));
+    ERUI_TEST_CHECK(same_profile(
+        *text_272,
+        erui::native::TextInputAddressProfile{
+            EldenRingBuild::v2_7_2_0,
+            0x9773A0, 0x5EE5A0, 0x676BA0, 0x1BCC60,
+            0x916220, 0x81DAC0, 0x2B16978, 0x2B18EC8,
+            0x2AD94C0, 0x2B1D218, 0x2AC7BC0}));
+
+    const auto* const menu_270 =
+        erui::native::find_menu_runtime_address_profile(
+            EldenRingBuild::v2_7_0_0);
+    const auto* const menu_271 =
+        erui::native::find_menu_runtime_address_profile(
+            EldenRingBuild::v2_7_1_0);
+    const auto* const menu_272 =
+        erui::native::find_menu_runtime_address_profile(
+            EldenRingBuild::v2_7_2_0);
+    ERUI_TEST_CHECK(menu_270 && menu_271 && menu_272);
+    ERUI_TEST_CHECK(same_profile(
+        *menu_270,
+        erui::native::MenuRuntimeAddressProfile{
+            EldenRingBuild::v2_7_0_0,
+            0x959320, 0x95D540, 0x959090, 0x95AD00,
+            0x95CB30, 0x95C050, 0x94FA20, 0x955550,
+            0x869300, 0x760790, 0x760970, 0x958210,
+            0x763BA0, 0x948FA0, 0x949120, 0x86A410,
+            0x956CF0, 0x9493F0, 0x9298A0, 0x742C90,
+            0x747CD0, 0x958FF0, 0x74B140, 0x74AE50,
+            0x95D010, 0x9623A0, 0x86A610, 0x962520,
+            0x962330, 0x2B15A78, 0x2B15AB0, 0x2B15AE8}));
+    ERUI_TEST_CHECK(same_profile(
+        *menu_271,
+        erui::native::MenuRuntimeAddressProfile{
+            EldenRingBuild::v2_7_1_0,
+            0x959320, 0x95D540, 0x959090, 0x95AD00,
+            0x95CB30, 0x95C050, 0x950850, 0x955550,
+            0x86A2F0, 0x7615E0, 0x7617C0, 0x958210,
+            0x763BA0, 0x94A140, 0x94A2C0, 0x86A410,
+            0x956CF0, 0x94A590, 0x92AA40, 0x743AE0,
+            0x747CD0, 0x958FF0, 0x74B140, 0x74AE50,
+            0x95D010, 0x9623A0, 0x86A610, 0x962520,
+            0x962330, 0x2B15A78, 0x2B15AB0, 0x2B15AE8}));
+    ERUI_TEST_CHECK(same_profile(
+        *menu_272,
+        erui::native::MenuRuntimeAddressProfile{
+            EldenRingBuild::v2_7_2_0,
+            0x9597D0, 0x95D9F0, 0x959540, 0x95B1B0,
+            0x95CFE0, 0x95C500, 0x950D00, 0x955A00,
+            0x86A7A0, 0x761A90, 0x761C70, 0x9586C0,
+            0x764050, 0x94A5F0, 0x94A770, 0x86A8C0,
+            0x9571A0, 0x94AA40, 0x92AEF0, 0x743F90,
+            0x748180, 0x9594A0, 0x74B5F0, 0x74B300,
+            0x95D4C0, 0x962850, 0x86AAC0, 0x9629D0,
+            0x9627E0, 0x2B17B68, 0x2B17BA0, 0x2B17BD8}));
 
     const auto* const color_270 =
         erui::native::find_color_picker_address_profile(
@@ -207,7 +359,10 @@ int main() {
     const auto* const color_271 =
         erui::native::find_color_picker_address_profile(
             EldenRingBuild::v2_7_1_0);
-    ERUI_TEST_CHECK(color_270 && color_271);
+    const auto* const color_272 =
+        erui::native::find_color_picker_address_profile(
+            EldenRingBuild::v2_7_2_0);
+    ERUI_TEST_CHECK(color_270 && color_271 && color_272);
     ERUI_TEST_CHECK(same_profile(
         *color_270,
         erui::native::ColorPickerAddressProfile{
@@ -224,6 +379,14 @@ int main() {
             0x77C620, 0x77CA10, 0x77CF90, 0x7460D0,
             0xD81600, 0x8B6F90, 0x2AB8DE8, 0x74B140,
             0x86B940, 0x734190, 0x733FA0, 0xD85680}));
+    ERUI_TEST_CHECK(same_profile(
+        *color_272,
+        erui::native::ColorPickerAddressProfile{
+            EldenRingBuild::v2_7_2_0,
+            0x7ADE30, 0x7AA580, 0x7A85D0, 0x1EBD430,
+            0x77CAD0, 0x77CEC0, 0x77D440, 0x746580,
+            0xD82CF0, 0x8B7440, 0x2ABAED8, 0x74B5F0,
+            0x86BDF0, 0x734640, 0x734450, 0xD86D70}));
 
     const auto* const input_270 =
         erui::native::find_input_bindings_address_profile(
@@ -231,7 +394,10 @@ int main() {
     const auto* const input_271 =
         erui::native::find_input_bindings_address_profile(
             EldenRingBuild::v2_7_1_0);
-    ERUI_TEST_CHECK(input_270 && input_271);
+    const auto* const input_272 =
+        erui::native::find_input_bindings_address_profile(
+            EldenRingBuild::v2_7_2_0);
+    ERUI_TEST_CHECK(input_270 && input_271 && input_272);
     ERUI_TEST_CHECK(same_profile(
         *input_270,
         erui::native::InputBindingsAddressProfile{
@@ -252,6 +418,16 @@ int main() {
             0x2667B40, 0x266A4F0, 0x4861D30, 0x81CCB0,
             0x81CE40, 0x9B9E00, 0x9B9FC0, 0x2B0DCC0,
             0x2AD6E70, 0x2AD68D0, 0x2AC5AD0, 0x2B2B908}));
+    ERUI_TEST_CHECK(same_profile(
+        *input_272,
+        erui::native::InputBindingsAddressProfile{
+            EldenRingBuild::v2_7_2_0,
+            0x869A30, 0x869B60, 0x86A480, 0x8684B0,
+            0x869110, 0x868C80, 0x868CC0, 0x868110,
+            0x242960, 0x240220, 0x2403C0, 0x2413F0,
+            0x2669270, 0x266BC20, 0x4864D50, 0x81D160,
+            0x81D2F0, 0x9BA2B0, 0x9BA470, 0x2B0FDB0,
+            0x2AD8F60, 0x2AD89C0, 0x2AC7BC0, 0x2B2D9F8}));
 
     // 2.7.1.1 reuses every 2.7.1.0 address: the function bodies are
     // byte-identical between the two images.
@@ -275,6 +451,37 @@ int main() {
         erui::native::find_input_bindings_address_profile(
             EldenRingBuild::v2_7_1_1),
         *input_271));
+    ERUI_TEST_CHECK(same_as_271(
+        erui::native::find_shared_menu_address_profile(
+            EldenRingBuild::v2_7_1_1),
+        *erui::native::find_shared_menu_address_profile(
+            EldenRingBuild::v2_7_1_0)));
+    ERUI_TEST_CHECK(same_as_271(
+        erui::native::find_menu_runtime_address_profile(
+            EldenRingBuild::v2_7_1_1),
+        *erui::native::find_menu_runtime_address_profile(
+            EldenRingBuild::v2_7_1_0)));
+
+    // The fork's menu-object profile and upstream's TextInput profile name
+    // the same dialog and editor vtables on every build.
+    for (const EldenRingBuild build : {EldenRingBuild::v2_7_0_0,
+             EldenRingBuild::v2_7_1_0, EldenRingBuild::v2_7_1_1,
+             EldenRingBuild::v2_7_2_0}) {
+        const auto* const menu =
+            erui::native::find_menu_object_address_profile(build);
+        const auto* const text =
+            erui::native::find_text_input_address_profile(build);
+        ERUI_TEST_CHECK(menu && text &&
+            menu->option_setting_dialog_vtable_rva ==
+                text->option_setting_dialog_vtable_rva &&
+            menu->pad_setting_dialog_vtable_rva ==
+                text->pad_setting_dialog_vtable_rva &&
+            menu->edit_property_vtable_rva == text->edit_property_vtable_rva &&
+            menu->text_input_controller_vtable_rva ==
+                text->text_input_controller_vtable_rva &&
+            menu->software_keyboard_job_vtable_rva ==
+                text->software_keyboard_job_vtable_rva);
+    }
 
     // Menu objects: 2.7.0.0 and 2.7.1.x share every address; 2.7.2.0 moves
     // code by +0x4B0 and .rdata by +0x20F0.
@@ -333,45 +540,17 @@ int main() {
                 EldenRingBuild::unsupported) == nullptr);
     }
 
-    // 2.7.2.0: the same function bodies, moved.
-    ERUI_TEST_CHECK(same_profile(
-        *erui::native::find_core_ui_address_profile(
-            EldenRingBuild::v2_7_2_0),
-        erui::native::CoreUiAddressProfile{
-            EldenRingBuild::v2_7_2_0, 0xD82CF0}));
-    ERUI_TEST_CHECK(same_profile(
-        *erui::native::find_text_input_address_profile(
-            EldenRingBuild::v2_7_2_0),
-        erui::native::TextInputAddressProfile{
-            EldenRingBuild::v2_7_2_0,
-            0x9773A0, 0x5EE5A0, 0x676BA0, 0x1BCC60,
-            0x916220, 0x81DAC0}));
-    ERUI_TEST_CHECK(same_profile(
-        *erui::native::find_color_picker_address_profile(
-            EldenRingBuild::v2_7_2_0),
-        erui::native::ColorPickerAddressProfile{
-            EldenRingBuild::v2_7_2_0,
-            0x7ADE30, 0x7AA580, 0x7A85D0, 0x1EBD430,
-            0x77CAD0, 0x77CEC0, 0x77D440, 0x746580,
-            0xD82CF0, 0x8B7440, 0x2ABAED8, 0x74B5F0,
-            0x86BDF0, 0x734640, 0x734450, 0xD86D70}));
-    ERUI_TEST_CHECK(same_profile(
-        *erui::native::find_input_bindings_address_profile(
-            EldenRingBuild::v2_7_2_0),
-        erui::native::InputBindingsAddressProfile{
-            EldenRingBuild::v2_7_2_0,
-            0x869A30, 0x869B60, 0x86A480, 0x8684B0,
-            0x869110, 0x868C80, 0x868CC0, 0x868110,
-            0x242960, 0x240220, 0x2403C0, 0x2413F0,
-            0x2669270, 0x266BC20, 0x4864D50, 0x81D160,
-            0x81D2F0, 0x9BA2B0, 0x9BA470, 0x2B0FDB0,
-            0x2AD8F60, 0x2AD89C0, 0x2AC7BC0, 0x2B2D9F8}));
-
     ERUI_TEST_CHECK(
         erui::native::find_core_ui_address_profile(
             EldenRingBuild::unsupported) == nullptr);
     ERUI_TEST_CHECK(
+        erui::native::find_shared_menu_address_profile(
+            EldenRingBuild::unsupported) == nullptr);
+    ERUI_TEST_CHECK(
         erui::native::find_text_input_address_profile(
+            EldenRingBuild::unsupported) == nullptr);
+    ERUI_TEST_CHECK(
+        erui::native::find_menu_runtime_address_profile(
             EldenRingBuild::unsupported) == nullptr);
     ERUI_TEST_CHECK(
         erui::native::find_color_picker_address_profile(

@@ -10,6 +10,7 @@ namespace {
 std::atomic<LogSink> g_sink{nullptr};
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_trace{true};
+std::atomic_bool g_diagnostics_enabled{false};
 
 } // namespace
 
@@ -22,9 +23,18 @@ void set_log_filter(bool enabled, bool trace) noexcept {
     g_trace.store(trace, std::memory_order_relaxed);
 }
 
+void set_diagnostic_logging(bool enabled) noexcept {
+    g_diagnostics_enabled.store(enabled, std::memory_order_release);
+}
+
+bool diagnostic_logging_enabled() noexcept {
+    return g_diagnostics_enabled.load(std::memory_order_acquire);
+}
+
 void logf(LogLevel level, const char* format, ...) noexcept {
     if (!g_enabled.load(std::memory_order_relaxed) ||
-        (level == LogLevel::trace && !g_trace.load(std::memory_order_relaxed))) {
+        (level == LogLevel::trace && !g_trace.load(std::memory_order_relaxed)) ||
+        !should_emit_log_level(level, diagnostic_logging_enabled())) {
         return;
     }
     LogSink sink = g_sink.load(std::memory_order_acquire);
