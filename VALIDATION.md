@@ -19,9 +19,9 @@ The suite covers:
 - exact Elden Ring PE identity matching, rejection of mixed timestamp/image-
   size pairs, distinct 2.7.0.0/2.7.1.0/2.7.2.0 native profiles, and the known
   moved core UI, ColorPicker, and Input Bindings RVAs;
-- C ABI layout, the frozen API 1.0 function-table prefix, and the additive
-  API 1.1 TextInput, ColorPicker, BuiltinPage, InputBindings, and Storage
-  blocks;
+- C ABI layout and immutable API 1.0, 1.1, 1.2, and 1.3 release fixtures,
+  including the additive TextInput, ColorPicker, BuiltinPage, InputBindings,
+  Storage, slider, custom-tab, and title-screen-text blocks;
 - localization-setting grammar and traversal rejection, Steam language-token
   classification, transient/terminal readiness settlement, guarded Steam
   initialization, bounded fail-open behavior, and unknown-locale preservation;
@@ -46,6 +46,20 @@ The suite covers:
   including every semantic input name, all slot-state combinations, malformed
   input, bounded-buffer behavior, host-storage consistency, and multi-unit C
   linkage.
+
+### Frozen API 1.3 contract
+
+`tests/abi/releases/v1_3` is the immutable contract published by
+`ERNativeUI-v1.3.0`. CMake verifies both frozen header hashes before building
+the fixture. Its strict-C and C++17 clients exercise the exact 384-byte API 1.3
+table against a version-exact contract host, while separate frozen clients run
+against `ERNativeUIAbiHostCurrent`, the production-sourced isolated host.
+
+The current-host smoke clients resolve only the public `ERUI_GetApi` export,
+negotiate API 1.3, then register title-screen text, a custom tab, and an
+ordinary row before committing. They do not depend on a test-only export.
+Together with the retained API 1.0, 1.1, and 1.2 clients, this is the mandatory
+compatibility matrix before API 1.4 changes the public headers or host table.
 
 ## Cross-toolchain client validation
 

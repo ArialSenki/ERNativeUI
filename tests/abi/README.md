@@ -21,7 +21,8 @@ tests/abi/
 `-- releases/
     |-- v1_0/
     |-- v1_1/
-    `-- v1_2/
+    |-- v1_2/
+    `-- v1_3/
 ```
 
 Every release directory contains the exact public headers, `ORIGIN.md`,
@@ -34,9 +35,12 @@ it exposes exactly that frozen API and rejects newer requests. The raw C
 negotiation tests separately prove that callers which explicitly request an
 earlier supported prefix can still obtain it. The root build also creates a
 game-independent current host from the production negotiation and registry
-sources. Frozen C and C++17 smoke clients for APIs 1.0, 1.1, and 1.2 load that
+sources. Frozen C and C++17 smoke clients for APIs 1.0, 1.1, 1.2, and 1.3 load that
 DLL in isolated processes, proving the other compatibility direction without
 launching Elden Ring or installing native hooks.
+The API 1.3 clients negotiate the complete 384-byte table and register title-
+screen text, a custom tab, and an ordinary row through public API entries
+before committing. They require no test-only export from the current host.
 The current strict-C TextInput client uses the same DLL to cover the complete
 1, 3, 7, 16, 17, and 35-unit boundary matrix plus copied input and getter/
 setter buffer semantics. A second strict-C client covers independent
@@ -179,7 +183,7 @@ add_subdirectory(tests/abi)
 When configured from the repository root, `ERNativeUIAbiHostCurrent` enables
 the frozen-client-to-current-host smoke tests automatically. A standalone
 `tests/abi` configure intentionally omits that project-owned production target;
-layout tests and the frozen v1.0, v1.1, and v1.2 contract fixtures still build
+layout tests and the frozen v1.0, v1.1, v1.2, and v1.3 contract fixtures still build
 and run, together with the applicable current-client rejection checks. The
 explicit-connection fixture and test also remain available in a standalone
 build.

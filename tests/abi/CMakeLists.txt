@@ -531,6 +531,48 @@ if(WIN32)
         add_test(NAME ERNativeUI.ABI.Compat.V1_2.CppToCurrent
             COMMAND ERNativeUIAbiV1_2ToCurrentCpp
                 "$<TARGET_FILE:ERNativeUIAbiHostCurrent>")
+
+        set(_erui_v1_3_include
+            "${CMAKE_CURRENT_LIST_DIR}/releases/v1_3/include")
+
+        add_executable(ERNativeUIAbiV1_3ToCurrentC
+            releases/v1_3/current_host_smoke_test.c
+            support/host_loader.c)
+        target_include_directories(ERNativeUIAbiV1_3ToCurrentC BEFORE PRIVATE
+            "${_erui_v1_3_include}"
+            "${ERNATIVEUI_ABI_SUPPORT_DIR}")
+        set_target_properties(ERNativeUIAbiV1_3ToCurrentC PROPERTIES
+            C_STANDARD 11
+            C_STANDARD_REQUIRED YES
+            C_EXTENSIONS NO)
+        target_compile_definitions(ERNativeUIAbiV1_3ToCurrentC PRIVATE
+            WIN32_LEAN_AND_MEAN NOMINMAX)
+
+        add_executable(ERNativeUIAbiV1_3ToCurrentCpp
+            releases/v1_3/current_host_wrapper_smoke_test.cpp
+            support/host_loader.c)
+        target_include_directories(
+            ERNativeUIAbiV1_3ToCurrentCpp BEFORE PRIVATE
+            "${_erui_v1_3_include}"
+            "${ERNATIVEUI_ABI_SUPPORT_DIR}")
+        target_compile_features(ERNativeUIAbiV1_3ToCurrentCpp PRIVATE
+            cxx_std_17)
+        set_target_properties(ERNativeUIAbiV1_3ToCurrentCpp PROPERTIES
+            C_STANDARD 11
+            C_STANDARD_REQUIRED YES)
+        target_compile_definitions(ERNativeUIAbiV1_3ToCurrentCpp PRIVATE
+            WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MSVC)
+            target_compile_options(ERNativeUIAbiV1_3ToCurrentCpp PRIVATE
+                /EHsc /Zc:__cplusplus)
+        endif()
+
+        add_test(NAME ERNativeUI.ABI.Compat.V1_3.CToCurrent
+            COMMAND ERNativeUIAbiV1_3ToCurrentC
+                "$<TARGET_FILE:ERNativeUIAbiHostCurrent>")
+        add_test(NAME ERNativeUI.ABI.Compat.V1_3.CppToCurrent
+            COMMAND ERNativeUIAbiV1_3ToCurrentCpp
+                "$<TARGET_FILE:ERNativeUIAbiHostCurrent>")
         add_test(NAME ERNativeUI.ABI.Negotiation.CurrentProduction
             COMMAND ERNativeUIAbiNegotiationCurrent
                 "$<TARGET_FILE:ERNativeUIAbiHostCurrent>" current)

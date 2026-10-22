@@ -198,8 +198,8 @@ Before releasing, also review:
 - the current [What's New showcase](../whats-new/README.md), including every
   image, guide, migration, example, and archive link from both README entry
   points;
-- the frozen API 1.0, 1.1 and 1.2 client tests and the current API 1.3 C/C++
-  contract tests included in the normal test suite;
+- the frozen API 1.0, 1.1, 1.2, and 1.3 client tests and the current API 1.3
+  C/C++ contract tests included in the normal test suite;
 - the manual MinGW-w64-to-MSVC runtime gate in
   [VALIDATION.md](../../VALIDATION.md#cross-toolchain-client-validation).
 
@@ -395,9 +395,9 @@ Release.
 
 - Test a fresh Mod Engine 2 installation using the published Nexus ZIP.
 - Test an SDK consumer using the published Windows ZIP.
-- Confirm clients built against APIs 1.0, 1.1, and 1.2 still register with the
-  1.3.0 host and a current client negotiates API 1.3. Include previously built
-  binaries and clients intentionally built from every frozen SDK.
+- Confirm clients built against APIs 1.0, 1.1, 1.2, and 1.3 still register with
+  the current host and a current client negotiates API 1.3. Include previously
+  built binaries and clients intentionally built from every frozen SDK.
 - Record any newly verified game or mod compatibility in the compatibility
   guide through a normal follow-up change.
 - Retain the published What's New page permanently. For the next feature
@@ -420,21 +420,30 @@ contract immediately after its release tag exists and before development can
 change the public headers again. A later package release that keeps the same
 API does not need another snapshot.
 
-For API 1.3, use `tests/abi/releases/v1_2` as the structural example:
+API 1.3 is frozen under `tests/abi/releases/v1_3`. Its public headers come
+byte-for-byte from `ERNativeUI-v1.3.0`; `ORIGIN.md` records their Git identities
+and `release.cmake` pins their independent SHA-256 hashes. The fixture owns its
+layout, strict-C, C++ wrapper, exact-version contract host, and both
+frozen-client-to-current-host smoke clients. The latter use only the public
+`ERUI_GetApi` export and prove API 1.3 title-screen text, custom-tab, ordinary-
+row, and commit calls against the production-sourced current host.
 
-1. After the release exists, create `tests/abi/releases/v1_3` and copy the two
-   public headers from the clean `ERNativeUI-v1.3.0` tag, byte-for-byte—not
-   from a later `main`.
+Use the completed `tests/abi/releases/v1_3` directory as the structural
+example when freezing the next public API:
+
+1. After the release exists, create its `tests/abi/releases/vX_Y` directory
+   and copy the two public headers from the clean release tag, byte-for-byte—
+   not from a later development branch.
 2. Add `ORIGIN.md` recording the release tag, commit, both header Git blob IDs,
    and both SHA-256 values.
-3. Add `release.cmake` recording token `v1_3`, the encoded API version, frozen
+3. Add `release.cmake` recording token `vX_Y`, the encoded API version, frozen
    table-prefix size, C/C++ standards, and the same lowercase header hashes.
 4. Add the release-owned layout, strict-C, C++ wrapper, contract-host,
    frozen-client-to-current-host, and any version-specific lifecycle tests.
    Cover both compatibility directions and host-to-client callbacks.
-5. Append `erui_add_abi_release(v1_3)` to
+5. Append `erui_add_abi_release(vX_Y)` to
    `tests/abi/releases/CMakeLists.txt` without removing or changing the
-   `v1_0`, `v1_1`, or `v1_2` entries.
+   entries for every earlier frozen API.
 6. Run the complete root test suite and the cross-toolchain runtime gate, then
    commit the snapshot and provenance.
 

@@ -253,10 +253,13 @@ preference:
 4. Build presentation changes, conditional topology, repagination, Collapse,
    and tab visibility on that proven mutation foundation.
 
-No public header is changed for the typed-row work until the API 1.3 release
-fixture is complete. Runtime behavior in step 2 must be indistinguishable from
-API 1.3; any menu, input, callback, close/reopen, or navigation difference is a
-regression rather than an expected consequence of the wrapper improvement.
+Step 1 is complete: the headers published by `ERNativeUI-v1.3.0` are frozen
+with provenance, hashes, exact layout and contract fixtures, and public-only
+C/C++ smoke clients against the production-sourced current host. Typed-row
+work may now begin without rewriting the API 1.3 baseline. Runtime behavior in
+step 2 must be indistinguishable from API 1.3; any menu, input, callback,
+close/reopen, or navigation difference is a regression rather than an expected
+consequence of the wrapper improvement.
 
 ### Compatibility constraints
 
@@ -378,8 +381,8 @@ These cases require focused compatibility tests and a permanent, concise
 
 | Workstream | Current status | Required exit evidence |
 |---|---|---|
-| Freeze the shipped API 1.3 ABI fixture | Next; mandatory before any public-header edit | Headers recovered from `ERNativeUI-v1.3.0`, immutable hash/layout fixture, and old-client/current-host tests |
-| Typed C++ row foundation | Designed; blocked by the API 1.3 freeze | Concrete typed rows returned by row builders, preserved raw `RowHandle`, one-way implicit raw conversion, type-safe forwarding, MSVC/MinGW tests, rebuilt examples, and live regression validation |
+| Freeze the shipped API 1.3 ABI fixture | Complete | Headers recovered from `ERNativeUI-v1.3.0`, immutable provenance and hashes, exact layout and bidirectional contract fixtures, and public-only frozen-client/current-host smoke tests |
+| Typed C++ row foundation | Designed; ready to implement | Concrete typed rows returned by row builders, preserved raw `RowHandle`, one-way implicit raw conversion, type-safe forwarding, MSVC/MinGW tests, rebuilt examples, and live regression validation |
 | Update batch and generation model | Proposed | Unit-tested atomic validation, copy semantics, coalescing, failure rollback, thread ownership, and callback-originated commits without reentrancy |
 | Mutable label and help text | Proposed | Live selected/unselected rows, pagination slices, close/reopen, and movie reconstruction |
 | Label color | Proposed; separate research gate | Proven behavior through focus, disable, transitions, and native timeline updates |
@@ -394,9 +397,12 @@ These cases require focused compatibility tests and a permanent, concise
 
 ### R0 — compatibility and alpha foundation
 
-- Freeze API 1.3 from the published 1.3.0 tag before changing public headers.
-- Copy the published headers byte-for-byte, record their provenance and hashes,
-  register the release fixture, and preserve its C/C++ layout assertions.
+- API 1.3 is frozen from the published 1.3.0 tag before any public-header
+  change: the headers are copied byte-for-byte and their provenance and hashes
+  are pinned.
+- The registered release fixture preserves the exact C/C++ layout and contract,
+  exercises both compatibility directions, and proves the current-host path
+  without requiring a test-only production-host export.
 - Preserve frozen API 1.0 through 1.3 clients against every development host.
 - Establish the `api-1.4` branch, required Windows x64 CI, alpha provenance,
   and unmistakable unstable-package naming.
