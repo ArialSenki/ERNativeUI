@@ -17,7 +17,7 @@ This example adds the `Accent Color` row shown above, initially using RGB
 ```cpp
 #include <ernativeui/ERNativeUI.hpp>
 
-erui::RowHandle add_accent_color_picker(erui::Page page) noexcept
+erui::ColorPickerRow add_accent_color_picker(erui::Page page) noexcept
 {
     erui::ColorPickerOptions options{};
     options.initial_value = {171, 125, 99};
@@ -31,7 +31,7 @@ erui::RowHandle add_accent_color_picker(erui::Page page) noexcept
 
 Call `add_accent_color_picker(page)` from the menu-builder body. Its argument
 is the `erui::Page` on which the row should appear. The returned
-`erui::RowHandle` identifies this ColorPicker if the mod needs to read or
+`erui::ColorPickerRow` identifies this ColorPicker if the mod needs to read or
 change its color after registration. The
 [first-mod guide](../../getting-started/first-mod.md) shows the complete
 menu-builder context.
@@ -70,12 +70,16 @@ The callback-free form is:
 ```cpp
 erui::ColorPickerOptions options{};
 
-const erui::RowHandle picker =
+const erui::ColorPickerRow picker =
     page.add_color_picker(label, help_message, options);
 ```
 
 Here, `page` is an `erui::Page`; `label` and `help_message` are UTF-16; and the
-return type is `erui::RowHandle`.
+return type is `erui::ColorPickerRow`.
+
+`ColorPickerRow` exposes `handle()` and converts implicitly to
+`erui::RowHandle`, so existing API 1.3 source that stores the result as a raw
+handle continues to compile.
 
 ## Reacting to a confirmed color
 
@@ -106,7 +110,7 @@ void accent_color_changed(
     }
 }
 
-erui::RowHandle add_accent_color_picker_with_callback(
+erui::ColorPickerRow add_accent_color_picker_with_callback(
     erui::Page page,
     ModState& state) noexcept
 {
@@ -186,11 +190,24 @@ presentation already authored into the effective movie remains available. See
   callback.
 - Canceling the editor or confirming an unchanged color does not call the
   callback.
-- `Registration::get_color` copies the current RGB value.
-- `Registration::set_color` updates the canonical value without invoking the
+- `ColorPickerRow::get_color` copies the current RGB value.
+- `ColorPickerRow::set_color` updates the canonical value without invoking the
   callback. The optional native swatch catches up at a later safe UI boundary.
 - A programmatic write made while the editor is open survives Cancel. A later
   player confirmation replaces it.
+
+For retained access after registration succeeds:
+
+```cpp
+erui::Color color{};
+const ERUI_Result read_result = picker.get_color(color);
+const ERUI_Result write_result =
+    picker.set_color({90, 120, 180});
+```
+
+The raw-compatible `Registration::get_color` and `Registration::set_color`
+forms remain available when existing code deliberately retains an
+`erui::RowHandle`.
 
 Only one ERNativeUI ColorPicker editor can be outstanding process-wide. The
 host coordinates it with native alerts so the two modal systems do not compete

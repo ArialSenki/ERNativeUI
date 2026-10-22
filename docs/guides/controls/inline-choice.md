@@ -20,7 +20,7 @@ This example creates the row shown above. The available labels are
 #include <array>
 #include <string_view>
 
-erui::RowHandle add_quality_choice(erui::Page page) noexcept
+erui::InlineChoiceRow add_quality_choice(erui::Page page) noexcept
 {
     constexpr std::array<std::wstring_view, 4> quality_labels{
         L"Minimal",
@@ -46,9 +46,9 @@ receives `menu` as an `erui::Menu&`; `Menu::root()` returns the root
 page. The [first-mod guide](../../getting-started/first-mod.md) shows the
 complete menu-builder context.
 
-The function returns an `erui::RowHandle`, which identifies this particular
-choice after registration. The initial index is zero-based: `0` means
-**Minimal**, so `1` selects **Balanced**.
+The function returns an `erui::InlineChoiceRow`, which identifies this
+particular choice after registration. The initial index is zero-based: `0`
+means **Minimal**, so `1` selects **Balanced**.
 
 ![The complete Inline Choice showcase page before the player changes it](../../assets/images/controls/inline-choice/inline-choice_fullscreen_before_click.png)
 
@@ -60,19 +60,20 @@ choice after registration. The initial index is zero-based: `0` means
 The recommended callback-free form is:
 
 ```cpp
-const erui::RowHandle choice = page.add_inline_choice(
+const erui::InlineChoiceRow choice = page.add_inline_choice(
     label,
     help_message,
     choice_options);
 ```
 
 Here, `page` has type `erui::Page`, `choice_options` has type
-`erui::ChoiceOptions`, and the return value has type `erui::RowHandle`.
+`erui::ChoiceOptions`, and the return value has type
+`erui::InlineChoiceRow`.
 
 The C++17 wrapper's complete function shape is:
 
 ```cpp
-erui::RowHandle erui::Page::add_inline_choice(
+erui::InlineChoiceRow erui::Page::add_inline_choice(
     std::wstring_view label,
     std::wstring_view help_message,
     const erui::ChoiceOptions& options,
@@ -121,7 +122,7 @@ void quality_changed(
         std::memory_order_release);
 }
 
-erui::RowHandle add_quality_choice_with_callback(
+erui::InlineChoiceRow add_quality_choice_with_callback(
     erui::Page page,
     ModState& state) noexcept
 {
@@ -159,8 +160,8 @@ void callback(void* user_data, std::uint8_t selected_index) noexcept;
 `user_data` receives the same address passed after the callback in
 `add_inline_choice`. The callback runs on the ERNativeUI worker, so the
 example uses an atomic value for state that other threads may also read.
-Keep the returned `erui::RowHandle` if the mod will later call
-`erui::Registration::get_value` or `set_value` for this row.
+Keep the returned `erui::InlineChoiceRow` if the mod will later call
+`get_index` or `set_index` for this row.
 
 ## Parameters and `ChoiceOptions`
 
@@ -190,7 +191,7 @@ When supplied, an `erui::ValueChangedCallback` receives the client-owned
 `user_data` pointer and the newly selected zero-based `std::uint8_t` index.
 ERNativeUI dispatches it on the host worker after observing a player change.
 The callback is not invoked for the initial value or by
-`Registration::set_value`.
+`InlineChoiceRow::set_index`.
 
 ![The Inline Choice after the player changes Quality to Detailed](../../assets/images/controls/inline-choice/inline-choice_fullscreen_after_click.png)
 
@@ -216,8 +217,8 @@ table and check host support.
 ## Value and lifetime behavior
 
 - Left/right changes the host-owned current index and visible label.
-- `Registration::get_value` returns that same zero-based index.
-- `Registration::set_value` accepts an in-range index, changes the visible
+- `InlineChoiceRow::get_index` returns that same zero-based index.
+- `InlineChoiceRow::set_index` accepts an in-range index, changes the visible
   label silently, and does not invoke the optional callback.
 - Choice labels and the options array are copied during the builder call.
 - An optional callback and its `user_data` are not copied. Their code and
@@ -225,6 +226,18 @@ table and check host support.
   commit.
 - If the call is rejected, it returns `ERUI_INVALID_ROW` and causes the
   surrounding registration to fail instead of publishing a partial menu.
+
+For retained typed access after registration succeeds:
+
+```cpp
+std::uint8_t index{};
+const ERUI_Result read_result = choice.get_index(index);
+const ERUI_Result write_result = choice.set_index(2);
+```
+
+`InlineChoiceRow` exposes `handle()` and converts implicitly to
+`erui::RowHandle`. Existing API 1.3 code that retains the raw handle and calls
+`Registration::get_value` or `Registration::set_value` remains valid.
 
 ## Common mistakes
 
@@ -235,7 +248,8 @@ table and check host support.
   copied it when the call returns.
 - Expecting Inline Choice to open a list. Use
   [Popup Choice](popup-choice.md) when all labels should appear together.
-- Expecting a disabled option or a callback from `Registration::set_value`.
+- Expecting a disabled option or a callback from
+  `InlineChoiceRow::set_index`.
 
 [Controls index](README.md) |
 [Reverse-engineering reference](../../research/case-studies/popup-choice.md) |

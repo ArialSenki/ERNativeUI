@@ -324,6 +324,27 @@ if(WIN32)
             /EHsc /Zc:__cplusplus)
     endif()
 
+    add_executable(ERNativeUIAbiCurrentTypedRowsWrapper
+        current/typed_rows_wrapper_test.cpp
+        support/host_loader.c)
+    target_include_directories(
+        ERNativeUIAbiCurrentTypedRowsWrapper PRIVATE
+        "${ERNATIVEUI_ABI_REPOSITORY_ROOT}/include"
+        "${ERNATIVEUI_ABI_SUPPORT_DIR}")
+    target_compile_features(
+        ERNativeUIAbiCurrentTypedRowsWrapper PRIVATE cxx_std_17)
+    set_target_properties(ERNativeUIAbiCurrentTypedRowsWrapper PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED YES)
+    target_compile_definitions(
+        ERNativeUIAbiCurrentTypedRowsWrapper PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX)
+    if(MSVC)
+        target_compile_options(
+            ERNativeUIAbiCurrentTypedRowsWrapper PRIVATE
+            /EHsc /Zc:__cplusplus)
+    endif()
+
     add_executable(ERNativeUIAbiCurrentCustomTabsContract
         current/custom_tabs_contract_test.c
         support/host_loader.c)
@@ -371,6 +392,13 @@ if(WIN32)
             "$<TARGET_FILE:ERNativeUIAbiConnectionHost>")
 
     if(TARGET ERNativeUIAbiHostCurrent)
+        add_dependencies(
+            ERNativeUIAbiCurrentTypedRowsWrapper
+            ERNativeUIAbiHostCurrent)
+        add_test(NAME ERNativeUI.ABI.TypedRows.CurrentProductionCpp
+            COMMAND ERNativeUIAbiCurrentTypedRowsWrapper
+                "$<TARGET_FILE:ERNativeUIAbiHostCurrent>")
+
         set(_erui_v1_0_include
             "${CMAKE_CURRENT_LIST_DIR}/releases/v1_0/include")
 

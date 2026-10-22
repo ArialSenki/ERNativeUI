@@ -18,7 +18,7 @@ through `100`, and moves in steps of `5`:
 ```cpp
 #include <ernativeui/ERNativeUI.hpp>
 
-erui::RowHandle add_intensity_slider(erui::Page page) noexcept
+erui::SliderRow add_intensity_slider(erui::Page page) noexcept
 {
     erui::SliderOptions options{};
     options.minimum = 0;
@@ -44,9 +44,8 @@ connection and menu setup does not hide the Slider call.
 The minimal Slider has no callback, but ERNativeUI still owns and updates its
 value when the player uses left or right.
 
-The exact return type is `erui::RowHandle`. Keep this handle if the mod will
-later read or change the Slider through its `erui::Registration`; otherwise,
-it may be discarded.
+The exact return type is `erui::SliderRow`. Keep this typed row if the mod will
+later read or change the Slider; otherwise, it may be discarded.
 
 ![The complete Slider showcase page before the player changes it](../../assets/images/controls/slider/slider_fullscreen_before_click.png)
 
@@ -61,7 +60,7 @@ The recommended callback-free call shape is:
 erui::SliderOptions options{};
 // Configure the range and initial value.
 
-const erui::RowHandle slider = page.add_slider(
+const erui::SliderRow slider = page.add_slider(
     L"Row label",
     L"Help shown for this row.",
     options);
@@ -78,7 +77,7 @@ Slider does not currently provide a templated change-callback overload.
 The C++17 wrapper's full function shape is:
 
 ```cpp
-erui::RowHandle erui::Page::add_slider(
+erui::SliderRow erui::Page::add_slider(
     std::wstring_view label,
     std::wstring_view help_message,
     const erui::SliderOptions& options,
@@ -91,6 +90,10 @@ The optional callback has this source-level shape:
 ```cpp
 void callback(void* user_data, std::uint8_t value) noexcept;
 ```
+
+`SliderRow` exposes `handle()` and converts implicitly to `erui::RowHandle`,
+so existing API 1.3 source that assigns the result to a raw handle continues
+to compile.
 
 ## React to player changes
 
@@ -116,7 +119,7 @@ void intensity_changed(void* state_pointer, std::uint8_t value) noexcept
     settings.intensity.store(value, std::memory_order_release);
 }
 
-erui::RowHandle add_effect_intensity_slider(erui::Page page) noexcept
+erui::SliderRow add_effect_intensity_slider(erui::Page page) noexcept
 {
     erui::SliderOptions options{};
     options.minimum = 0;
@@ -194,15 +197,16 @@ table and check host support.
   callback on its worker.
 - ERNativeUI normalizes an off-step `initial_value` down to the previous step
   before publication and does not invoke the callback for that initialization.
-- `Registration::get_value(slider, value)` copies the current canonical byte.
-- `Registration::set_value(slider, value)` clamps the byte to the declared
+- `SliderRow::get_value(value)` copies the current canonical byte.
+- `SliderRow::set_value(value)` clamps the byte to the declared
   range, rounds it down to a step measured from `minimum`, and updates the
   native presentation without invoking the callback. The callback reports
   player changes, not programmatic writes made by the client mod.
-- The `RowHandle` identifies this row only within its owning provider. Use it
-  with the `Registration` returned by that provider's successful commit.
+- The typed row becomes active after its owning provider commits successfully.
+  Check the returned `ERUI_Result` before using a read value or assuming a
+  write succeeded.
 - The `Page` builder is only valid while its registration draft is open. The
-  returned `RowHandle` is the value intended for post-commit access.
+  returned `SliderRow` is the value intended for post-commit access.
 - ERNativeUI copies Slider text and options, but it cannot copy callback code
   or the object addressed by `user_data`. Those must remain valid until
   process exit after a successful commit; do not hot-unload the client DLL.
@@ -214,6 +218,18 @@ table and check host support.
 A step does not need to divide the range evenly. With `minimum = 10`,
 `maximum = 20`, and `step = 6`, the reachable values are `10` and `16`.
 Setting `20` programmatically therefore stores `16`.
+
+For example, retained typed access is:
+
+```cpp
+std::uint8_t value{};
+const ERUI_Result read_result = slider.get_value(value);
+const ERUI_Result write_result = slider.set_value(75);
+```
+
+Legacy code may still store `slider` as `erui::RowHandle` and pass it to
+`Registration::get_value` or `Registration::set_value`; the conversion is
+implicit.
 
 ## Common mistakes
 

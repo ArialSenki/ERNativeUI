@@ -17,7 +17,7 @@ state and does not need a callback:
 ```cpp
 #include <ernativeui/ERNativeUI.hpp>
 
-erui::RowHandle add_enabled_toggle(erui::Page page) noexcept
+erui::ToggleRow add_enabled_toggle(erui::Page page) noexcept
 {
     return page.add_toggle(
         L"Enabled",
@@ -37,9 +37,8 @@ The third argument is the initial value. Use `0` to start Off or `1` to start
 On. ERNativeUI normalizes any other nonzero byte to `1`, so a Toggle never has
 a third state.
 
-The exact return type is `erui::RowHandle`. Keep this handle if the mod will
-later read or change the Toggle through its `erui::Registration`; otherwise,
-it may be discarded.
+The exact return type is `erui::ToggleRow`. Keep this typed row if the mod will
+later read or change the Toggle; otherwise, it may be discarded.
 
 ![The complete Toggle showcase page before the player changes it](../../assets/images/controls/toggle/toggle_fullscreen_before_click.png)
 
@@ -51,18 +50,18 @@ easy to identify.*
 The recommended form for a Toggle that the mod will read later is:
 
 ```cpp
-const erui::RowHandle toggle =
+const erui::ToggleRow toggle =
     page.add_toggle(label, help_message, initial_value);
 ```
 
 Here, `page` is an `erui::Page`; `label` and `help_message` are UTF-16 strings;
 and `initial_value` is a `std::uint8_t`. The call returns an
-`erui::RowHandle`.
+`erui::ToggleRow`.
 
 The C++17 wrapper's full function shape is:
 
 ```cpp
-erui::RowHandle erui::Page::add_toggle(
+erui::ToggleRow erui::Page::add_toggle(
     std::wstring_view label,
     std::wstring_view help_message,
     std::uint8_t initial_value,
@@ -80,6 +79,10 @@ void callback(void* user_data, std::uint8_t value) noexcept;
 `value` is always `0` or `1`. `user_data` is the same pointer supplied to
 `add_toggle`; it lets one callback reach state owned by the client mod.
 Toggle does not currently provide a templated change-callback overload.
+
+`ToggleRow` exposes `handle()` and converts implicitly to `erui::RowHandle`,
+so existing API 1.3 source that stores the result as a raw handle continues to
+compile.
 
 ## Applying the setting immediately
 
@@ -108,7 +111,7 @@ void damage_numbers_changed(
         std::memory_order_release);
 }
 
-erui::RowHandle add_damage_numbers_toggle(erui::Page page) noexcept
+erui::ToggleRow add_damage_numbers_toggle(erui::Page page) noexcept
 {
     const std::uint8_t initial_value =
         g_mod_state.damage_numbers_enabled.load(std::memory_order_acquire)
@@ -160,26 +163,34 @@ Toggle has no separate options object.
 
 ## Reading and changing the value later
 
-After registration succeeds, the returned row handle identifies this Toggle:
+After registration succeeds, the returned typed row can read or change this
+Toggle directly:
 
 ```cpp
-std::uint8_t current_value{};
-const ERUI_Result read_result =
-    registration.get_value(toggle, current_value);
+bool current_value{};
+const ERUI_Result read_result = toggle.get_value(current_value);
 
-const ERUI_Result write_result =
-    registration.set_value(toggle, 1);
+const ERUI_Result write_result = toggle.set_value(true);
 ```
 
-Here, `registration` is the successful `erui::Registration`, and `toggle` is
-the `erui::RowHandle` returned by `add_toggle`. Check each result against
+Here, `toggle` is the `erui::ToggleRow` retained from `add_toggle`. It becomes
+active when its surrounding registration succeeds. Check each result against
 `ERUI_OK` before using the value or assuming the write succeeded.
 
-`get_value` returns the host's canonical `0` or `1`. `set_value` normalizes a
-nonzero byte to `1` and stages the native presentation update. The right-hand
-On/Off text can therefore update shortly after `set_value` returns rather
-than during the call itself. This programmatic write is silent: it does not
-invoke the Toggle callback.
+The typed getter presents the host's canonical `0` or `1` as `bool`.
+`set_value` stages the native presentation update. The right-hand On/Off text
+can therefore update shortly after `set_value` returns rather than during the
+call itself. This programmatic write is silent: it does not invoke the Toggle
+callback.
+
+The raw API 1.3 form remains source-compatible:
+
+```cpp
+erui::RowHandle raw_toggle = toggle;
+std::uint8_t raw_value{};
+registration.get_value(raw_toggle, raw_value);
+registration.set_value(raw_toggle, 1);
+```
 
 ## Availability
 
@@ -191,7 +202,7 @@ table and check a capability in client code.
 | First public API | 1.0 |
 | Capability | `erui::Capability::toggle` / `ERUI_CAP_TOGGLE` |
 | GFX presentation | Uses the stock native toggle widget |
-| Runtime value | `std::uint8_t`, always normalized to `0` or `1` |
+| Runtime value | Typed C++ access uses `bool`; the raw host value is always normalized to `0` or `1` |
 
 ## Callback, value, and lifetime behavior
 
@@ -199,9 +210,9 @@ table and check a capability in client code.
 - The host worker observes native value changes and invokes the optional
   callback with the normalized value. Synchronize any state shared with other
   threads.
-- A callback is a notification, not storage: use `Registration::get_value`
-  when the host's current canonical value is needed.
-- `Registration::set_value` changes the canonical value and stages a visual
+- A callback is a notification, not storage: use `ToggleRow::get_value` when
+  the host's current canonical value is needed.
+- `ToggleRow::set_value` changes the canonical value and stages a visual
   update without invoking the callback. The callback reports player changes,
   not programmatic writes made by the client mod.
 - ERNativeUI copies the label, help message, initial value, callback pointer,
@@ -218,7 +229,7 @@ table and check a capability in client code.
 
 - Using `2` as a third state; every nonzero value becomes On.
 - Reading the initial C++ variable after commit and expecting it to follow the
-  menu. Read the row through `Registration::get_value`, or update synchronized
+  menu. Read the row through `ToggleRow::get_value`, or update synchronized
   client state in the callback.
 - Touching game objects from the worker callback without first handing the
   work to the game thread expected by those objects.
@@ -226,8 +237,8 @@ table and check a capability in client code.
   gone before the player can change the Toggle.
 - Expecting `enabled = false` to remove the row. A disabled Toggle remains
   visible and consumes pagination capacity.
-- Using a row handle from another provider or from a different control type
-  with `get_value` or `set_value`.
+- Discarding the typed row and then expecting to read the committed value
+  without retaining either that row or its raw handle.
 
 [Controls index](README.md) |
 [Reverse-engineering reference](../../research/case-studies/settings-pages-and-pagination.md) |

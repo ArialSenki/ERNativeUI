@@ -32,7 +32,7 @@ from the client-provided label for the selected index.*
 #include <string>
 #include <string_view>
 
-erui::RowHandle add_impossible_values(erui::Page page) noexcept
+erui::CustomSliderRow add_impossible_values(erui::Page page) noexcept
 {
     static constexpr std::array<std::wstring_view, 7> values{
         L"-7", L"3", L"7.8", L"1s", L"hello", L"18", L"x1.3"};
@@ -66,7 +66,7 @@ formatter is then discarded and is never called from Elden Ring's UI thread.
 ## API at a glance
 
 ```cpp
-erui::RowHandle erui::Page::add_custom_slider(
+erui::CustomSliderRow erui::Page::add_custom_slider(
     std::wstring_view label,
     std::wstring_view help_message,
     const erui::CustomSliderOptions& options) noexcept;
@@ -86,7 +86,7 @@ void style_changed(
     settings.selected_style = change.index;
 }
 
-erui::RowHandle add_style_slider(
+erui::CustomSliderRow add_style_slider(
     erui::Page page,
     ModSettings& settings) noexcept
 {
@@ -168,16 +168,19 @@ client's original objects or attempt to parse the generated label.
 
 ```cpp
 std::uint32_t index{};
-const ERUI_Result read_result =
-    registration.get_custom_slider_index(slider, index);
+const ERUI_Result read_result = slider.get_index(index);
 
-const ERUI_Result write_result =
-    registration.set_custom_slider_index(slider, 4);
+const ERUI_Result write_result = slider.set_index(4);
 ```
 
 An index must be lower than the row's `value_count`; an invalid index is
 rejected rather than clamped. A successful programmatic write updates the
 native row without invoking the player-change callback.
+
+`CustomSliderRow` becomes active after registration succeeds. It exposes
+`handle()` and converts implicitly to `erui::RowHandle`, so API 1.3 source may
+continue using `Registration::get_custom_slider_index` and
+`Registration::set_custom_slider_index` with a retained raw handle.
 
 ## Availability
 

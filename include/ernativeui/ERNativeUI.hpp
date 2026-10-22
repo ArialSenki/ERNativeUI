@@ -1374,10 +1374,57 @@ inline ApiConnectionResult connect_api(std::chrono::milliseconds timeout) {
     return result;
 }
 
+enum class RowContextState : std::uint8_t {
+    pending,
+    committed,
+    aborted,
+};
+
+class RowContext {
+public:
+    RowContext(ERUI_Api api, ERUI_ProviderHandle provider) noexcept
+        : api(api), provider(provider) {}
+
+    [[nodiscard]] bool active() const noexcept {
+        return state.load(std::memory_order_acquire) !=
+            RowContextState::aborted;
+    }
+
+    [[nodiscard]] bool committed() const noexcept {
+        return state.load(std::memory_order_acquire) ==
+            RowContextState::committed;
+    }
+
+    void mark_committed() noexcept {
+        RowContextState expected = RowContextState::pending;
+        (void)state.compare_exchange_strong(
+            expected,
+            RowContextState::committed,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire);
+    }
+
+    void abort_if_pending() noexcept {
+        RowContextState expected = RowContextState::pending;
+        (void)state.compare_exchange_strong(
+            expected,
+            RowContextState::aborted,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire);
+    }
+
+    ERUI_Api api{};
+    ERUI_ProviderHandle provider{ERUI_INVALID_PROVIDER};
+
+private:
+    std::atomic<RowContextState> state{RowContextState::pending};
+};
+
 class Draft {
 public:
     Draft(ERUI_Api api, ERUI_ProviderHandle provider, ERUI_PageHandle root)
-        : api_(api), provider_(provider), root_(root) {}
+        : api_(api), provider_(provider), root_(root),
+          row_context_(std::make_shared<RowContext>(api, provider)) {}
     ~Draft() = default;
     Draft(const Draft&) = delete;
     Draft& operator=(const Draft&) = delete;
@@ -1387,6 +1434,7 @@ public:
     }
 
     void close() noexcept {
+        if (row_context_) row_context_->abort_if_pending();
         open_.store(false, std::memory_order_release);
     }
 
@@ -1397,6 +1445,7 @@ public:
         // destroy their states normally.
         for (auto& state : callback_states_) state.release();
         callback_states_.clear();
+        if (row_context_) row_context_->mark_committed();
         close();
     }
 
@@ -1440,6 +1489,7 @@ public:
     bool failed_{};
     Error error_{};
     std::vector<std::unique_ptr<RetainedCallbackState>> callback_states_{};
+    std::shared_ptr<RowContext> row_context_{};
 
 private:
     std::atomic_bool open_{true};
@@ -1562,21 +1612,415 @@ inline ConnectionResult connect() noexcept {
     return connect(std::chrono::milliseconds{30000});
 }
 
+class RowRef {
+public:
+    RowRef() noexcept = default;
+    RowRef(const RowRef&) noexcept = default;
+    RowRef(RowRef&&) noexcept = default;
+    RowRef& operator=(const RowRef&) noexcept = default;
+    RowRef& operator=(RowRef&&) noexcept = default;
+    ~RowRef() = default;
+
+    [[nodiscard]] RowHandle handle() const noexcept { return row_; }
+    [[nodiscard]] bool valid() const noexcept {
+        return row_ != ERUI_INVALID_ROW && context_ && context_->committed() &&
+            context_->provider != ERUI_INVALID_PROVIDER;
+    }
+
+    operator RowHandle() const noexcept { return row_; }
+
+    friend bool operator==(const RowRef& left, const RowRef& right) noexcept {
+        return left.context_.get() == right.context_.get() &&
+            left.row_ == right.row_;
+    }
+    friend bool operator!=(const RowRef& left, const RowRef& right) noexcept {
+        return !(left == right);
+    }
+    friend bool operator==(const RowRef& left, RowHandle right) noexcept {
+        return left.row_ == right;
+    }
+    friend bool operator==(RowHandle left, const RowRef& right) noexcept {
+        return left == right.row_;
+    }
+    friend bool operator!=(const RowRef& left, RowHandle right) noexcept {
+        return !(left == right);
+    }
+    friend bool operator!=(RowHandle left, const RowRef& right) noexcept {
+        return !(left == right);
+    }
+
+protected:
+    RowRef(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : context_(std::move(context)), row_(row) {}
+
+    ERUI_Result set_byte_value(std::uint8_t value) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if (!context->api.set_row_value) return ERUI_NOT_SUPPORTED;
+        return context->api.set_row_value(
+            context->provider, row_, value);
+    }
+
+    ERUI_Result get_byte_value(std::uint8_t& output) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if (!context->api.get_row_value) return ERUI_NOT_SUPPORTED;
+        std::uint8_t value{};
+        const ERUI_Result result = context->api.get_row_value(
+            context->provider, row_, &value);
+        if (result == ERUI_OK) output = value;
+        return result;
+    }
+
+    ERUI_Result set_numeric_value(double value) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if ((context->api.capabilities & ERUI_CAP_NUMERIC_SLIDER) == 0 ||
+            !context->api.set_numeric_slider_value) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        ERUI_DecimalValue native_value{};
+        if (!detail::infer_decimal_value(value, native_value)) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        return context->api.set_numeric_slider_value(
+            context->provider, row_, &native_value);
+    }
+
+    ERUI_Result get_numeric_value(double& output) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if ((context->api.capabilities & ERUI_CAP_NUMERIC_SLIDER) == 0 ||
+            !context->api.get_numeric_slider_value) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        ERUI_DecimalValue native_value{};
+        const ERUI_Result result = context->api.get_numeric_slider_value(
+            context->provider, row_, &native_value);
+        if (result != ERUI_OK) return result;
+        if (native_value.reserved != 0 ||
+            native_value.decimal_places >
+                ERUI_NUMERIC_SLIDER_MAX_DECIMAL_PLACES) {
+            return ERUI_INTERNAL_ERROR;
+        }
+        output = detail::unscale_decimal_value(
+            native_value.scaled_value, native_value.decimal_places);
+        return ERUI_OK;
+    }
+
+    ERUI_Result set_custom_index(std::uint32_t index) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if ((context->api.capabilities & ERUI_CAP_CUSTOM_SLIDER) == 0 ||
+            !context->api.set_custom_slider_index) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        return context->api.set_custom_slider_index(
+            context->provider, row_, index);
+    }
+
+    ERUI_Result get_custom_index(std::uint32_t& output) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if ((context->api.capabilities & ERUI_CAP_CUSTOM_SLIDER) == 0 ||
+            !context->api.get_custom_slider_index) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        std::uint32_t index{};
+        const ERUI_Result result = context->api.get_custom_slider_index(
+            context->provider, row_, &index);
+        if (result == ERUI_OK) output = index;
+        return result;
+    }
+
+    ERUI_Result set_text_value(std::wstring_view value) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if ((context->api.capabilities & ERUI_CAP_TEXT_INPUT) == 0 ||
+            !context->api.set_text_input_value) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        if (!detail::view_size_fits(value.size()) ||
+            value.size() > ERUI_TEXT_INPUT_MAX_LENGTH) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        const ERUI_Utf16View native_value = detail::utf16_view(value);
+        return context->api.set_text_input_value(
+            context->provider, row_, &native_value);
+    }
+
+    ERUI_Result get_text_value(std::wstring& output) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if ((context->api.capabilities & ERUI_CAP_TEXT_INPUT) == 0 ||
+            !context->api.get_text_input_value) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        try {
+            for (unsigned attempt = 0; attempt < 3; ++attempt) {
+                std::uint32_t required{};
+                ERUI_Result result = context->api.get_text_input_value(
+                    context->provider, row_, nullptr, 0, &required);
+                if (result != ERUI_OK) return result;
+                if (required == 0) {
+                    std::wstring empty{};
+                    output.swap(empty);
+                    return ERUI_OK;
+                }
+
+                std::vector<std::uint16_t> storage(required);
+                std::uint32_t actual{};
+                result = context->api.get_text_input_value(
+                    context->provider,
+                    row_,
+                    storage.data(),
+                    static_cast<std::uint32_t>(storage.size()),
+                    &actual);
+                if (result == ERUI_BUFFER_TOO_SMALL) continue;
+                if (result != ERUI_OK) return result;
+                if (actual > storage.size()) return ERUI_INTERNAL_ERROR;
+
+                std::wstring value(actual, L'\0');
+                if (actual != 0) {
+                    std::memcpy(
+                        value.data(),
+                        storage.data(),
+                        static_cast<std::size_t>(actual) *
+                            sizeof(std::uint16_t));
+                }
+                output.swap(value);
+                return ERUI_OK;
+            }
+            return ERUI_BUFFER_TOO_SMALL;
+        } catch (...) {
+            return ERUI_OUT_OF_MEMORY;
+        }
+    }
+
+    ERUI_Result set_color_value(Color value) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if ((context->api.capabilities & ERUI_CAP_COLOR_PICKER) == 0 ||
+            !context->api.set_color_picker_value) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        const ERUI_Color native_value = detail::native_color(value);
+        return context->api.set_color_picker_value(
+            context->provider, row_, &native_value);
+    }
+
+    ERUI_Result get_color_value(Color& output) const noexcept {
+        const auto* context = active_context();
+        if (!context) return ERUI_INVALID_HANDLE;
+        if ((context->api.capabilities & ERUI_CAP_COLOR_PICKER) == 0 ||
+            !context->api.get_color_picker_value) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        ERUI_Color native_value{};
+        const ERUI_Result result = context->api.get_color_picker_value(
+            context->provider, row_, &native_value);
+        if (result != ERUI_OK) return result;
+        if (native_value.reserved != 0) return ERUI_INTERNAL_ERROR;
+        output = detail::color_from_native(native_value);
+        return ERUI_OK;
+    }
+
+private:
+    [[nodiscard]] const detail::RowContext* active_context() const noexcept {
+        return row_ != ERUI_INVALID_ROW && context_ && context_->active() &&
+                context_->provider != ERUI_INVALID_PROVIDER
+            ? context_.get()
+            : nullptr;
+    }
+
+    std::shared_ptr<detail::RowContext> context_{};
+    RowHandle row_{ERUI_INVALID_ROW};
+};
+
+class ButtonRow final : public RowRef {
+public:
+    ButtonRow() noexcept = default;
+
+private:
+    friend class Page;
+    ButtonRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
+class ToggleRow final : public RowRef {
+public:
+    ToggleRow() noexcept = default;
+
+    ERUI_Result set_value(bool value) const noexcept {
+        return set_byte_value(value ? 1u : 0u);
+    }
+    ERUI_Result get_value(bool& output) const noexcept {
+        std::uint8_t value{};
+        const ERUI_Result result = get_byte_value(value);
+        if (result == ERUI_OK) output = value != 0;
+        return result;
+    }
+
+private:
+    friend class Page;
+    ToggleRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
+class SliderRow final : public RowRef {
+public:
+    SliderRow() noexcept = default;
+
+    ERUI_Result set_value(std::uint8_t value) const noexcept {
+        return set_byte_value(value);
+    }
+    ERUI_Result get_value(std::uint8_t& output) const noexcept {
+        return get_byte_value(output);
+    }
+
+private:
+    friend class Page;
+    SliderRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
+class NumericSliderRow final : public RowRef {
+public:
+    NumericSliderRow() noexcept = default;
+
+    ERUI_Result set_value(double value) const noexcept {
+        return set_numeric_value(value);
+    }
+    ERUI_Result get_value(double& output) const noexcept {
+        return get_numeric_value(output);
+    }
+
+private:
+    friend class Page;
+    NumericSliderRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
+class CustomSliderRow final : public RowRef {
+public:
+    CustomSliderRow() noexcept = default;
+
+    ERUI_Result set_index(std::uint32_t index) const noexcept {
+        return set_custom_index(index);
+    }
+    ERUI_Result get_index(std::uint32_t& output) const noexcept {
+        return get_custom_index(output);
+    }
+
+private:
+    friend class Page;
+    CustomSliderRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
+class InlineChoiceRow final : public RowRef {
+public:
+    InlineChoiceRow() noexcept = default;
+
+    ERUI_Result set_index(std::uint8_t index) const noexcept {
+        return set_byte_value(index);
+    }
+    ERUI_Result get_index(std::uint8_t& output) const noexcept {
+        return get_byte_value(output);
+    }
+
+private:
+    friend class Page;
+    InlineChoiceRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
+class PopupChoiceRow final : public RowRef {
+public:
+    PopupChoiceRow() noexcept = default;
+
+    ERUI_Result set_index(std::uint8_t index) const noexcept {
+        return set_byte_value(index);
+    }
+    ERUI_Result get_index(std::uint8_t& output) const noexcept {
+        return get_byte_value(output);
+    }
+
+private:
+    friend class Page;
+    PopupChoiceRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
+class TextInputRow final : public RowRef {
+public:
+    TextInputRow() noexcept = default;
+
+    ERUI_Result set_text(std::wstring_view value) const noexcept {
+        return set_text_value(value);
+    }
+    ERUI_Result get_text(std::wstring& output) const noexcept {
+        return get_text_value(output);
+    }
+
+private:
+    friend class Page;
+    TextInputRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
+class ColorPickerRow final : public RowRef {
+public:
+    ColorPickerRow() noexcept = default;
+
+    ERUI_Result set_color(Color value) const noexcept {
+        return set_color_value(value);
+    }
+    ERUI_Result get_color(Color& output) const noexcept {
+        return get_color_value(output);
+    }
+
+private:
+    friend class Page;
+    ColorPickerRow(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : RowRef(std::move(context), row) {}
+};
+
 class Page {
 public:
     Page() = default;
 
-    RowHandle add_button(
+    ButtonRow add_button(
         std::wstring_view label,
         std::wstring_view help,
         ButtonCallback callback,
         void* user_data = nullptr,
         bool enabled = true) noexcept {
-        if (!draft_ || !draft_->open() || draft_->failed_) return ERUI_INVALID_ROW;
+        if (!draft_ || !draft_->open() || draft_->failed_) return {};
         if (!detail::view_size_fits(label.size()) ||
             !detail::view_size_fits(help.size())) {
             draft_->record(ERUI_INVALID_ARGUMENT, L"add_button text");
-            return ERUI_INVALID_ROW;
+            return {};
         }
         ERUI_ButtonDesc desc{};
         desc.size = sizeof(desc);
@@ -1588,29 +2032,29 @@ public:
         ERUI_RowHandle row{};
         draft_->record(draft_->api_.add_button(
             draft_->provider_, page_, &desc, &row), L"add_button");
-        return row;
+        return make_row<ButtonRow>(row);
     }
 
     template <void (*Function)() noexcept>
-    RowHandle add_button(
+    ButtonRow add_button(
         std::wstring_view label,
         std::wstring_view help,
         bool enabled = true) noexcept {
         return add_button(label, help, &button_thunk<Function>, nullptr, enabled);
     }
 
-    RowHandle add_toggle(
+    ToggleRow add_toggle(
         std::wstring_view label,
         std::wstring_view help,
         std::uint8_t initial_value,
         ValueChangedCallback callback = nullptr,
         void* user_data = nullptr,
         bool enabled = true) noexcept {
-        if (!draft_ || !draft_->open() || draft_->failed_) return ERUI_INVALID_ROW;
+        if (!draft_ || !draft_->open() || draft_->failed_) return {};
         if (!detail::view_size_fits(label.size()) ||
             !detail::view_size_fits(help.size())) {
             draft_->record(ERUI_INVALID_ARGUMENT, L"add_toggle text");
-            return ERUI_INVALID_ROW;
+            return {};
         }
         ERUI_ToggleDesc desc{};
         desc.size = sizeof(desc);
@@ -1623,20 +2067,20 @@ public:
         ERUI_RowHandle row{};
         draft_->record(draft_->api_.add_toggle(
             draft_->provider_, page_, &desc, &row), L"add_toggle");
-        return row;
+        return make_row<ToggleRow>(row);
     }
 
-    RowHandle add_slider(
+    SliderRow add_slider(
         std::wstring_view label,
         std::wstring_view help,
         const SliderOptions& options,
         ValueChangedCallback callback = nullptr,
         void* user_data = nullptr) noexcept {
-        if (!draft_ || !draft_->open() || draft_->failed_) return ERUI_INVALID_ROW;
+        if (!draft_ || !draft_->open() || draft_->failed_) return {};
         if (!detail::view_size_fits(label.size()) ||
             !detail::view_size_fits(help.size())) {
             draft_->record(ERUI_INVALID_ARGUMENT, L"add_slider text");
-            return ERUI_INVALID_ROW;
+            return {};
         }
         ERUI_SliderDesc desc{};
         desc.size = sizeof(desc);
@@ -1652,22 +2096,22 @@ public:
         ERUI_RowHandle row{};
         draft_->record(draft_->api_.add_slider(
             draft_->provider_, page_, &desc, &row), L"add_slider");
-        return row;
+        return make_row<SliderRow>(row);
     }
 
-    RowHandle add_slider(
+    NumericSliderRow add_slider(
         std::wstring_view label,
         std::wstring_view help,
         const NumericSliderOptions& options,
         NumericSliderChangedCallback callback = nullptr,
         void* user_data = nullptr) noexcept {
         if (!draft_ || !draft_->open() || draft_->failed_) {
-            return ERUI_INVALID_ROW;
+            return {};
         }
         if (!draft_->api_.add_numeric_slider ||
             (draft_->api_.capabilities & ERUI_CAP_NUMERIC_SLIDER) == 0) {
             draft_->record(ERUI_NOT_SUPPORTED, L"add_numeric_slider");
-            return ERUI_INVALID_ROW;
+            return {};
         }
         detail::PreparedNumericSlider prepared{};
         if (!detail::view_size_fits(label.size()) ||
@@ -1677,7 +2121,7 @@ public:
             (!callback && user_data) ||
             !detail::prepare_numeric_slider(options, prepared)) {
             draft_->record(ERUI_INVALID_ARGUMENT, L"add_numeric_slider");
-            return ERUI_INVALID_ROW;
+            return {};
         }
 
         ERUI_NumericSliderDesc description{};
@@ -1699,11 +2143,11 @@ public:
         draft_->record(draft_->api_.add_numeric_slider(
             draft_->provider_, page_, &description, &row),
             L"add_numeric_slider");
-        return row;
+        return make_row<NumericSliderRow>(row);
     }
 
     template <auto Function>
-    RowHandle add_slider(
+    NumericSliderRow add_slider(
         std::wstring_view label,
         std::wstring_view help,
         const NumericSliderOptions& options) noexcept {
@@ -1718,7 +2162,7 @@ public:
     }
 
     template <auto Function, typename State>
-    RowHandle add_slider(
+    NumericSliderRow add_slider(
         std::wstring_view label,
         std::wstring_view help,
         const NumericSliderOptions& options,
@@ -1735,19 +2179,19 @@ public:
             &state);
     }
 
-    RowHandle add_custom_slider(
+    CustomSliderRow add_custom_slider(
         std::wstring_view label,
         std::wstring_view help,
         const CustomSliderOptions& options,
         CustomSliderChangedCallback callback = nullptr,
         void* user_data = nullptr) noexcept {
         if (!draft_ || !draft_->open() || draft_->failed_) {
-            return ERUI_INVALID_ROW;
+            return {};
         }
         if (!draft_->api_.add_custom_slider ||
             (draft_->api_.capabilities & ERUI_CAP_CUSTOM_SLIDER) == 0) {
             draft_->record(ERUI_NOT_SUPPORTED, L"add_custom_slider");
-            return ERUI_INVALID_ROW;
+            return {};
         }
         if (!detail::view_size_fits(label.size()) ||
             !detail::view_size_fits(help.size()) ||
@@ -1756,7 +2200,7 @@ public:
             options.initial_index >= options.value_count ||
             !options.format_value || (!callback && user_data)) {
             draft_->record(ERUI_INVALID_ARGUMENT, L"add_custom_slider");
-            return ERUI_INVALID_ROW;
+            return {};
         }
 
         try {
@@ -1772,7 +2216,7 @@ public:
                     !detail::view_size_fits(value.size())) {
                     draft_->record(
                         ERUI_INVALID_ARGUMENT, L"add_custom_slider value");
-                    return ERUI_INVALID_ROW;
+                    return {};
                 }
                 values.push_back(std::move(value));
             }
@@ -1798,18 +2242,18 @@ public:
             draft_->record(draft_->api_.add_custom_slider(
                 draft_->provider_, page_, &description, &row),
                 L"add_custom_slider");
-            return row;
+            return make_row<CustomSliderRow>(row);
         } catch (const std::bad_alloc&) {
             draft_->record(ERUI_OUT_OF_MEMORY, L"add_custom_slider");
-            return ERUI_INVALID_ROW;
+            return {};
         } catch (...) {
             draft_->record(ERUI_CALLBACK_REJECTED, L"add_custom_slider formatter");
-            return ERUI_INVALID_ROW;
+            return {};
         }
     }
 
     template <auto Function>
-    RowHandle add_custom_slider(
+    CustomSliderRow add_custom_slider(
         std::wstring_view label,
         std::wstring_view help,
         const CustomSliderOptions& options) noexcept {
@@ -1824,7 +2268,7 @@ public:
     }
 
     template <auto Function, typename State>
-    RowHandle add_custom_slider(
+    CustomSliderRow add_custom_slider(
         std::wstring_view label,
         std::wstring_view help,
         const CustomSliderOptions& options,
@@ -1841,43 +2285,43 @@ public:
             &state);
     }
 
-    RowHandle add_inline_choice(
+    InlineChoiceRow add_inline_choice(
         std::wstring_view label,
         std::wstring_view help,
         const ChoiceOptions& options,
         ValueChangedCallback callback = nullptr,
         void* user_data = nullptr) noexcept {
-        return add_choice_impl(
+        return make_row<InlineChoiceRow>(add_choice_impl(
             label, help, options, callback, user_data,
             draft_ ? draft_->api_.add_inline_choice : nullptr,
-            L"add_inline_choice");
+            L"add_inline_choice"));
     }
 
-    RowHandle add_popup_choice(
+    PopupChoiceRow add_popup_choice(
         std::wstring_view label,
         std::wstring_view help,
         const ChoiceOptions& options,
         ValueChangedCallback callback = nullptr,
         void* user_data = nullptr) noexcept {
-        return add_choice_impl(
+        return make_row<PopupChoiceRow>(add_choice_impl(
             label, help, options, callback, user_data,
             draft_ ? draft_->api_.add_popup_choice : nullptr,
-            L"add_popup_choice");
+            L"add_popup_choice"));
     }
 
-    RowHandle add_text_input(
+    TextInputRow add_text_input(
         std::wstring_view label,
         std::wstring_view help,
         const TextInputOptions& options,
         TextInputChangedCallback callback = nullptr,
         void* user_data = nullptr) noexcept {
         if (!draft_ || !draft_->open() || draft_->failed_) {
-            return ERUI_INVALID_ROW;
+            return {};
         }
         if (!draft_->api_.add_text_input ||
             (draft_->api_.capabilities & ERUI_CAP_TEXT_INPUT) == 0) {
             draft_->record(ERUI_NOT_SUPPORTED, L"add_text_input");
-            return ERUI_INVALID_ROW;
+            return {};
         }
         if (!detail::view_size_fits(label.size()) ||
             !detail::view_size_fits(help.size()) ||
@@ -1890,7 +2334,7 @@ public:
                     : options.maximum_length) ||
             (!callback && user_data)) {
             draft_->record(ERUI_INVALID_ARGUMENT, L"add_text_input");
-            return ERUI_INVALID_ROW;
+            return {};
         }
 
         ERUI_TextInputDesc description{};
@@ -1908,11 +2352,11 @@ public:
         draft_->record(draft_->api_.add_text_input(
             draft_->provider_, page_, &description, &row),
             L"add_text_input");
-        return row;
+        return make_row<TextInputRow>(row);
     }
 
     template <auto Function>
-    RowHandle add_text_input(
+    TextInputRow add_text_input(
         std::wstring_view label,
         std::wstring_view help,
         const TextInputOptions& options) noexcept {
@@ -1927,7 +2371,7 @@ public:
     }
 
     template <auto Function, typename State>
-    RowHandle add_text_input(
+    TextInputRow add_text_input(
         std::wstring_view label,
         std::wstring_view help,
         const TextInputOptions& options,
@@ -1943,25 +2387,25 @@ public:
             &state);
     }
 
-    RowHandle add_color_picker(
+    ColorPickerRow add_color_picker(
         std::wstring_view label,
         std::wstring_view help,
         const ColorPickerOptions& options,
         ColorPickerChangedCallback callback = nullptr,
         void* user_data = nullptr) noexcept {
         if (!draft_ || !draft_->open() || draft_->failed_) {
-            return ERUI_INVALID_ROW;
+            return {};
         }
         if (!draft_->api_.add_color_picker ||
             (draft_->api_.capabilities & ERUI_CAP_COLOR_PICKER) == 0) {
             draft_->record(ERUI_NOT_SUPPORTED, L"add_color_picker");
-            return ERUI_INVALID_ROW;
+            return {};
         }
         if (!detail::view_size_fits(label.size()) ||
             !detail::view_size_fits(help.size()) ||
             (!callback && user_data)) {
             draft_->record(ERUI_INVALID_ARGUMENT, L"add_color_picker");
-            return ERUI_INVALID_ROW;
+            return {};
         }
 
         ERUI_ColorPickerDesc description{};
@@ -1978,11 +2422,11 @@ public:
         draft_->record(draft_->api_.add_color_picker(
             draft_->provider_, page_, &description, &row),
             L"add_color_picker");
-        return row;
+        return make_row<ColorPickerRow>(row);
     }
 
     template <auto Function>
-    RowHandle add_color_picker(
+    ColorPickerRow add_color_picker(
         std::wstring_view label,
         std::wstring_view help,
         const ColorPickerOptions& options) noexcept {
@@ -1997,7 +2441,7 @@ public:
     }
 
     template <auto Function, typename State>
-    RowHandle add_color_picker(
+    ColorPickerRow add_color_picker(
         std::wstring_view label,
         std::wstring_view help,
         const ColorPickerOptions& options,
@@ -2092,6 +2536,15 @@ private:
         ERUI_PageHandle page,
         bool custom_tab = false) noexcept
         : draft_(std::move(draft)), page_(page), custom_tab_(custom_tab) {}
+
+    template <typename Row>
+    [[nodiscard]] Row make_row(RowHandle row) const noexcept {
+        if (!draft_ || !draft_->row_context_ ||
+            row == ERUI_INVALID_ROW || draft_->failed_) {
+            return {};
+        }
+        return Row(draft_->row_context_, row);
+    }
 
     template <void (*Function)() noexcept>
     static void ERUI_CALL button_thunk(void*) noexcept { Function(); }

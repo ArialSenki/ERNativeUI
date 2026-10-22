@@ -23,7 +23,7 @@ void show_greeting() noexcept
     g_registration.alert(L"Hello, Tarnished!");
 }
 
-erui::RowHandle add_greeting_button(erui::Page page) noexcept
+erui::ButtonRow add_greeting_button(erui::Page page) noexcept
 {
     return page.add_button<&show_greeting>(
         L"Show Greeting",
@@ -37,9 +37,9 @@ the Button's location. The [first-mod guide](../../getting-started/first-mod.md)
 shows where the builder receives or creates pages. This guide starts with a
 `Page` so unrelated connection and menu setup does not hide the Button call.
 
-The return type is `erui::RowHandle`. A Button currently has no operation that
-requires this handle after registration, so a mod may discard it when it does
-not need to identify the row.
+The return type is `erui::ButtonRow`. A Button currently has no operation that
+requires the retained row after registration, so a mod may discard it when it
+does not need to identify the row.
 
 When the player confirms the row, its callback requests this native alert:
 
@@ -52,19 +52,19 @@ When the player confirms the row, its callback requests this native alert:
 In schematic form, the convenient overload is:
 
 ```cpp
-const erui::RowHandle button =
+const erui::ButtonRow button =
     page.add_button<&callback>(label, help_message);
 ```
 
 Here, `page` is an `erui::Page`, `callback` names a `void() noexcept`
 function, and `label` and `help_message` are UTF-16 strings. The call returns
-an `erui::RowHandle`.
+an `erui::ButtonRow`.
 
 Its full shape is:
 
 ```cpp
 template <void (*Callback)() noexcept>
-erui::RowHandle erui::Page::add_button(
+erui::ButtonRow erui::Page::add_button(
     std::wstring_view label,
     std::wstring_view help_message,
     bool enabled = true) noexcept;
@@ -75,6 +75,11 @@ The callback for this overload must have exactly this shape:
 ```cpp
 void callback() noexcept;
 ```
+
+`ButtonRow` exposes `handle()` and converts implicitly to the raw
+`erui::RowHandle`. Code written for API 1.3 may therefore continue assigning
+the result to `erui::RowHandle`; using the typed result preserves the control
+kind for later API additions.
 
 ## Performing a long task
 
@@ -128,7 +133,7 @@ void start_long_task() noexcept
     }
 }
 
-erui::RowHandle add_long_task_button(erui::Page page) noexcept
+erui::ButtonRow add_long_task_button(erui::Page page) noexcept
 {
     return page.add_button<&start_long_task>(
         L"Run Long Task",
@@ -197,7 +202,8 @@ table and check a capability in client code.
   Ring's UI while that work runs.
 - Expecting `enabled = false` to render a grey Button is incorrect; the row is
   absent.
-- Calling `Registration::set_value` on a Button uses the wrong row type and
+- Expecting a runtime value method on `ButtonRow`. Converting it to a raw
+  handle and calling `Registration::set_value` uses the wrong row type and
   returns an error.
 
 [Controls index](README.md) |

@@ -5,7 +5,7 @@
 - runtime localization for all 15 language identifiers currently reported by
   Elden Ring's Steamworks interface, explicit `vietnamese` identifier support,
   and English fallback for every other future identifier;
-- one explicit API 1.2 connection reused for localization and registration;
+- one explicit API 1.3 connection reused for localization and registration;
 - host-owned toggle and slider values;
 - a dedicated advanced-slider submenu containing `x0.6`, signed `-0.5`, and
   `3.0s` Numeric Sliders plus a deliberately absurd Custom Slider that moves
@@ -13,7 +13,7 @@
 - value and button callbacks;
 - a dedicated choice submenu comparing one inline row with independent native
   popup lists containing two, four, and eight options;
-- a programmatic `Registration::set_value` update;
+- a retained `ToggleRow` and programmatic `ToggleRow::set_value` update;
 - a capability-gated TextInput submenu with the default 16-unit limit and an
   explicit 35-UTF-16-unit field;
 - a nested logical page with 32 generated action rows;

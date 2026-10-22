@@ -20,7 +20,7 @@ choices and starts on `Balanced`, whose zero-based index is `1`:
 #include <array>
 #include <string_view>
 
-erui::RowHandle add_quality_preset(erui::Page page) noexcept
+erui::PopupChoiceRow add_quality_preset(erui::Page page) noexcept
 {
     constexpr std::array<std::wstring_view, 4> labels{
         L"Minimal",
@@ -41,9 +41,9 @@ erui::RowHandle add_quality_preset(erui::Page page) noexcept
 ```
 
 Call `add_quality_preset(page)` from the menu-builder body. Its argument is the
-`erui::Page` on which the row should appear. The returned `erui::RowHandle`
-identifies this Popup Choice if the mod needs to read or change its selected
-index after registration. The
+`erui::Page` on which the row should appear. The returned
+`erui::PopupChoiceRow` identifies this Popup Choice if the mod needs to read
+or change its selected index after registration. The
 [first-mod guide](../../getting-started/first-mod.md) shows the complete
 menu-builder context.
 
@@ -64,17 +64,17 @@ The callback-free form is:
 erui::ChoiceOptions options{};
 // Assign options.values, options.count, and options.initial_index.
 
-const erui::RowHandle choice =
+const erui::PopupChoiceRow choice =
     page.add_popup_choice(label, help_message, options);
 ```
 
 Here, `page` is an `erui::Page`; `label`, `help_message`, and the option labels
-are UTF-16; and the return type is `erui::RowHandle`.
+are UTF-16; and the return type is `erui::PopupChoiceRow`.
 
 The C++17 wrapper's complete function shape is:
 
 ```cpp
-erui::RowHandle erui::Page::add_popup_choice(
+erui::PopupChoiceRow erui::Page::add_popup_choice(
     std::wstring_view label,
     std::wstring_view help_message,
     const erui::ChoiceOptions& options,
@@ -111,7 +111,7 @@ void quality_preset_changed(
         std::memory_order_release);
 }
 
-erui::RowHandle add_saved_quality_preset(
+erui::PopupChoiceRow add_saved_quality_preset(
     erui::Page page,
     ModState& state) noexcept
 {
@@ -188,10 +188,22 @@ table and check host support.
 - Confirming a different label updates the index and queues one callback.
 - Canceling the list or confirming its current label does not call the
   callback.
-- `Registration::get_value` copies the current zero-based index.
-- `Registration::set_value` changes the selected index silently and rejects
+- `PopupChoiceRow::get_index` copies the current zero-based index.
+- `PopupChoiceRow::set_index` changes the selected index silently and rejects
   an index greater than or equal to `count`. A programmatic write does not
   invoke the callback.
+
+For retained typed access after registration succeeds:
+
+```cpp
+std::uint8_t index{};
+const ERUI_Result read_result = choice.get_index(index);
+const ERUI_Result write_result = choice.set_index(2);
+```
+
+`PopupChoiceRow` exposes `handle()` and converts implicitly to
+`erui::RowHandle`. Existing API 1.3 code may continue retaining a raw handle
+and using `Registration::get_value` or `Registration::set_value`.
 
 Popup Choice supports up to 32 labels. It is usually clearer than Inline
 Choice when the set is large enough that the player benefits from seeing every

@@ -16,7 +16,7 @@ This example adds the `Player Name` row shown above:
 ```cpp
 #include <ernativeui/ERNativeUI.hpp>
 
-erui::RowHandle add_player_name_input(erui::Page page) noexcept
+erui::TextInputRow add_player_name_input(erui::Page page) noexcept
 {
     erui::TextInputOptions options{};
     options.placeholder = L"Enter a name";
@@ -31,8 +31,8 @@ erui::RowHandle add_player_name_input(erui::Page page) noexcept
 
 Call `add_player_name_input(page)` from the menu-builder body. Its argument is
 the `erui::Page` on which the row should appear. The returned
-`erui::RowHandle` identifies this TextInput if the mod needs to read or change
-its value after registration. The
+`erui::TextInputRow` identifies this TextInput if the mod needs to read or
+change its value after registration. The
 [first-mod guide](../../getting-started/first-mod.md) shows the complete
 menu-builder context.
 
@@ -52,12 +52,16 @@ The callback-free form is:
 ```cpp
 erui::TextInputOptions options{};
 
-const erui::RowHandle input =
+const erui::TextInputRow input =
     page.add_text_input(label, help_message, options);
 ```
 
 Here, `page` is an `erui::Page`; `label`, `help_message`, and the strings in
-`options` are UTF-16; and the return type is `erui::RowHandle`.
+`options` are UTF-16; and the return type is `erui::TextInputRow`.
+
+`TextInputRow` exposes `handle()` and converts implicitly to
+`erui::RowHandle`, so existing API 1.3 source that stores the result as a raw
+handle continues to compile.
 
 ## Reacting to confirmed text
 
@@ -89,7 +93,7 @@ void player_name_changed(
     }
 }
 
-erui::RowHandle add_player_name_input_with_callback(
+erui::TextInputRow add_player_name_input_with_callback(
     erui::Page page,
     ModState& state) noexcept
 {
@@ -170,13 +174,25 @@ presentation already authored into the effective movie remains available. See
 
 - Confirming changed text updates the canonical value and queues one callback.
 - Canceling the editor or confirming unchanged text does not call the callback.
-- `Registration::get_text` copies the current value into a `std::wstring`.
-- `Registration::set_text` copies a new value without invoking the callback
+- `TextInputRow::get_text` copies the current value into a `std::wstring`.
+- `TextInputRow::set_text` copies a new value without invoking the callback
   and rejects over-limit text instead of truncating it. The visible row catches
   up at a later safe UI boundary.
 - A programmatic write made while the editor is open survives Cancel. A later
   player confirmation replaces it.
 - Values must contain valid UTF-16 and no embedded NUL code unit.
+
+For retained access after registration succeeds:
+
+```cpp
+std::wstring value;
+const ERUI_Result read_result = input.get_text(value);
+const ERUI_Result write_result = input.set_text(L"Melina");
+```
+
+The raw-compatible `Registration::get_text` and `Registration::set_text`
+forms remain available when existing code deliberately retains an
+`erui::RowHandle`.
 
 ## Common mistakes
 
@@ -184,8 +200,8 @@ presentation already authored into the effective movie remains available. See
   returns.
 - Counting UTF-8 bytes or visible glyphs instead of Windows UTF-16 code units.
 - Setting `initial_value` longer than the fixed maximum.
-- Expecting `set_text` to truncate an oversized value or call the change
-  callback.
+- Expecting `TextInputRow::set_text` to truncate an oversized value or call
+  the change callback.
 - Assuming presentation controls editor behavior; editing remains a separate
   native operation.
 

@@ -373,16 +373,17 @@ object. No `edit()` member is published in the typed-row foundation milestone.
 Already-compiled API 1.3 clients remain binary-compatible and continue using
 the frozen API 1.3 table. Most API 1.3 C++ source also recompiles unchanged.
 Only code that depends on the exact return type—for example `decltype`, a
-pointer-to-member signature, or template overload resolution—needs attention.
-These cases require focused compatibility tests and a permanent, concise
-`1.3-to-1.4` migration guide before the API is frozen.
+pointer-to-member signature, template deduction, `auto` followed by raw-handle
+reassignment, or a container keyed specifically by `RowHandle`—needs
+attention. These cases require focused compatibility tests and a permanent,
+concise `1.3-to-1.4` migration guide before the API is frozen.
 
 ## Workstream status
 
 | Workstream | Current status | Required exit evidence |
 |---|---|---|
 | Freeze the shipped API 1.3 ABI fixture | Complete | Headers recovered from `ERNativeUI-v1.3.0`, immutable provenance and hashes, exact layout and bidirectional contract fixtures, and public-only frozen-client/current-host smoke tests |
-| Typed C++ row foundation | Designed; ready to implement | Concrete typed rows returned by row builders, preserved raw `RowHandle`, one-way implicit raw conversion, type-safe forwarding, MSVC/MinGW tests, rebuilt examples, and live regression validation |
+| Typed C++ row foundation | Complete | Concrete typed rows returned by row builders, preserved raw `RowHandle`, one-way implicit raw conversion, type-safe forwarding, MSVC/MinGW tests, rebuilt examples, and live regression validation |
 | Update batch and generation model | Proposed | Unit-tested atomic validation, copy semantics, coalescing, failure rollback, thread ownership, and callback-originated commits without reentrancy |
 | Mutable label and help text | Proposed | Live selected/unselected rows, pagination slices, close/reopen, and movie reconstruction |
 | Label color | Proposed; separate research gate | Proven behavior through focus, disable, transitions, and native timeline updates |
@@ -516,6 +517,7 @@ contains it. Do not use this log as a substitute for the stable changelog.
 
 | Date | Change | Evidence or build |
 |---|---|---|
+| 2026-10-22 | Typed C++ row foundation completed without changing the frozen C API 1.3 contract; automated MSVC/MinGW validation and live Tarnished UI Showcase/Custom Tabs Stress regression passed. | `ERNativeUI.ABI.TypedRows.CurrentProductionCpp`, the API 1.0–1.3 compatibility matrix, and live development-build validation |
 | 2026-10-22 | Manual runtime-alpha packaging and GitHub prerelease workflow added; initial `api-1.4` publication succeeded, with deletion/reuse rehearsal still pending. | [Alpha build policy](../contributing/alpha-builds.md) |
 | 2026-10-22 | Initial reactive-menu roadmap recorded; all API 1.4 workstreams remain proposed. | This roadmap |
 

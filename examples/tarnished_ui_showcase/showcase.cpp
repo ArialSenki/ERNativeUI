@@ -22,7 +22,7 @@ std::atomic<std::uint8_t> g_popup_binary{0};
 std::atomic<std::uint8_t> g_popup_extended{3};
 std::array<std::uint32_t, 32> g_action_numbers{};
 erui::Registration g_registration{};
-erui::RowHandle g_enabled_row{};
+erui::ToggleRow g_enabled_row{};
 
 struct ShowcaseActionState {
     explicit ShowcaseActionState(const wchar_t* name) noexcept
@@ -362,10 +362,10 @@ void ERUI_CALL show_popup_variant(void* context) noexcept {
 }
 
 void toggle_from_code() noexcept {
-    const std::uint8_t next = g_enabled.load(std::memory_order_acquire) ? 0 : 1;
-    if (g_registration.set_value(g_enabled_row, next) == ERUI_OK) {
-        g_enabled.store(next, std::memory_order_release);
-        debug(L"Enabled was changed through Registration::set_value().");
+    const bool next = !g_enabled.load(std::memory_order_acquire);
+    if (g_enabled_row.set_value(next) == ERUI_OK) {
+        g_enabled.store(next ? 1u : 0u, std::memory_order_release);
+        debug(L"Enabled was changed through ToggleRow::set_value().");
     }
 }
 
@@ -658,7 +658,7 @@ DWORD WINAPI initialize(void*) noexcept {
             g_text->row_help);
 
         // TextInput was introduced in API 1.1 and remains part of the current
-        // API 1.2 table. The nearby capability check documents its dependency.
+        // API 1.3 table. The nearby capability check documents its dependency.
         if (menu.supports(erui::Capability::text_input)) {
             auto text_inputs = root.add_submenu(
                 g_text_input->showcase,

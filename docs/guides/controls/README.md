@@ -78,9 +78,12 @@ Use a button when the row performs work but does not itself own a setting.
   exit after a successful commit. Never hot-unload a committed client DLL.
 - Every callback must be `noexcept`. Catch allocation, persistence, and other
   failures inside the callback.
-- A returned `RowHandle` is provider-owned and type-specific. Retain it only
-  when later runtime getters or setters need it. `add_submenu` instead returns
-  a child `Page` builder that is valid only during registration.
+- Ordinary `Page::add_*` calls return a typed row such as `ToggleRow`,
+  `SliderRow`, or `TextInputRow`. Retain it only when later runtime getters or
+  setters need it. Each typed row exposes `handle()` and converts implicitly
+  to the API 1.3 `RowHandle`, preserving existing raw-handle source patterns.
+  `add_submenu` instead returns a child `Page` builder that is valid only
+  during registration.
 - Declare logical rows without assuming how many fit on screen. ERNativeUI
   paginates from the capacity of the live native page.
 
@@ -90,49 +93,49 @@ them short and synchronize state shared with other threads.
 
 ## Reading and changing committed values
 
-Keep the successful `Registration` if code must interact with rows later:
+Keep the typed rows outside the builder when code must interact with them
+later. They become active after their surrounding registration succeeds:
 
 ```cpp
-erui::Registration registration = registration_result.value();
-
 std::uint8_t number{};
-const ERUI_Result value_read = registration.get_value(slider_row, number);
-const ERUI_Result value_write = registration.set_value(slider_row, 75);
+const ERUI_Result value_read = slider_row.get_value(number);
+const ERUI_Result value_write = slider_row.set_value(75);
 
 std::wstring text;
-const ERUI_Result text_read = registration.get_text(text_row, text);
-const ERUI_Result text_write = registration.set_text(text_row, L"Melina");
+const ERUI_Result text_read = text_row.get_text(text);
+const ERUI_Result text_write = text_row.set_text(L"Melina");
 
 erui::Color color{};
-const ERUI_Result color_read = registration.get_color(color_row, color);
+const ERUI_Result color_read = color_row.get_color(color);
 const ERUI_Result color_write =
-    registration.set_color(color_row, {90, 120, 180});
+    color_row.set_color({90, 120, 180});
 
 double decimal{};
-const ERUI_Result numeric_read =
-    registration.get_numeric_slider_value(numeric_row, decimal);
-const ERUI_Result numeric_write =
-    registration.set_numeric_slider_value(numeric_row, -0.5);
+const ERUI_Result numeric_read = numeric_row.get_value(decimal);
+const ERUI_Result numeric_write = numeric_row.set_value(-0.5);
 
 std::uint32_t custom_index{};
-const ERUI_Result custom_read =
-    registration.get_custom_slider_index(custom_row, custom_index);
-const ERUI_Result custom_write =
-    registration.set_custom_slider_index(custom_row, 4);
+const ERUI_Result custom_read = custom_row.get_index(custom_index);
+const ERUI_Result custom_write = custom_row.set_index(4);
 ```
 
 Check each `ERUI_Result` against `ERUI_OK` before using a read value or
 assuming that a write was accepted. The distinct names above make every
 operation visible; real code may return early after the first error.
 
-`get_value` and `set_value` support Toggle, byte Slider, Inline Choice, and
-Popup Choice. Numeric Slider, Custom Slider, TextInput, and ColorPicker use
-their typed methods. Programmatic writes are silent: they update canonical
+`ToggleRow`, `SliderRow`, and `NumericSliderRow` use `get_value` and
+`set_value`. Choice and Custom Slider rows use `get_index` and `set_index`.
+TextInput and ColorPicker provide `get_text`/`set_text` and
+`get_color`/`set_color`. Programmatic writes are silent: they update canonical
 state and presentation but do not pretend the player made a change or invoke
 a change callback.
 
-Destroying the C++ `Registration` value only discards this client-side access
-handle. It does not unregister the committed provider.
+Existing API 1.3 source may still assign any typed row to `erui::RowHandle`
+and use the matching `Registration` getter or setter. The conversion is
+implicit; no host ABI or C API operation changed for this typed C++
+foundation. Destroying the C++ `Registration` value only discards that
+client-side access handle. It does not unregister the committed provider, and
+retained typed rows continue to own the context needed by their operations.
 
 ## Runtime presentation
 

@@ -173,7 +173,8 @@ table and check host support.
 
 - Adding the intended child controls to `parent_page` instead of the returned
   child page.
-- Expecting `add_submenu` to return an `erui::RowHandle` like other controls.
+- Expecting `add_submenu` to return a typed row object. It returns the child
+  `erui::Page`; ordinary row builders return their corresponding typed row.
 - Retaining the child `erui::Page` after registration and trying to add rows
   dynamically.
 - Expecting `enabled = false` to render a disabled navigation row.

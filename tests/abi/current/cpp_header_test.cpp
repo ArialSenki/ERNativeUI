@@ -6,11 +6,18 @@
 #include <limits>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace {
 
 #if defined(ERUI_API_VERSION_1_1)
+void button_action() noexcept {}
 void text_changed(const erui::TextInputChange&) noexcept {}
+void stateful_text_changed(
+    unsigned& calls,
+    const erui::TextInputChange&) noexcept {
+    ++calls;
+}
 void color_changed(const erui::ColorPickerChange&) noexcept {}
 void stateful_color_changed(
     unsigned& calls,
@@ -37,6 +44,391 @@ void stateful_custom_slider_changed(
     ++calls;
 }
 #endif
+
+template <typename T, typename = void>
+struct has_edit : std::false_type {};
+
+template <typename T>
+struct has_edit<T, std::void_t<decltype(std::declval<const T&>().edit())>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_set_value : std::false_type {};
+
+template <typename T>
+struct has_set_value<T, std::void_t<decltype(&T::set_value)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_get_value : std::false_type {};
+
+template <typename T>
+struct has_get_value<T, std::void_t<decltype(&T::get_value)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_set_index : std::false_type {};
+
+template <typename T>
+struct has_set_index<T, std::void_t<decltype(&T::set_index)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_get_index : std::false_type {};
+
+template <typename T>
+struct has_get_index<T, std::void_t<decltype(&T::get_index)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_set_text : std::false_type {};
+
+template <typename T>
+struct has_set_text<T, std::void_t<decltype(&T::set_text)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_get_text : std::false_type {};
+
+template <typename T>
+struct has_get_text<T, std::void_t<decltype(&T::get_text)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_set_color : std::false_type {};
+
+template <typename T>
+struct has_set_color<T, std::void_t<decltype(&T::set_color)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_get_color : std::false_type {};
+
+template <typename T>
+struct has_get_color<T, std::void_t<decltype(&T::get_color)>>
+    : std::true_type {};
+
+template <typename... Rows>
+struct no_cross_row_conversions : std::true_type {};
+
+template <typename Head, typename... Tail>
+struct no_cross_row_conversions<Head, Tail...>
+    : std::bool_constant<
+          ((!std::is_convertible_v<Head, Tail> &&
+               !std::is_convertible_v<Tail, Head> &&
+               !std::is_constructible_v<Head, Tail> &&
+               !std::is_constructible_v<Tail, Head> &&
+               !std::is_assignable_v<Head&, Tail> &&
+               !std::is_assignable_v<Tail&, Head>) && ...) &&
+          no_cross_row_conversions<Tail...>::value> {};
+
+template <typename T>
+constexpr bool typed_row_value_contract =
+    std::is_base_of_v<erui::RowRef, T> &&
+    std::is_final_v<T> &&
+    !std::is_polymorphic_v<T> &&
+    std::is_nothrow_default_constructible_v<T> &&
+    std::is_nothrow_copy_constructible_v<T> &&
+    std::is_nothrow_move_constructible_v<T> &&
+    std::is_nothrow_copy_assignable_v<T> &&
+    std::is_nothrow_move_assignable_v<T> &&
+    std::is_convertible_v<T, erui::RowHandle> &&
+    !std::is_constructible_v<T, erui::RowHandle> &&
+    sizeof(T) == sizeof(erui::RowRef);
+
+using ButtonReturn = decltype(std::declval<erui::Page&>().add_button(
+    std::declval<std::wstring_view>(),
+    std::declval<std::wstring_view>(),
+    std::declval<erui::ButtonCallback>()));
+using StaticButtonReturn = decltype(
+    std::declval<erui::Page&>().add_button<&button_action>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>()));
+using ToggleReturn = decltype(std::declval<erui::Page&>().add_toggle(
+    std::declval<std::wstring_view>(),
+    std::declval<std::wstring_view>(),
+    std::declval<std::uint8_t>()));
+using SliderReturn = decltype(std::declval<erui::Page&>().add_slider(
+    std::declval<std::wstring_view>(),
+    std::declval<std::wstring_view>(),
+    std::declval<const erui::SliderOptions&>()));
+using NumericSliderReturn = decltype(
+    std::declval<erui::Page&>().add_slider(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::NumericSliderOptions&>()));
+using StaticNumericSliderReturn = decltype(
+    std::declval<erui::Page&>().add_slider<&numeric_slider_changed>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::NumericSliderOptions&>()));
+using StatefulNumericSliderReturn = decltype(
+    std::declval<erui::Page&>().add_slider<
+        &stateful_numeric_slider_changed>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::NumericSliderOptions&>(),
+        std::declval<unsigned&>()));
+using CustomSliderReturn = decltype(
+    std::declval<erui::Page&>().add_custom_slider(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::CustomSliderOptions&>()));
+using StaticCustomSliderReturn = decltype(
+    std::declval<erui::Page&>().add_custom_slider<&custom_slider_changed>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::CustomSliderOptions&>()));
+using StatefulCustomSliderReturn = decltype(
+    std::declval<erui::Page&>().add_custom_slider<
+        &stateful_custom_slider_changed>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::CustomSliderOptions&>(),
+        std::declval<unsigned&>()));
+using InlineChoiceReturn = decltype(
+    std::declval<erui::Page&>().add_inline_choice(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::ChoiceOptions&>()));
+using PopupChoiceReturn = decltype(
+    std::declval<erui::Page&>().add_popup_choice(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::ChoiceOptions&>()));
+using TextInputReturn = decltype(
+    std::declval<erui::Page&>().add_text_input(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::TextInputOptions&>()));
+using StaticTextInputReturn = decltype(
+    std::declval<erui::Page&>().add_text_input<&text_changed>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::TextInputOptions&>()));
+using StatefulTextInputReturn = decltype(
+    std::declval<erui::Page&>().add_text_input<&stateful_text_changed>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::TextInputOptions&>(),
+        std::declval<unsigned&>()));
+using ColorPickerReturn = decltype(
+    std::declval<erui::Page&>().add_color_picker(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::ColorPickerOptions&>()));
+using StaticColorPickerReturn = decltype(
+    std::declval<erui::Page&>().add_color_picker<&color_changed>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::ColorPickerOptions&>()));
+using StatefulColorPickerReturn = decltype(
+    std::declval<erui::Page&>().add_color_picker<&stateful_color_changed>(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>(),
+        std::declval<const erui::ColorPickerOptions&>(),
+        std::declval<unsigned&>()));
+
+static_assert(std::is_same_v<ButtonReturn, erui::ButtonRow>);
+static_assert(std::is_same_v<StaticButtonReturn, erui::ButtonRow>);
+static_assert(std::is_same_v<ToggleReturn, erui::ToggleRow>);
+static_assert(std::is_same_v<SliderReturn, erui::SliderRow>);
+static_assert(std::is_same_v<NumericSliderReturn, erui::NumericSliderRow>);
+static_assert(std::is_same_v<
+    StaticNumericSliderReturn, erui::NumericSliderRow>);
+static_assert(std::is_same_v<
+    StatefulNumericSliderReturn, erui::NumericSliderRow>);
+static_assert(std::is_same_v<CustomSliderReturn, erui::CustomSliderRow>);
+static_assert(std::is_same_v<
+    StaticCustomSliderReturn, erui::CustomSliderRow>);
+static_assert(std::is_same_v<
+    StatefulCustomSliderReturn, erui::CustomSliderRow>);
+static_assert(std::is_same_v<InlineChoiceReturn, erui::InlineChoiceRow>);
+static_assert(std::is_same_v<PopupChoiceReturn, erui::PopupChoiceRow>);
+static_assert(std::is_same_v<TextInputReturn, erui::TextInputRow>);
+static_assert(std::is_same_v<StaticTextInputReturn, erui::TextInputRow>);
+static_assert(std::is_same_v<StatefulTextInputReturn, erui::TextInputRow>);
+static_assert(std::is_same_v<ColorPickerReturn, erui::ColorPickerRow>);
+static_assert(std::is_same_v<StaticColorPickerReturn, erui::ColorPickerRow>);
+static_assert(std::is_same_v<
+    StatefulColorPickerReturn, erui::ColorPickerRow>);
+static_assert(std::is_same_v<
+    decltype(std::declval<erui::Page&>().add_submenu(
+        std::declval<std::wstring_view>(),
+        std::declval<std::wstring_view>())),
+    erui::Page>);
+
+static_assert(!std::is_polymorphic_v<erui::RowRef>);
+static_assert(!std::has_virtual_destructor_v<erui::RowRef>);
+static_assert(sizeof(erui::RowRef) <= sizeof(void*) * 3u);
+static_assert(typed_row_value_contract<erui::ButtonRow>);
+static_assert(typed_row_value_contract<erui::ToggleRow>);
+static_assert(typed_row_value_contract<erui::SliderRow>);
+static_assert(typed_row_value_contract<erui::NumericSliderRow>);
+static_assert(typed_row_value_contract<erui::CustomSliderRow>);
+static_assert(typed_row_value_contract<erui::InlineChoiceRow>);
+static_assert(typed_row_value_contract<erui::PopupChoiceRow>);
+static_assert(typed_row_value_contract<erui::TextInputRow>);
+static_assert(typed_row_value_contract<erui::ColorPickerRow>);
+static_assert(no_cross_row_conversions<
+    erui::ButtonRow,
+    erui::ToggleRow,
+    erui::SliderRow,
+    erui::NumericSliderRow,
+    erui::CustomSliderRow,
+    erui::InlineChoiceRow,
+    erui::PopupChoiceRow,
+    erui::TextInputRow,
+    erui::ColorPickerRow>::value);
+
+static_assert(!has_edit<erui::ButtonRow>::value);
+static_assert(!has_edit<erui::ToggleRow>::value);
+static_assert(!has_edit<erui::SliderRow>::value);
+static_assert(!has_edit<erui::NumericSliderRow>::value);
+static_assert(!has_edit<erui::CustomSliderRow>::value);
+static_assert(!has_edit<erui::InlineChoiceRow>::value);
+static_assert(!has_edit<erui::PopupChoiceRow>::value);
+static_assert(!has_edit<erui::TextInputRow>::value);
+static_assert(!has_edit<erui::ColorPickerRow>::value);
+
+static_assert(!has_set_value<erui::ButtonRow>::value);
+static_assert(!has_get_value<erui::ButtonRow>::value);
+static_assert(!has_set_index<erui::ButtonRow>::value);
+static_assert(!has_get_index<erui::ButtonRow>::value);
+static_assert(!has_set_text<erui::ButtonRow>::value);
+static_assert(!has_get_text<erui::ButtonRow>::value);
+static_assert(!has_set_color<erui::ButtonRow>::value);
+static_assert(!has_get_color<erui::ButtonRow>::value);
+static_assert(has_set_value<erui::ToggleRow>::value);
+static_assert(has_get_value<erui::ToggleRow>::value);
+static_assert(!has_get_index<erui::ToggleRow>::value);
+static_assert(!has_get_text<erui::ToggleRow>::value);
+static_assert(!has_get_color<erui::ToggleRow>::value);
+static_assert(has_set_value<erui::SliderRow>::value);
+static_assert(has_get_value<erui::SliderRow>::value);
+static_assert(!has_set_index<erui::SliderRow>::value);
+static_assert(!has_get_index<erui::SliderRow>::value);
+static_assert(!has_set_text<erui::SliderRow>::value);
+static_assert(!has_get_text<erui::SliderRow>::value);
+static_assert(!has_set_color<erui::SliderRow>::value);
+static_assert(!has_get_color<erui::SliderRow>::value);
+static_assert(has_set_value<erui::NumericSliderRow>::value);
+static_assert(has_get_value<erui::NumericSliderRow>::value);
+static_assert(!has_set_index<erui::NumericSliderRow>::value);
+static_assert(!has_get_index<erui::NumericSliderRow>::value);
+static_assert(!has_set_text<erui::NumericSliderRow>::value);
+static_assert(!has_get_text<erui::NumericSliderRow>::value);
+static_assert(!has_set_color<erui::NumericSliderRow>::value);
+static_assert(!has_get_color<erui::NumericSliderRow>::value);
+static_assert(!has_set_index<erui::ToggleRow>::value);
+static_assert(!has_set_text<erui::ToggleRow>::value);
+static_assert(!has_set_color<erui::ToggleRow>::value);
+static_assert(has_set_index<erui::CustomSliderRow>::value);
+static_assert(has_get_index<erui::CustomSliderRow>::value);
+static_assert(!has_set_text<erui::CustomSliderRow>::value);
+static_assert(!has_get_text<erui::CustomSliderRow>::value);
+static_assert(!has_set_color<erui::CustomSliderRow>::value);
+static_assert(!has_get_color<erui::CustomSliderRow>::value);
+static_assert(has_set_index<erui::InlineChoiceRow>::value);
+static_assert(has_get_index<erui::InlineChoiceRow>::value);
+static_assert(!has_set_text<erui::InlineChoiceRow>::value);
+static_assert(!has_get_text<erui::InlineChoiceRow>::value);
+static_assert(!has_set_color<erui::InlineChoiceRow>::value);
+static_assert(!has_get_color<erui::InlineChoiceRow>::value);
+static_assert(has_set_index<erui::PopupChoiceRow>::value);
+static_assert(has_get_index<erui::PopupChoiceRow>::value);
+static_assert(!has_set_text<erui::PopupChoiceRow>::value);
+static_assert(!has_get_text<erui::PopupChoiceRow>::value);
+static_assert(!has_set_color<erui::PopupChoiceRow>::value);
+static_assert(!has_get_color<erui::PopupChoiceRow>::value);
+static_assert(has_set_text<erui::TextInputRow>::value);
+static_assert(has_get_text<erui::TextInputRow>::value);
+static_assert(!has_set_index<erui::TextInputRow>::value);
+static_assert(!has_get_index<erui::TextInputRow>::value);
+static_assert(!has_set_color<erui::TextInputRow>::value);
+static_assert(!has_get_color<erui::TextInputRow>::value);
+static_assert(has_set_color<erui::ColorPickerRow>::value);
+static_assert(has_get_color<erui::ColorPickerRow>::value);
+static_assert(!has_set_index<erui::ColorPickerRow>::value);
+static_assert(!has_get_index<erui::ColorPickerRow>::value);
+static_assert(!has_set_text<erui::ColorPickerRow>::value);
+static_assert(!has_get_text<erui::ColorPickerRow>::value);
+static_assert(!has_set_value<erui::CustomSliderRow>::value);
+static_assert(!has_get_value<erui::CustomSliderRow>::value);
+static_assert(!has_set_value<erui::InlineChoiceRow>::value);
+static_assert(!has_get_value<erui::InlineChoiceRow>::value);
+static_assert(!has_set_value<erui::PopupChoiceRow>::value);
+static_assert(!has_get_value<erui::PopupChoiceRow>::value);
+static_assert(!has_set_value<erui::TextInputRow>::value);
+static_assert(!has_get_value<erui::TextInputRow>::value);
+static_assert(!has_set_value<erui::ColorPickerRow>::value);
+static_assert(!has_get_value<erui::ColorPickerRow>::value);
+
+static_assert(std::is_same_v<
+    decltype(&erui::ToggleRow::set_value),
+    ERUI_Result (erui::ToggleRow::*)(bool) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::ToggleRow::get_value),
+    ERUI_Result (erui::ToggleRow::*)(bool&) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::SliderRow::set_value),
+    ERUI_Result (erui::SliderRow::*)(std::uint8_t) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::SliderRow::get_value),
+    ERUI_Result (erui::SliderRow::*)(std::uint8_t&) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::NumericSliderRow::set_value),
+    ERUI_Result (erui::NumericSliderRow::*)(double) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::NumericSliderRow::get_value),
+    ERUI_Result (erui::NumericSliderRow::*)(double&) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::CustomSliderRow::set_index),
+    ERUI_Result (erui::CustomSliderRow::*)(std::uint32_t) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::CustomSliderRow::get_index),
+    ERUI_Result (erui::CustomSliderRow::*)(std::uint32_t&) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::InlineChoiceRow::set_index),
+    ERUI_Result (erui::InlineChoiceRow::*)(std::uint8_t) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::InlineChoiceRow::get_index),
+    ERUI_Result (erui::InlineChoiceRow::*)(std::uint8_t&) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::PopupChoiceRow::set_index),
+    ERUI_Result (erui::PopupChoiceRow::*)(std::uint8_t) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::PopupChoiceRow::get_index),
+    ERUI_Result (erui::PopupChoiceRow::*)(std::uint8_t&) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::TextInputRow::set_text),
+    ERUI_Result (erui::TextInputRow::*)(std::wstring_view) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::TextInputRow::get_text),
+    ERUI_Result (erui::TextInputRow::*)(std::wstring&) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::ColorPickerRow::set_color),
+    ERUI_Result (erui::ColorPickerRow::*)(erui::Color) const noexcept>);
+static_assert(std::is_same_v<
+    decltype(&erui::ColorPickerRow::get_color),
+    ERUI_Result (erui::ColorPickerRow::*)(erui::Color&) const noexcept>);
+
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::ToggleRow&>() ==
+        std::declval<erui::RowHandle>()),
+    bool>);
+static_assert(std::is_same_v<
+    decltype(std::declval<erui::RowHandle>() ==
+        std::declval<const erui::ToggleRow&>()),
+    bool>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::ToggleRow&>() !=
+        std::declval<erui::RowHandle>()),
+    bool>);
+static_assert(std::is_same_v<
+    decltype(std::declval<erui::RowHandle>() !=
+        std::declval<const erui::ToggleRow&>()),
+    bool>);
 
 static_assert(sizeof(ERUI_TextInputDesc) == 96);
 static_assert(offsetof(ERUI_TextInputDesc, maximum_length) == 88);

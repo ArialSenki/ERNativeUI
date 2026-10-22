@@ -21,7 +21,7 @@ This slider represents camera distance from `0.1` through `2.0`, changes by
 ```cpp
 #include <ernativeui/ERNativeUI.hpp>
 
-erui::RowHandle add_camera_distance(erui::Page page) noexcept
+erui::NumericSliderRow add_camera_distance(erui::Page page) noexcept
 {
     erui::NumericSliderOptions options{};
     options.minimum = 0.1;
@@ -50,7 +50,7 @@ the options and text before the call returns. No GFX patch is required.
 The callback-free overload is:
 
 ```cpp
-erui::RowHandle erui::Page::add_slider(
+erui::NumericSliderRow erui::Page::add_slider(
     std::wstring_view label,
     std::wstring_view help_message,
     const erui::NumericSliderOptions& options) noexcept;
@@ -74,7 +74,7 @@ void distance_changed(
     settings.camera_distance = change.value;
 }
 
-erui::RowHandle add_camera_distance(
+erui::NumericSliderRow add_camera_distance(
     erui::Page page,
     ModSettings& settings) noexcept
 {
@@ -177,20 +177,24 @@ It is not a public promise about Elden Ring's private backing byte.
 
 ## Read or change the committed value
 
-Keep the returned `RowHandle` and successful `Registration`:
+Keep the returned `NumericSliderRow`. It becomes active after the surrounding
+registration succeeds:
 
 ```cpp
 double value{};
-const ERUI_Result read_result =
-    registration.get_numeric_slider_value(slider, value);
+const ERUI_Result read_result = slider.get_value(value);
 
-const ERUI_Result write_result =
-    registration.set_numeric_slider_value(slider, 0.8);
+const ERUI_Result write_result = slider.set_value(0.8);
 ```
 
 A programmatic write normalizes the requested value onto the declared step
 sequence, updates the native row asynchronously, and does not invoke the
 player-change callback.
+
+`NumericSliderRow` exposes `handle()` and converts implicitly to
+`erui::RowHandle`. Existing API 1.3 code may therefore continue retaining a
+raw handle and calling `Registration::get_numeric_slider_value` or
+`Registration::set_numeric_slider_value`.
 
 ## Availability
 
@@ -212,8 +216,8 @@ feature that may be absent from the connected host.
 - Declaring more than 256 positions. Increase `step` or reduce the range.
 - Omitting an explicit decimal place when trailing zeroes matter. Set
   `decimal_places = 1` when `3.0` must remain `3.0`.
-- Expecting `set_numeric_slider_value` to imitate player input and invoke the
-  callback. Programmatic writes are intentionally silent.
+- Expecting `NumericSliderRow::set_value` to imitate player input and invoke
+  the callback. Programmatic writes are intentionally silent.
 - Passing temporary callback state to a committed provider.
 
 [Controls index](README.md) |
