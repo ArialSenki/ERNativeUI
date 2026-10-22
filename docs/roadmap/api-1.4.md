@@ -25,10 +25,14 @@ observe a partially applied intermediate menu.
 
 The likely C boundary is one array-based, provider-scoped mutation operation.
 The C++ wrapper can expose the same operation as either a one-control update
-or a batch. The following names are design illustrations, not a committed API:
+or a batch. In these examples, `difficulty` is a `ToggleRow`, while
+`advanced_group` and `expert` are the future contextual group and Collapse
+objects returned by their ordinary builder functions. They retain the
+provider/API context needed to build an edit and still convert to their legacy
+raw handles where one exists:
 
 ```cpp
-difficulty.update()
+difficulty.edit()
     .label(L"Enemy Damage")
     .help(L"Applied by the active balance profile.")
     .commit();
@@ -39,24 +43,44 @@ The equivalent multi-control form keeps every edit in one atomic commit:
 ```cpp
 auto updates = registration.updates();
 
-updates.add(difficulty)
+updates.add(difficulty.edit()
     .label(L"Enemy Damage")
     .help(L"Applied by the active balance profile.")
     .label_color(erui::Color{107, 100, 80})
-    .interactive(profile_loaded);
+    .interactive(profile_loaded));
 
-updates.add(advanced_group)
-    .visible(show_advanced);
+updates.add(advanced_group.edit().visible(show_advanced));
 
-updates.add(expert)
-    .expanded(show_expert);
+updates.add(expert.edit().expanded(show_expert));
 
 updates.commit();
 ```
 
-A control-level `commit()` submits a single-entry batch. The provider-level
-`updates.commit()` submits every added entry as one batch. These are two C++
-conveniences over one host operation, not two update mechanisms.
+Each concrete object's `edit()` creates its corresponding inert draft. For
+example, `ToggleRow::edit()` returns `ToggleRowEdit`, `ColorPickerRow::edit()`
+returns `ColorPickerRowEdit`, and a future `CollapseRow::edit()` returns
+`CollapseRowEdit`. Common presentation operations remain consistent across
+draft types, while semantic operations such as `value(...)`, `color(...)`, or
+`expanded(...)` exist only on the types for which they make sense.
+
+Calling `commit()` on a draft submits it as a single-entry batch. Passing it to
+`updates.add(...)` instead transfers its pending changes into the provider
+batch without publishing anything yet. `updates.commit()` then performs one
+public submission and atomically publishes one coherent generation containing
+every added update. The host may still repaint multiple affected native
+surfaces at their respective safe boundaries.
+
+This keeps the two forms consistent: a mod builds an update from the control
+that owns the state, then chooses whether to commit it individually or group it
+with other updates. The batch is only a collector; it does not expose a second
+control-editing syntax. Pending drafts are move-only, one-shot values and
+become consumed when they are added or committed. Destroying an uncommitted
+draft has no effect; there is no implicit commit.
+
+These edit objects describe the target API, not the first foundation pass.
+The typed row references are introduced and compatibility-tested before any
+public `edit()` method exists. ERNativeUI must not publish an inert edit object
+that cannot yet commit through a complete host operation.
 
 `commit()` means that the complete desired-state update was validated, copied,
 and queued. It does not promise that Scaleform has already repainted before the
@@ -65,13 +89,25 @@ an offscreen page consumes the new generation when it is next materialized.
 The mod receives one atomic logical result without depending on native object
 lifetime or reconstruction details.
 
-Every supplied string must be copied before the client call returns. The live
-menu changes only after the complete batch passes validation. A failure keeps
-the previous published generation intact.
+Every draft setter must own its supplied strings before returning, and
+`updates.add(...)` must consume the complete draft synchronously rather than
+retain references to its temporary expression. The live menu changes only
+after the complete batch passes validation. A failure keeps the previous
+published generation intact. Cross-provider or stale drafts are rejected, and
+the duplicate-target policy must be fixed and tested before the API is frozen.
 
-Callbacks may stage and submit an update, but they must not recursively
-destroy or rebuild the native menu while Elden Ring is dispatching that
-callback. Publication therefore occurs asynchronously at a proven safe point.
+Submitting either a one-row edit or a batch from any ERNativeUI client callback
+is a required API 1.4 use case. Callback-originated submission must be safe
+regardless of whether that callback arrived through a native UI call or the
+host's polling path.
+
+`commit()` validates and copies the complete request before returning, then
+queues the accepted generation. It must not recursively destroy, rebuild, or
+repaint the native menu while Elden Ring or the host is dispatching the
+callback. The current callback finishes against the generation with which it
+started; publication and any focus relocation occur later at a proven UI-safe
+boundary. A successful return therefore means accepted for publication, not
+already visible on screen.
 
 ### Mutable row presentation
 
@@ -131,6 +167,11 @@ auto expert = advanced.add_collapse(L"Expert");
 expert.add(frame_pacing);
 expert.add(shader_cache);
 ```
+
+When introduced, the direct state API should use `collapse()`, `expand()`, and
+`set_expanded(bool)`. It should not use `set_value(bool)`, because a bare
+boolean does not communicate whether `true` means collapsed or expanded. The
+typed edit draft uses `expanded(bool)` consistently with that vocabulary.
 
 The hierarchy is declared during registration and remains acyclic: one child
 has at most one parent, and runtime commits change state rather than create or
@@ -197,25 +238,149 @@ content, and the client DLL remain process-lifetime objects.
 An ordinary row callback—including a Toggle callback—may request the tab
 visibility change. Stock game tabs are outside the client visibility API.
 
+## Required development sequence
+
+The order is part of the compatibility design, not merely a scheduling
+preference:
+
+1. Freeze the exact published API 1.3 headers and prove frozen 1.3 clients
+   against the current host.
+2. Introduce the typed C++ row-reference foundation over the unchanged API 1.3
+   C table, then rebuild and live-test the examples. No `edit()` object is
+   exposed in this pass.
+3. Add immutable model generations and the first complete mutation operation.
+   Only this step needs a new API 1.4 C table and type-specific edit drafts.
+4. Build presentation changes, conditional topology, repagination, Collapse,
+   and tab visibility on that proven mutation foundation.
+
+No public header is changed for the typed-row work until the API 1.3 release
+fixture is complete. Runtime behavior in step 2 must be indistinguishable from
+API 1.3; any menu, input, callback, close/reopen, or navigation difference is a
+regression rather than an expected consequence of the wrapper improvement.
+
 ### Compatibility constraints
 
-API 1.4 remains append-only. Existing API 1.0–1.3 functions, descriptors, and
-raw row/page handles cannot change shape or meaning. New Group, Collapse, and
-update handles must be additive, and the C boundary must use sized records,
-reserved fields, and explicit field-presence flags so a complete batch can be
-validated before publication.
+The strict-C boundary remains append-only. Existing API 1.0–1.3 function
+tables, descriptors, and raw row/page handles cannot change shape or meaning.
+When the first new host operation is ready, Group, Collapse, and edit records
+must be added through an API 1.4 table using sized structures, reserved fields,
+and explicit field-presence flags so a complete batch can be validated before
+publication.
 
-The C++ wrapper may add friendly control references to support `update()` and
-`updates.add(...)`, but existing raw-handle client source must continue to
-compile. The exact wrapper acquisition syntax therefore remains provisional
-until source-compatibility tests exist.
+The typed-row foundation does not itself require a new C operation. During
+that milestone, `erui.h`, `ERUI_API_VERSION_CURRENT`, the exported host table,
+and runtime negotiation remain at API 1.3. The `api-1.4` branch and alpha name
+identify development toward 1.4; they do not justify advertising a C API 1.4
+table before one exists. The C boundary moves to 1.4 only when the first
+complete new host capability is implemented and tested.
+
+The API 1.4 C++ wrapper keeps the existing alias unchanged:
+
+```cpp
+using RowHandle = ERUI_RowHandle;
+```
+
+It adds a small non-virtual `RowRef` value base and concrete final row types.
+`Page::add_button`, `Page::add_toggle`, and the other row-building functions
+return `ButtonRow`, `ToggleRow`, `SliderRow`, `NumericSliderRow`,
+`CustomSliderRow`, `InlineChoiceRow`, `PopupChoiceRow`, `TextInputRow`, or
+`ColorPickerRow` as appropriate. The base holds the raw ID plus the
+provider/API context needed by typed operations; it is not an abstract runtime
+interface and it owns no native game object.
+
+```cpp
+class RowRef {
+public:
+    [[nodiscard]] RowHandle handle() const noexcept;
+    [[nodiscard]] bool valid() const noexcept;
+    operator RowHandle() const noexcept;
+};
+
+class ToggleRow final : public RowRef {
+public:
+    ERUI_Result set_value(bool value) const noexcept;
+    ERUI_Result get_value(bool& value) const noexcept;
+};
+
+class ColorPickerRow final : public RowRef {
+public:
+    ERUI_Result set_color(Color value) const noexcept;
+    ERUI_Result get_color(Color& value) const noexcept;
+};
+```
+
+The foundation maps row types to the semantic operations already supported by
+the API 1.3 host:
+
+| Returned type | Typed operation |
+|---|---|
+| `ButtonRow` | No programmatic activation; common identity only |
+| `ToggleRow` | `set_value(bool)` and `get_value(...)` |
+| `SliderRow` | Byte-valued `set_value(...)` and `get_value(...)` |
+| `NumericSliderRow` | Numeric `set_value(...)` and `get_value(...)` |
+| `CustomSliderRow` | `set_index(...)` and `get_index(...)` |
+| `InlineChoiceRow` | `set_index(...)` and `get_index(...)` |
+| `PopupChoiceRow` | `set_index(...)` and `get_index(...)` |
+| `TextInputRow` | `set_text(...)` and `get_text(...)` |
+| `ColorPickerRow` | `set_color(...)` and `get_color(...)` |
+
+Every concrete row is default-constructible to an invalid value, cheap to copy
+and move, and safe to retain for the provider's process lifetime. It must keep
+stable provider/API context rather than point at a temporary `Page`, draft, or
+`Registration` wrapper. Type-specific getters and setters forward to existing
+API 1.3 operations; they add C++ type safety and convenience without changing
+host behavior. `ButtonRow` exposes only common identity/presentation behavior
+and must not invent a method that programmatically invokes its callback.
+
+The implicit conversion operator—not a raw-handle-only constructor—is what
+preserves assignments to existing `RowHandle` variables and calls to existing
+functions that accept them. Comparisons with `ERUI_INVALID_ROW` must also
+remain unambiguous; dedicated row-reference/`RowHandle` comparisons should be
+provided rather than left to incidental compiler conversion behavior.
+
+This makes the ordinary API 1.3 source patterns continue to compile while
+letting code that used `auto` acquire the typed API 1.4 wrapper naturally:
+
+```cpp
+auto difficulty = page.add_toggle(/* ... */);      // ToggleRow
+RowHandle raw = page.add_toggle(/* ... */);        // Still valid; remains raw
+registration.set_value(difficulty, 1);             // Converts to RowHandle
+difficulty.set_value(true);                        // Typed convenience
+```
+
+The reverse conversion is deliberately contextual. A bare `RowHandle` does
+not identify the provider or negotiated API table required to submit an edit,
+so it must not silently construct a usable typed row by itself. Contextual
+reacquisition from a retained raw handle may be designed later if a real use
+case requires it; any such API must require the owning registration and the
+expected row type.
+
+`Page::add_submenu` remains unchanged during this foundation pass because it
+returns a child `Page` as well as creating a row. A richer submenu/container
+object belongs with the Group and recursive Collapse design, not in a nominal
+row-return-type conversion.
+
+The later mutation layer adds a type-specific edit draft to each concrete row:
+`ButtonRowEdit`, `ToggleRowEdit`, `SliderRowEdit`, `NumericSliderRowEdit`,
+`CustomSliderRowEdit`, `InlineChoiceRowEdit`, `PopupChoiceRowEdit`,
+`TextInputRowEdit`, `ColorPickerRowEdit`, and `CollapseRowEdit`. Common draft
+behavior may be factored internally without exposing one untyped public edit
+object. No `edit()` member is published in the typed-row foundation milestone.
+
+Already-compiled API 1.3 clients remain binary-compatible and continue using
+the frozen API 1.3 table. Most API 1.3 C++ source also recompiles unchanged.
+Only code that depends on the exact return type—for example `decltype`, a
+pointer-to-member signature, or template overload resolution—needs attention.
+These cases require focused compatibility tests and a permanent, concise
+`1.3-to-1.4` migration guide before the API is frozen.
 
 ## Workstream status
 
 | Workstream | Current status | Required exit evidence |
 |---|---|---|
-| Freeze the shipped API 1.3 ABI fixture | Proposed; mandatory first gate | Headers recovered from `ERNativeUI-v1.3.0`, immutable hash/layout fixture, and old-client/current-host tests |
-| Update batch and generation model | Proposed | Unit-tested atomic validation, copy semantics, coalescing, failure rollback, and thread ownership |
+| Freeze the shipped API 1.3 ABI fixture | Next; mandatory before any public-header edit | Headers recovered from `ERNativeUI-v1.3.0`, immutable hash/layout fixture, and old-client/current-host tests |
+| Typed C++ row foundation | Designed; blocked by the API 1.3 freeze | Concrete typed rows returned by row builders, preserved raw `RowHandle`, one-way implicit raw conversion, type-safe forwarding, MSVC/MinGW tests, rebuilt examples, and live regression validation |
+| Update batch and generation model | Proposed | Unit-tested atomic validation, copy semantics, coalescing, failure rollback, thread ownership, and callback-originated commits without reentrancy |
 | Mutable label and help text | Proposed | Live selected/unselected rows, pagination slices, close/reopen, and movie reconstruction |
 | Label color | Proposed; separate research gate | Proven behavior through focus, disable, transitions, and native timeline updates |
 | Runtime interactivity | Proposed | Every admitted row type skips focus and activation while preserving navigation and help semantics |
@@ -223,28 +388,59 @@ until source-compatibility tests exist.
 | Conditional groups and row visibility | Proposed; blocked by update foundation | Correct visible model, active-editor policy, focus relocation, and atomic publication |
 | Dynamic repagination | Proposed; blocked by row visibility | First/middle/last slice changes, navigation rows, provider coexistence, and no stranded pages |
 | Runtime custom-tab visibility | Proposed; blocked by catalogue lifecycle proof | Active-tab fallback, viewport shifts, wrap/dwell/mouse, reopen stress, and icon lifetime |
-| Alpha build pipeline | Implementing; first GitHub publication pending | Manual milestone selection, exact-SHA package provenance, tests, prerelease publication, rollback instructions, and clean host/client mismatch failure |
+| Alpha build pipeline | Implemented; initial manual publication succeeded, deletion/reuse rehearsal pending | Manual milestone selection, exact-SHA package provenance, tests, prerelease publication, rollback instructions, and clean host/client mismatch failure |
 
 ## Milestones
 
 ### R0 — compatibility and alpha foundation
 
 - Freeze API 1.3 from the published 1.3.0 tag before changing public headers.
+- Copy the published headers byte-for-byte, record their provenance and hashes,
+  register the release fixture, and preserve its C/C++ layout assertions.
 - Preserve frozen API 1.0 through 1.3 clients against every development host.
 - Establish the `api-1.4` branch, required Windows x64 CI, alpha provenance,
   and unmistakable unstable-package naming.
 - Keep Release Please, the stable changelog, stable version metadata, and
   Nexus packages on `main` only.
 
-### R1 — immutable model generations
+### R1 — typed C++ row foundation
+
+- Keep `RowHandle` as the raw `ERUI_RowHandle` alias and keep the host's C API
+  version, table, capabilities, and negotiation at API 1.3.
+- Add the non-virtual `RowRef` value base and concrete row types for every
+  ordinary row builder; keep `Page::add_submenu` unchanged.
+- Make typed rows default-invalid, cheap to copy and move, explicit through
+  `handle()`, and implicitly convertible to `RowHandle`.
+- Forward type-specific getters and setters through the existing API 1.3 table
+  while making operations for the wrong row type unavailable at compile time.
+- Do not add `edit()`, edit drafts, Group, Collapse, or a placeholder API 1.4 C
+  table in this milestone.
+- Test exact `add_*` return types, legacy assignment and parameter passing,
+  invalid-handle comparisons, default/copy/move/non-polymorphic traits,
+  context lifetime, failed registration, forwarding, and wrong-method absence.
+- Run the frozen-client/current-host matrix and the wrapper tests with MSVC and
+  MinGW, then rebuild all examples against the same header revision.
+- Deploy the development host and recompiled examples for live regression of
+  callbacks, input, navigation, pagination, custom tabs, and repeated
+  close/reopen. Runtime behavior must remain identical to API 1.3.
+
+### R2 — immutable model generations and typed edits
 
 - Define provider-scoped mutation records and a complete validation pass.
+- Define move-only C++ edit drafts, rvalue-safe fluent setters, synchronous
+  batch ownership, and no implicit commit on destruction.
+- Add type-specific edit drafts to the concrete rows and introduce the API 1.4
+  C table only with the complete host mutation operation behind them.
+- Reject cross-provider and stale drafts, and choose an explicit policy for
+  multiple drafts that target the same control.
+- Exercise individual and batched commits from native-dispatched and
+  host-polled callbacks; neither path may deadlock or publish reentrantly.
 - Build a new immutable logical generation without touching the live one.
 - Publish or reject the generation atomically at a safe boundary.
 - Coalesce multiple changes into one committed generation and expose
   completion/failure without synchronous native reentrancy.
 
-### R2 — presentation-only live changes
+### R3 — presentation-only live changes
 
 - Prove label and help replacement across every supported page lifecycle.
 - Prove runtime interactivity for each admitted row type.
@@ -252,7 +448,7 @@ until source-compatibility tests exist.
 - Publish the first runtime-only alpha only after stable API 1.0–1.3 paths
   pass unchanged.
 
-### R3 — conditional topology and pagination
+### R4 — conditional topology and pagination
 
 - Add groups and row visibility to the logical model.
 - Add the recursive Collapse tree and flatten its effective visible rows.
@@ -261,14 +457,14 @@ until source-compatibility tests exist.
 - Stress repeated expand/collapse updates, callbacks, mouse/controller input,
   and multiple providers before exposing an SDK alpha.
 
-### R4 — custom-tab visibility
+### R5 — custom-tab visibility
 
 - Rebuild the visible logical tab catalogue without unregistering providers.
 - Define deterministic fallback when the active tab becomes hidden.
 - Validate physical viewports of 8, 9, and 10 slots plus overflow, wrapping,
   dwell, mouse selection, fast close/reopen, and icon-resource retirement.
 
-### R5 — stable API candidate
+### R6 — stable API candidate
 
 - Freeze the final append-only API 1.4 table after the last SDK alpha.
 - Complete strict-C/C++ contracts, capability bits, examples, reference,
@@ -314,7 +510,7 @@ contains it. Do not use this log as a substitute for the stable changelog.
 
 | Date | Change | Evidence or build |
 |---|---|---|
-| 2026-10-22 | Manual runtime-alpha packaging and GitHub prerelease workflow added; first GitHub publication remains pending. | [Alpha build policy](../contributing/alpha-builds.md) |
+| 2026-10-22 | Manual runtime-alpha packaging and GitHub prerelease workflow added; initial `api-1.4` publication succeeded, with deletion/reuse rehearsal still pending. | [Alpha build policy](../contributing/alpha-builds.md) |
 | 2026-10-22 | Initial reactive-menu roadmap recorded; all API 1.4 workstreams remain proposed. | This roadmap |
 
 [Roadmap index](README.md) | [Alpha builds](../contributing/alpha-builds.md) |
