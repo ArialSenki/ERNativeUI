@@ -722,6 +722,64 @@ typedef struct ERUI_Utf16View {
 } ERUI_Utf16View;
 
 /*
+ * Opaque RGB color shared by color pickers and styled text. reserved must be
+ * zero. The explicit channels keep Elden Ring's private packed-color
+ * representation out of the public ABI.
+ */
+typedef struct ERUI_Color {
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t reserved;
+} ERUI_Color;
+
+/*
+ * Structured text formatting used by API 1.4 updates. Offsets and lengths are
+ * measured in UTF-16 code units and must not divide a surrogate pair. Spans
+ * must be non-empty, ordered, non-overlapping, and contained by text. Plain
+ * text is represented by a view with span_count == 0.
+ *
+ * Bold and italic request matching font faces from the effective Scaleform
+ * font configuration. They are intentionally preserved in the ABI even when
+ * the active game font does not provide a visibly different face.
+ */
+#define ERUI_STYLED_TEXT_MAX_CODE_UNITS 4096u
+#define ERUI_STYLED_TEXT_MAX_SPANS 256u
+
+typedef uint32_t ERUI_TextStyleFlags;
+enum {
+    ERUI_TEXT_STYLE_CUSTOM_COLOR = 1u << 0,
+    ERUI_TEXT_STYLE_BOLD = 1u << 1,
+    ERUI_TEXT_STYLE_ITALIC = 1u << 2,
+    ERUI_TEXT_STYLE_UNDERLINE = 1u << 3
+};
+
+typedef struct ERUI_TextStyleSpan {
+    uint32_t size;
+    ERUI_TextStyleFlags flags;
+    uint32_t offset;
+    uint32_t length;
+    ERUI_Color color;
+    uint32_t reserved[3];
+} ERUI_TextStyleSpan;
+
+/*
+ * spans points to span_count records separated by span_stride bytes. API 1.4
+ * requires span_stride == sizeof(ERUI_TextStyleSpan), exact descriptor sizes,
+ * zero view flags/reserved fields, and at most ERUI_STYLED_TEXT_MAX_SPANS.
+ * The host copies the text and spans before the API call returns.
+ */
+typedef struct ERUI_StyledTextView {
+    uint32_t size;
+    uint32_t flags;
+    ERUI_Utf16View text;
+    const ERUI_TextStyleSpan* spans;
+    uint32_t span_count;
+    uint32_t span_stride;
+    uint32_t reserved[2];
+} ERUI_StyledTextView;
+
+/*
  * API 1.4 update envelope. A single commit validates and copies the complete
  * batch before publishing it as one logical UI generation. No partial update
  * is published when validation or allocation fails.
@@ -740,7 +798,15 @@ enum {
 typedef uint32_t ERUI_RowUpdateFields;
 enum {
     ERUI_ROW_UPDATE_FIELD_LABEL = 1u << 0,
-    ERUI_ROW_UPDATE_FIELD_HELP = 1u << 1
+    ERUI_ROW_UPDATE_FIELD_HELP = 1u << 1,
+    /*
+     * Overrides the right-hand text inside Button, Popup Choice, and Submenu
+     * controls. The caption must be non-empty. Popup Choice uses this same
+     * field for its selected value, so an override deliberately replaces that
+     * visible value while leaving the logical selection unchanged. Other row
+     * kinds reject caption updates.
+     */
+    ERUI_ROW_UPDATE_FIELD_CAPTION = 1u << 2
 };
 
 typedef struct ERUI_RowUpdateDesc {
@@ -749,8 +815,9 @@ typedef struct ERUI_RowUpdateDesc {
     ERUI_RowHandle row;
     ERUI_RowUpdateFields fields;
     uint32_t reserved0;
-    ERUI_Utf16View label;
-    ERUI_Utf16View help;
+    ERUI_StyledTextView label;
+    ERUI_StyledTextView help;
+    ERUI_StyledTextView caption;
     uint32_t reserved[2];
 } ERUI_RowUpdateDesc;
 
@@ -861,18 +928,6 @@ typedef struct ERUI_TextInputChangeContext {
 typedef void (ERUI_CALL* ERUI_TextInputChangedCallback)(
     void* user_data,
     const ERUI_TextInputChangeContext* context);
-
-/*
- * Native color pickers edit opaque RGB colors. reserved must be zero. The
- * explicit channels keep Elden Ring's private packed-color representation out
- * of the public ABI.
- */
-typedef struct ERUI_Color {
-    uint8_t red;
-    uint8_t green;
-    uint8_t blue;
-    uint8_t reserved;
-} ERUI_Color;
 
 /*
  * Borrowed callback data that expires when the call ends. The host calls

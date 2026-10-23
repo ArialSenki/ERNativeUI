@@ -14,6 +14,12 @@
 - a dedicated choice submenu comparing one inline row with independent native
   popup lists containing two, four, and eight options;
 - a retained `ToggleRow` and programmatic `ToggleRow::set_value` update;
+- a retained intensity `SliderRow` whose label and help update from its
+  callback, with the live percentage interpolated from red to green;
+- an API 1.4 **Label & Help Updates** subpage covering all nine currently
+  editable row types; its first row alternates every label and help message,
+  plus the supported Button and Popup Choice captions, between unmistakable
+  A/B variants;
 - a capability-gated TextInput submenu with the default 16-unit limit and an
   explicit 35-UTF-16-unit field;
 - a nested logical page with 32 generated action rows;
@@ -31,6 +37,61 @@
   only in the native binding screens their actions support;
 - stable nonlocalized action IDs, process-lifetime callbacks,
   `ActionActivation` device-mask diagnostics, and explicit provider storage.
+
+The validation subpage contains Button, Toggle, byte Slider, Numeric Slider,
+Custom Slider, Inline Choice, Popup Choice, TextInput, and ColorPicker rows.
+Press its first row to switch all nine between variants A and B, then focus
+each row to compare its help message. A separate root Button tests the Game
+Options action-widget layout; logical subpages use a different action layout.
+The root Button must show `ROOT BUTTON ROW [A/B]` on the left while its boxed
+plain caption changes between `ROOT CAPTION A` and `ROOT CAPTION B`. The
+subpage Button combines `BUTTON ROW [A/B]` on the left with a styled
+`BUTTON CAPTION [A/B]` on the right. Each of those commits changes label,
+caption, and help together.
+
+Popup Choice shows a styled `VALUE ZERO/ONE/TWO [A/B]` caption while its
+native popup continues to contain the unmodified `VALUE ZERO`, `VALUE ONE`,
+and `VALUE TWO` options. Its selection callback recommits the caption after
+the selected index changes. This makes the contract visible: `caption(...)`
+changes only the closed row's right-hand presentation; it does not change the
+selected index or the popup list. ColorPicker keeps its ordinary swatch, and
+the seven row edit types without a textual control caption do not expose
+`caption(...)`.
+
+For the live regression, leave each variant visible for several seconds,
+move focus across every row, leave and reopen the subpage, switch to another
+System tab and back, and close/reopen System. Open and close the Popup Choice,
+select each of its three values, and open the TextInput and ColorPicker editors
+as well. Labels, captions, and focused help must keep the active A/B variant
+throughout those frame updates and reconstructions.
+
+This matrix also documents the font boundary visible in the effective game
+movie. Color and underline work with the vanilla settings presentation. The
+API can request bold and italic fragments as well, but their visible result
+depends on corresponding faces being present in the effective Scaleform font
+configuration. A compatible configuration may make them visually distinct,
+but that has not yet been validated and ERNativeUI does not patch font
+resources.
+
+The example builds presentation from text and an allowlisted style rather than
+embedding markup:
+
+```cpp
+auto caption = erui::StyledText{}
+    .append(L"Status: ")
+    .append(
+        L"ready",
+        erui::TextStyle{}
+            .color(erui::Color{96, 220, 128})
+            .underline());
+
+button.edit().caption(std::move(caption)).commit();
+```
+
+Existing `label(L"...")`, `caption(L"...")`, and `help(L"...")` calls are
+literal-text APIs; the host escapes their contents before sending them to
+Scaleform. Caption editing is available only on `ButtonRowEdit` and
+`PopupChoiceRowEdit` in this milestone.
 
 The showcase declares semantic defaults, then loads optional overrides from
 `mods/tarnished-showcase/config.ini` beside

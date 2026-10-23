@@ -10,12 +10,14 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
 HMODULE g_module{};
 std::atomic<std::uint8_t> g_enabled{1};
 std::atomic<std::uint8_t> g_intensity{50};
+std::atomic<std::uint8_t> g_label_help_variant{0};
 std::atomic<std::uint8_t> g_inline_preset{1};
 std::atomic<std::uint8_t> g_popup_preset{1};
 std::atomic<std::uint8_t> g_popup_binary{0};
@@ -24,6 +26,27 @@ std::array<std::uint32_t, 32> g_action_numbers{};
 erui::Registration g_registration{};
 erui::ToggleRow g_enabled_row{};
 erui::SliderRow g_intensity_row{};
+erui::ButtonRow g_root_label_help_button{};
+
+struct LabelHelpRows {
+    erui::ButtonRow button{};
+    erui::ToggleRow toggle{};
+    erui::SliderRow slider{};
+    erui::NumericSliderRow numeric_slider{};
+    erui::CustomSliderRow custom_slider{};
+    erui::InlineChoiceRow inline_choice{};
+    erui::PopupChoiceRow popup_choice{};
+    erui::TextInputRow text_input{};
+    erui::ColorPickerRow color_picker{};
+};
+
+LabelHelpRows g_label_help_rows{};
+std::atomic<std::uint8_t> g_label_help_toggle{1};
+std::atomic<std::uint8_t> g_label_help_slider{5};
+std::atomic<std::uint8_t> g_label_help_inline_choice{0};
+std::atomic<std::uint8_t> g_label_help_popup_choice{1};
+constexpr std::array<std::wstring_view, 3> kLabelHelpChoiceValues{
+    L"VALUE ZERO", L"VALUE ONE", L"VALUE TWO"};
 
 struct ShowcaseActionState {
     explicit ShowcaseActionState(const wchar_t* name) noexcept
@@ -46,6 +69,7 @@ struct ColorPickerState {
 
 ColorPickerState g_root_color{{}, {171u, 125u, 99u}};
 ColorPickerState g_subpage_color{{}, {90u, 174u, 63u}};
+ColorPickerState g_label_help_color{{}, {107u, 100u, 80u}};
 
 struct TextInputState {
     std::mutex mutex{};
@@ -54,6 +78,7 @@ struct TextInputState {
 
 TextInputState g_player_note{};
 TextInputState g_extended_note{};
+TextInputState g_label_help_text{};
 
 struct PopupVariant {
     std::wstring label{};
@@ -142,29 +167,219 @@ void ERUI_CALL value_changed(void* context, std::uint8_t value) noexcept {
         value, std::memory_order_release);
 }
 
+constexpr erui::Color intensity_color(std::uint8_t value) noexcept {
+    // Keep both endpoints readable against Elden Ring's dark settings movie:
+    // 0 is warm red, 100 is bright green, and intermediate values are a
+    // linear RGB interpolation between them.
+    const auto progress = static_cast<std::uint32_t>(value);
+    const auto red = 255u - (191u * progress / 100u);
+    const auto green = 64u + (191u * progress / 100u);
+    return {
+        static_cast<std::uint8_t>(red),
+        static_cast<std::uint8_t>(green),
+        64u};
+}
+
+ERUI_Result commit_intensity_presentation(std::uint8_t value) noexcept {
+    wchar_t percentage[16]{};
+    _snwprintf_s(
+        percentage,
+        std::size(percentage),
+        _TRUNCATE,
+        L"%u%%",
+        static_cast<unsigned>(value));
+
+    const erui::TextStyle percentage_style =
+        erui::TextStyle{}.color(intensity_color(value));
+    erui::StyledText label{};
+    label.append(g_text ? g_text->intensity : L"Intensity")
+        .append(L" (")
+        .append(percentage, percentage_style)
+        .append(L")");
+
+    erui::StyledText help{};
+    help.append(L"API 1.4 updated this label and help text at runtime. Current intensity: ")
+        .append(percentage, percentage_style)
+        .append(L".");
+
+    return g_intensity_row.edit()
+        .label(std::move(label))
+        .help(std::move(help))
+        .commit();
+}
+
+erui::StyledText make_variant_label(
+    std::wstring_view row_type,
+    std::uint8_t variant) noexcept {
+    const bool alternate = (variant & 1u) != 0u;
+    const std::wstring_view marker = alternate ? L"[B]" : L"[A]";
+    const erui::TextStyle label_style = erui::TextStyle{}
+        .color(alternate
+            ? erui::Color{96u, 220u, 128u}
+            : erui::Color{218u, 185u, 98u})
+        .underline();
+    erui::StyledText label{};
+    label.append(row_type)
+        .append(L" ROW ")
+        .append(marker, label_style);
+    return label;
+}
+
+erui::StyledText make_variant_help(
+    std::wstring_view row_type,
+    std::uint8_t variant) noexcept {
+    const bool alternate = (variant & 1u) != 0u;
+    const std::wstring_view marker = alternate ? L"[B]" : L"[A]";
+    const erui::TextStyle help_style = erui::TextStyle{}
+        .color(alternate
+            ? erui::Color{96u, 180u, 255u}
+            : erui::Color{255u, 96u, 96u})
+        .underline();
+
+    erui::StyledText help{};
+    help.append(L"Variant ")
+        .append(marker, help_style)
+        .append(L" - ")
+        .append(row_type)
+        .append(L" help text.");
+    return help;
+}
+
+erui::StyledText make_variant_caption(
+    std::wstring_view prefix,
+    std::uint8_t variant) noexcept {
+    const bool alternate = (variant & 1u) != 0u;
+    const std::wstring_view marker = alternate ? L"[B]" : L"[A]";
+    const erui::TextStyle caption_style = erui::TextStyle{}
+        .color(alternate
+            ? erui::Color{96u, 220u, 128u}
+            : erui::Color{218u, 185u, 98u})
+        .underline();
+
+    erui::StyledText caption{};
+    caption.append(prefix)
+        .append(L" ")
+        .append(marker, caption_style);
+    return caption;
+}
+
+template <typename Row>
+ERUI_Result commit_label_help_row(
+    const Row& row,
+    std::wstring_view row_type,
+    std::uint8_t variant) noexcept {
+    if (!row.valid()) return ERUI_INVALID_HANDLE;
+
+    return row.edit()
+        .label(make_variant_label(row_type, variant))
+        .help(make_variant_help(row_type, variant))
+        .commit();
+}
+
+ERUI_Result commit_root_button_presentation(
+    std::uint8_t variant) noexcept {
+    if (!g_root_label_help_button.valid()) return ERUI_INVALID_HANDLE;
+    return g_root_label_help_button.edit()
+        .label(make_variant_label(L"ROOT BUTTON", variant))
+        // This deliberately exercises the literal-text caption overload.
+        .caption((variant & 1u) != 0u
+            ? L"ROOT CAPTION B"
+            : L"ROOT CAPTION A")
+        .help(make_variant_help(L"ROOT BUTTON", variant))
+        .commit();
+}
+
+ERUI_Result commit_button_presentation(std::uint8_t variant) noexcept {
+    if (!g_label_help_rows.button.valid()) return ERUI_INVALID_HANDLE;
+    return g_label_help_rows.button.edit()
+        .label(make_variant_label(L"BUTTON", variant))
+        .caption(make_variant_caption(L"BUTTON CAPTION", variant))
+        .help(make_variant_help(L"BUTTON", variant))
+        .commit();
+}
+
+ERUI_Result commit_popup_choice_presentation(
+    std::uint8_t variant,
+    std::uint8_t selected_index) noexcept {
+    if (!g_label_help_rows.popup_choice.valid()) {
+        return ERUI_INVALID_HANDLE;
+    }
+    if (selected_index >= kLabelHelpChoiceValues.size()) {
+        return ERUI_INVALID_ARGUMENT;
+    }
+    return g_label_help_rows.popup_choice.edit()
+        .label(make_variant_label(L"POPUP CHOICE", variant))
+        // The caption is presentation only. The native selected index and
+        // the three entries shown by the popup remain independent.
+        .caption(make_variant_caption(
+            kLabelHelpChoiceValues[selected_index], variant))
+        .help(make_variant_help(L"POPUP CHOICE", variant))
+        .commit();
+}
+
+ERUI_Result commit_label_help_showcase(std::uint8_t variant) noexcept {
+    ERUI_Result first_failure = ERUI_OK;
+    const auto record = [&](ERUI_Result result, const wchar_t* row_type) {
+        if (result == ERUI_OK) return;
+        if (first_failure == ERUI_OK) first_failure = result;
+
+        wchar_t message[160]{};
+        _snwprintf_s(
+            message,
+            std::size(message),
+            _TRUNCATE,
+            L"Presentation update failed for %ls (result=%u).",
+            row_type,
+            static_cast<unsigned>(result));
+        debug(message);
+    };
+    const auto apply = [&](const auto& row, const wchar_t* row_type) {
+        record(commit_label_help_row(row, row_type, variant), row_type);
+    };
+
+    record(commit_root_button_presentation(variant), L"ROOT BUTTON");
+    record(commit_button_presentation(variant), L"BUTTON");
+    apply(g_label_help_rows.toggle, L"TOGGLE");
+    apply(g_label_help_rows.slider, L"BYTE SLIDER");
+    apply(g_label_help_rows.numeric_slider, L"NUMERIC SLIDER");
+    apply(g_label_help_rows.custom_slider, L"CUSTOM SLIDER");
+    apply(g_label_help_rows.inline_choice, L"INLINE CHOICE");
+    record(commit_popup_choice_presentation(
+        variant,
+        g_label_help_popup_choice.load(std::memory_order_acquire)),
+        L"POPUP CHOICE");
+    apply(g_label_help_rows.text_input, L"TEXT INPUT");
+    apply(g_label_help_rows.color_picker, L"COLOR PICKER");
+    return first_failure;
+}
+
+void toggle_label_help_showcase() noexcept {
+    const std::uint8_t next = static_cast<std::uint8_t>(
+        (g_label_help_variant.fetch_xor(1u, std::memory_order_acq_rel) ^ 1u) &
+        1u);
+    if (commit_label_help_showcase(next) != ERUI_OK) {
+        debug(L"One or more presentation showcase edits were rejected.");
+    }
+}
+
+void ERUI_CALL label_help_popup_choice_changed(
+    void* context,
+    std::uint8_t value) noexcept {
+    value_changed(context, value);
+    if (!g_registration.supports(erui::Capability::updates)) return;
+
+    const ERUI_Result result = commit_popup_choice_presentation(
+        g_label_help_variant.load(std::memory_order_acquire), value);
+    if (result != ERUI_OK) {
+        debug(L"Could not update the Popup Choice selected-value caption.");
+    }
+}
+
 void ERUI_CALL intensity_changed(void* context, std::uint8_t value) noexcept {
     value_changed(context, value);
     if (!g_registration.supports(erui::Capability::updates)) return;
 
-    wchar_t label[96]{};
-    wchar_t help[160]{};
-    _snwprintf_s(
-        label,
-        std::size(label),
-        _TRUNCATE,
-        L"Intensity (%u%%)",
-        static_cast<unsigned>(value));
-    _snwprintf_s(
-        help,
-        std::size(help),
-        _TRUNCATE,
-        L"API 1.4 updated this label and help text at runtime. Current intensity: %u%%.",
-        static_cast<unsigned>(value));
-    const ERUI_Result result = g_intensity_row.edit()
-        .label(label)
-        .help(help)
-        .commit();
-    if (result != ERUI_OK) {
+    if (commit_intensity_presentation(value) != ERUI_OK) {
         debug(L"Could not commit the API 1.4 intensity row edit.");
     }
 }
@@ -438,6 +653,7 @@ DWORD WINAPI initialize(void*) noexcept {
     g_slider_text = &showcase::slider_text(language);
     initialize_popup_variants(*g_text);
     g_player_note.value = L"Tarnished";
+    g_label_help_text.value = L"Editable";
 
     erui::ProviderOptions options{};
     options.provider_id = "tarnished-showcase";
@@ -549,6 +765,126 @@ DWORD WINAPI initialize(void*) noexcept {
             slider,
             &intensity_changed,
             &g_intensity);
+
+        if (menu.supports(erui::Capability::updates)) {
+            // Keep one action-row test directly on Game Options. Its movie
+            // uses a different left-label binding from logical subpages.
+            g_root_label_help_button = root.add_button<
+                &toggle_label_help_showcase>(
+                    L"ROOT CAPTION REGISTERED",
+                    L"Tests API 1.4 presentation on the Game Options action widget.");
+
+            auto label_help = root.add_submenu(
+                L"Label & Help Updates",
+                L"Validates runtime presentation on every editable row type.",
+                L"Label & Help Updates",
+                L"Press the first row, then inspect every label and focused help message.");
+
+            // The first row doubles as the ButtonRow test and the A/B trigger,
+            // keeping this complete matrix to nine physical rows.
+            g_label_help_rows.button = label_help.add_button<
+                &toggle_label_help_showcase>(
+                    L"BUTTON CAPTION REGISTERED",
+                    L"Button registered help.");
+
+            g_label_help_rows.toggle = label_help.add_toggle(
+                L"Toggle registered label",
+                L"Toggle registered help.",
+                g_label_help_toggle.load(std::memory_order_acquire),
+                &value_changed,
+                &g_label_help_toggle);
+
+            erui::SliderOptions label_help_slider{};
+            label_help_slider.minimum = 0;
+            label_help_slider.maximum = 10;
+            label_help_slider.step = 1;
+            label_help_slider.initial_value =
+                g_label_help_slider.load(std::memory_order_acquire);
+            g_label_help_rows.slider = label_help.add_slider(
+                L"Byte Slider registered label",
+                L"Byte Slider registered help.",
+                label_help_slider,
+                &value_changed,
+                &g_label_help_slider);
+
+            if (menu.supports(erui::Capability::numeric_slider)) {
+                erui::NumericSliderOptions numeric{};
+                numeric.minimum = -1.0;
+                numeric.maximum = 1.0;
+                numeric.step = 0.1;
+                numeric.initial_value = 0.0;
+                numeric.decimal_places = 1;
+                g_label_help_rows.numeric_slider =
+                    label_help.add_slider<&numeric_slider_changed>(
+                        L"Numeric Slider registered label",
+                        L"Numeric Slider registered help.",
+                        numeric);
+            }
+
+            if (menu.supports(erui::Capability::custom_slider)) {
+                erui::CustomSliderOptions custom{};
+                custom.value_count = 3;
+                custom.initial_index = 1;
+                custom.format_value =
+                    [](std::uint32_t index, std::uint32_t) -> std::wstring {
+                        constexpr std::array<std::wstring_view, 3> values{
+                            L"Low", L"Medium", L"High"};
+                        return index < values.size()
+                            ? std::wstring(values[index])
+                            : std::wstring{};
+                    };
+                g_label_help_rows.custom_slider =
+                    label_help.add_custom_slider<&custom_slider_changed>(
+                        L"Custom Slider registered label",
+                        L"Custom Slider registered help.",
+                        custom);
+            }
+
+            erui::ChoiceOptions inline_choice{};
+            inline_choice.values = kLabelHelpChoiceValues.data();
+            inline_choice.count = kLabelHelpChoiceValues.size();
+            inline_choice.initial_index =
+                g_label_help_inline_choice.load(std::memory_order_acquire);
+            g_label_help_rows.inline_choice = label_help.add_inline_choice(
+                L"Inline Choice registered label",
+                L"Inline Choice registered help.",
+                inline_choice,
+                &value_changed,
+                &g_label_help_inline_choice);
+
+            erui::ChoiceOptions popup_choice = inline_choice;
+            popup_choice.initial_index =
+                g_label_help_popup_choice.load(std::memory_order_acquire);
+            g_label_help_rows.popup_choice = label_help.add_popup_choice(
+                L"Popup Choice registered label",
+                L"Popup Choice registered help.",
+                popup_choice,
+                &label_help_popup_choice_changed,
+                &g_label_help_popup_choice);
+
+            if (menu.supports(erui::Capability::text_input)) {
+                erui::TextInputOptions text_input{};
+                text_input.initial_value = L"Editable";
+                text_input.placeholder = L"Enter text";
+                g_label_help_rows.text_input =
+                    label_help.add_text_input<&text_input_changed>(
+                        L"Text Input registered label",
+                        L"Text Input registered help.",
+                        text_input,
+                        g_label_help_text);
+            }
+
+            if (menu.supports(erui::Capability::color_picker)) {
+                erui::ColorPickerOptions color_picker{};
+                color_picker.initial_value = {107u, 100u, 80u};
+                g_label_help_rows.color_picker =
+                    label_help.add_color_picker<&color_picker_changed>(
+                        L"Color Picker registered label",
+                        L"Color Picker registered help.",
+                        color_picker,
+                        g_label_help_color);
+            }
+        }
 
         if (menu.supports(erui::Capability::numeric_slider) ||
             menu.supports(erui::Capability::custom_slider)) {
@@ -794,6 +1130,18 @@ DWORD WINAPI initialize(void*) noexcept {
         return 1;
     }
     g_registration = result.value();
+
+    if (g_registration.supports(erui::Capability::updates)) {
+        if (commit_intensity_presentation(
+                g_intensity.load(std::memory_order_acquire)) != ERUI_OK) {
+            debug(L"Could not apply the initial API 1.4 intensity presentation.");
+        }
+        if (commit_label_help_showcase(
+                g_label_help_variant.load(std::memory_order_acquire)) !=
+            ERUI_OK) {
+            debug(L"Could not apply one or more initial row presentations.");
+        }
+    }
     debug(L"Menu registered successfully.");
     return 0;
 }

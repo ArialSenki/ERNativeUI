@@ -41,8 +41,37 @@ ERUI_Utf16View utf16(const wchar_t* value) {
 
 ERUI_Utf16View utf16(std::wstring_view value) {
     ERUI_Utf16View result{};
-    result.data = reinterpret_cast<const std::uint16_t*>(value.data());
+    result.data = value.empty()
+        ? nullptr
+        : reinterpret_cast<const std::uint16_t*>(value.data());
     result.length = static_cast<std::uint32_t>(value.size());
+    return result;
+}
+
+ERUI_TextStyleSpan text_style_span(
+    std::uint32_t offset,
+    std::uint32_t length,
+    ERUI_TextStyleFlags flags,
+    ERUI_Color color = {}) {
+    ERUI_TextStyleSpan result{};
+    result.size = sizeof(result);
+    result.flags = flags;
+    result.offset = offset;
+    result.length = length;
+    result.color = color;
+    return result;
+}
+
+ERUI_StyledTextView styled_text(
+    std::wstring_view text,
+    const ERUI_TextStyleSpan* spans = nullptr,
+    std::uint32_t span_count = 0) {
+    ERUI_StyledTextView result{};
+    result.size = sizeof(result);
+    result.text = utf16(text);
+    result.spans = spans;
+    result.span_count = span_count;
+    result.span_stride = sizeof(ERUI_TextStyleSpan);
     return result;
 }
 
@@ -1499,7 +1528,7 @@ void verify_api_1_4_row_update_contract() {
     unavailable_row_update.size = sizeof(unavailable_row_update);
     unavailable_row_update.row = unavailable_row;
     unavailable_row_update.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
-    unavailable_row_update.label = utf16(L"Rejected");
+    unavailable_row_update.label = styled_text(L"Rejected");
     ERUI_UpdateDesc unavailable_update{};
     unavailable_update.size = sizeof(unavailable_update);
     unavailable_update.kind = ERUI_UPDATE_KIND_ROW;
@@ -1554,8 +1583,8 @@ void verify_api_1_4_row_update_contract() {
 
     ERUI_SliderDesc slider{};
     slider.size = sizeof(slider);
-    slider.label = utf16(L"Original label");
-    slider.help = utf16(L"Original help");
+    slider.label = utf16(L"Initial <label> & value");
+    slider.help = utf16(L"Initial help <&>");
     slider.minimum = 0;
     slider.maximum = 2;
     slider.step = 1;
@@ -1563,15 +1592,364 @@ void verify_api_1_4_row_update_contract() {
     ERUI_RowHandle row{};
     ERUI_TEST_CHECK(registry.add_slider(
         provider_handle, root, &slider, &row) == ERUI_OK);
+
+    ERUI_ToggleDesc companion_toggle{};
+    companion_toggle.size = sizeof(companion_toggle);
+    companion_toggle.label = utf16(L"Companion <plain>");
+    companion_toggle.help = utf16(L"Companion & help");
+    companion_toggle.enabled = 1;
+    ERUI_RowHandle companion_row{};
+    ERUI_TEST_CHECK(registry.add_toggle(
+        provider_handle,
+        root,
+        &companion_toggle,
+        &companion_row) == ERUI_OK);
     ERUI_TEST_CHECK(registry.commit_provider(provider_handle) == ERUI_OK);
 
+    constexpr ERUI_Color kGold{0x6B, 0x64, 0x50, 0};
+    const ERUI_TextStyleSpan companion_label_span = text_style_span(
+        0,
+        9,
+        ERUI_TEXT_STYLE_CUSTOM_COLOR | ERUI_TEXT_STYLE_UNDERLINE,
+        kGold);
+    const ERUI_TextStyleSpan companion_help_span = text_style_span(
+        10,
+        4,
+        ERUI_TEXT_STYLE_BOLD);
+    ERUI_RowUpdateDesc companion_update{};
+    companion_update.size = sizeof(companion_update);
+    companion_update.row = companion_row;
+    companion_update.fields =
+        ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP;
+    companion_update.label = styled_text(
+        L"Companion <styled>", &companion_label_span, 1);
+    companion_update.help = styled_text(
+        L"Companion BOLD help", &companion_help_span, 1);
+    ERUI_UpdateDesc update{};
+    update.size = sizeof(update);
+    update.kind = ERUI_UPDATE_KIND_ROW;
+    update.payload = &companion_update;
+    ERUI_UpdateBatchDesc batch{};
+    batch.size = sizeof(batch);
+    batch.updates = &update;
+    batch.update_count = 1;
+    batch.update_stride = sizeof(update);
+
+    // Duplicate targets make the whole batch invalid.
+    std::array<ERUI_UpdateDesc, 2> duplicates{update, update};
+    batch.updates = duplicates.data();
+    batch.update_count = static_cast<std::uint32_t>(duplicates.size());
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+    batch.updates = &update;
+    batch.update_count = 1;
+
+    // Field bits that are absent require a canonical all-zero styled view.
+    ERUI_RowUpdateDesc noncanonical = companion_update;
+    noncanonical.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
+    noncanonical.help = styled_text(L"Hidden payload");
+    update.payload = &noncanonical;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+    update.payload = &companion_update;
+
+    // A valid styled update accepted before compilation must survive the
+    // preconfiguration queue and become the first fixed-address snapshot.
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+
+    std::unique_ptr<erui::Menu> menu = registry.freeze_and_build();
+    ERUI_TEST_CHECK(menu != nullptr);
+    std::unique_ptr<erui::detail::CompiledMenu> compiled =
+        erui::detail::MenuCompiler::compile(*menu);
+    ERUI_TEST_CHECK(compiled != nullptr);
+    ERUI_TEST_CHECK(compiled->root_page().rows.size() == 2);
+    const erui::detail::CompiledRow& compiled_row =
+        compiled->root_page().rows.front();
+    const erui::detail::CompiledRow& compiled_companion =
+        compiled->root_page().rows[1];
+    ERUI_TEST_CHECK(compiled_row.provider == provider_handle);
+    ERUI_TEST_CHECK(compiled_row.row == row);
+    ERUI_TEST_CHECK(compiled_companion.row == companion_row);
+
+    // Plain registration is encoded before any HTML-mode Scaleform setter
+    // can observe it. This is the first-frame path, independent of updates.
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
+        compiled_row.label_id)) ==
+        L"Initial &lt;label&gt; &amp; value");
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
+        compiled_row.help_id)) ==
+        L"Initial help &lt;&amp;&gt;");
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
+        compiled_companion.label_id)) ==
+        L"<font color=\"#6B6450\"><u>Companion</u></font> "
+        L"&lt;styled&gt;");
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
+        compiled_companion.help_id)) ==
+        L"Companion <b>BOLD</b> help");
+
+    ERUI_TEST_CHECK(erui::detail::configure_row_presentation_state(
+        *compiled));
+    erui::detail::synchronize_pending_row_presentations();
+    ERUI_TEST_CHECK(!erui::detail::row_presentation_view(
+        compiled_row.presentation_slot));
+    const RowPresentationView companion_initial =
+        erui::detail::row_presentation_view(
+            compiled_companion.presentation_slot);
+    ERUI_TEST_CHECK(companion_initial);
+    ERUI_TEST_CHECK(std::wstring(companion_initial.label) ==
+        L"<font color=\"#6B6450\"><u>Companion</u></font> "
+        L"&lt;styled&gt;");
+    ERUI_TEST_CHECK(std::wstring(companion_initial.help) ==
+        L"Companion <b>BOLD</b> help");
+
+    constexpr ERUI_Color kRed{0xFF, 0x40, 0x40, 0};
+    constexpr ERUI_Color kBlue{0x40, 0xA0, 0xFF, 0};
+    const ERUI_TextStyleSpan label_span = text_style_span(
+        7,
+        3,
+        ERUI_TEXT_STYLE_CUSTOM_COLOR |
+            ERUI_TEXT_STYLE_BOLD |
+            ERUI_TEXT_STYLE_UNDERLINE,
+        kRed);
+    const ERUI_TextStyleSpan help_span = text_style_span(
+        5,
+        4,
+        ERUI_TEXT_STYLE_CUSTOM_COLOR | ERUI_TEXT_STYLE_UNDERLINE,
+        kBlue);
     ERUI_RowUpdateDesc row_update{};
     row_update.size = sizeof(row_update);
     row_update.row = row;
     row_update.fields =
         ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP;
-    row_update.label = utf16(L"Updated label");
-    row_update.help = utf16(L"Updated help");
+    row_update.label = styled_text(
+        L"Styled RED & safe", &label_span, 1);
+    row_update.help = styled_text(
+        L"Help BLUE <tag>", &help_span, 1);
+    update.payload = &row_update;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView initial =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    ERUI_TEST_CHECK(initial);
+    ERUI_TEST_CHECK(std::wstring(initial.label) ==
+        L"Styled <font color=\"#FF4040\"><b><u>RED</u></b></font> "
+        L"&amp; safe");
+    ERUI_TEST_CHECK(std::wstring(initial.help) ==
+        L"Help <font color=\"#40A0FF\"><u>BLUE</u></font> "
+        L"&lt;tag&gt;");
+
+    // A plain partial update resets styles for that field while preserving
+    // the untouched field's styled representation.
+    row_update.fields = ERUI_ROW_UPDATE_FIELD_HELP;
+    row_update.label = {};
+    row_update.help = styled_text(L"Live <help> & plain");
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+    const RowPresentationView before_sync =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    ERUI_TEST_CHECK(before_sync.revision == initial.revision);
+    ERUI_TEST_CHECK(std::wstring(before_sync.help) ==
+        L"Help <font color=\"#40A0FF\"><u>BLUE</u></font> "
+        L"&lt;tag&gt;");
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView after_sync =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    ERUI_TEST_CHECK(std::wstring(after_sync.label) ==
+        L"Styled <font color=\"#FF4040\"><b><u>RED</u></b></font> "
+        L"&amp; safe");
+    ERUI_TEST_CHECK(std::wstring(after_sync.help) ==
+        L"Live &lt;help&gt; &amp; plain");
+    ERUI_TEST_CHECK(after_sync.revision > initial.revision);
+
+    row_update.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
+    row_update.label = styled_text(L"Plain <label> & reset");
+    row_update.help = {};
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView plain_label =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    ERUI_TEST_CHECK(std::wstring(plain_label.label) ==
+        L"Plain &lt;label&gt; &amp; reset");
+    ERUI_TEST_CHECK(std::wstring(plain_label.help) ==
+        L"Live &lt;help&gt; &amp; plain");
+
+    // One malformed span rejects the complete multi-row batch. Neither the
+    // already-presented row nor its companion advances to a new revision.
+    ERUI_RowUpdateDesc valid_in_failed_batch{};
+    valid_in_failed_batch.size = sizeof(valid_in_failed_batch);
+    valid_in_failed_batch.row = row;
+    valid_in_failed_batch.fields = ERUI_ROW_UPDATE_FIELD_HELP;
+    valid_in_failed_batch.help = styled_text(L"Must not publish");
+
+    ERUI_TextStyleSpan malformed_span = text_style_span(
+        0, 6, ERUI_TEXT_STYLE_UNDERLINE);
+    malformed_span.reserved[0] = 1;
+    ERUI_RowUpdateDesc malformed_update{};
+    malformed_update.size = sizeof(malformed_update);
+    malformed_update.row = companion_row;
+    malformed_update.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
+    malformed_update.label = styled_text(
+        L"Broken", &malformed_span, 1);
+
+    std::array failed_updates{
+        ERUI_UpdateDesc{
+            sizeof(ERUI_UpdateDesc),
+            ERUI_UPDATE_KIND_ROW,
+            &valid_in_failed_batch,
+            {0, 0},
+        },
+        ERUI_UpdateDesc{
+            sizeof(ERUI_UpdateDesc),
+            ERUI_UPDATE_KIND_ROW,
+            &malformed_update,
+            {0, 0},
+        },
+    };
+    batch.updates = failed_updates.data();
+    batch.update_count = static_cast<std::uint32_t>(failed_updates.size());
+    const std::uint64_t row_revision_before_failure = plain_label.revision;
+    const std::uint64_t companion_revision_before_failure =
+        companion_initial.revision;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView row_after_failure =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    const RowPresentationView companion_after_failure =
+        erui::detail::row_presentation_view(
+            compiled_companion.presentation_slot);
+    ERUI_TEST_CHECK(row_after_failure.revision ==
+        row_revision_before_failure);
+    ERUI_TEST_CHECK(companion_after_failure.revision ==
+        companion_revision_before_failure);
+    ERUI_TEST_CHECK(std::wstring(row_after_failure.help) ==
+        L"Live &lt;help&gt; &amp; plain");
+    ERUI_TEST_CHECK(std::wstring(companion_after_failure.label) ==
+        L"<font color=\"#6B6450\"><u>Companion</u></font> "
+        L"&lt;styled&gt;");
+
+    // Subsequent partial commits prove the rejected batch did not mutate the
+    // registry model behind the unchanged presentation generation.
+    batch.updates = &update;
+    batch.update_count = 1;
+    row_update.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
+    row_update.label = styled_text(L"After failure");
+    row_update.help = {};
+    update.payload = &row_update;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView row_after_recovery =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    ERUI_TEST_CHECK(std::wstring(row_after_recovery.label) ==
+        L"After failure");
+    ERUI_TEST_CHECK(std::wstring(row_after_recovery.help) ==
+        L"Live &lt;help&gt; &amp; plain");
+
+    ERUI_RowUpdateDesc companion_recovery{};
+    companion_recovery.size = sizeof(companion_recovery);
+    companion_recovery.row = companion_row;
+    companion_recovery.fields = ERUI_ROW_UPDATE_FIELD_HELP;
+    companion_recovery.help = styled_text(L"Recovered help");
+    update.payload = &companion_recovery;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView companion_after_recovery =
+        erui::detail::row_presentation_view(
+            compiled_companion.presentation_slot);
+    ERUI_TEST_CHECK(std::wstring(companion_after_recovery.label) ==
+        L"<font color=\"#6B6450\"><u>Companion</u></font> "
+        L"&lt;styled&gt;");
+    ERUI_TEST_CHECK(std::wstring(companion_after_recovery.help) ==
+        L"Recovered help");
+
+    erui::detail::reset_row_presentation_state();
+}
+
+void verify_api_1_4_button_styled_update_before_freeze() {
+    using erui::detail::RowPresentationView;
+    erui::detail::reset_row_presentation_state();
+
+    erui::host::Registry registry{};
+    ERUI_TEST_CHECK(registry.enable_updates_backend());
+    registry.open_registration();
+
+    ERUI_ProviderDesc provider{};
+    provider.size = sizeof(provider);
+    provider.api_version = ERUI_API_VERSION_1_4;
+    provider.owner_module = GetModuleHandleW(nullptr);
+    provider.provider_id = ascii("updates.button.prefreeze");
+    provider.display_name = utf16(L"Button pre-freeze update");
+    ERUI_ProviderHandle provider_handle{};
+    ERUI_PageHandle root{};
+    ERUI_TEST_CHECK(registry.register_provider(
+        ERUI_API_VERSION_1_4,
+        &provider,
+        &provider_handle,
+        &root) == ERUI_OK);
+
+    unsigned activations{};
+    ERUI_ButtonDesc button{};
+    button.size = sizeof(button);
+    button.label = utf16(L"Styled text presentation");
+    button.help = utf16(L"Initial plain help");
+    button.callback = &pressed;
+    button.user_data = &activations;
+    button.enabled = 1;
+    ERUI_RowHandle button_row{};
+    ERUI_TEST_CHECK(registry.add_button(
+        provider_handle,
+        root,
+        &button,
+        &button_row) == ERUI_OK);
+    ERUI_TEST_CHECK(registry.commit_provider(provider_handle) == ERUI_OK);
+
+    constexpr ERUI_Color kGold{218u, 185u, 98u, 0u};
+    constexpr ERUI_Color kBlue{96u, 180u, 255u, 0u};
+    constexpr ERUI_Color kRed{255u, 96u, 96u, 0u};
+    constexpr ERUI_Color kGreen{96u, 220u, 128u, 0u};
+    const std::array label_spans{
+        text_style_span(
+            13,
+            5,
+            ERUI_TEXT_STYLE_CUSTOM_COLOR,
+            kGold),
+        text_style_span(
+            21,
+            9,
+            ERUI_TEXT_STYLE_CUSTOM_COLOR | ERUI_TEXT_STYLE_UNDERLINE,
+            kBlue),
+    };
+    const std::array help_spans{
+        text_style_span(
+            17,
+            7,
+            ERUI_TEXT_STYLE_CUSTOM_COLOR,
+            kRed),
+        text_style_span(
+            43,
+            10,
+            ERUI_TEXT_STYLE_CUSTOM_COLOR | ERUI_TEXT_STYLE_UNDERLINE,
+            kGreen),
+    };
+
+    ERUI_RowUpdateDesc row_update{};
+    row_update.size = sizeof(row_update);
+    row_update.row = button_row;
+    row_update.fields =
+        ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP;
+    row_update.label = styled_text(
+        L"Styled text: COLOR / UNDERLINE",
+        label_spans.data(),
+        static_cast<std::uint32_t>(label_spans.size()));
+    row_update.help = styled_text(
+        L"Fragments can be colored independently and underlined without raw HTML.",
+        help_spans.data(),
+        static_cast<std::uint32_t>(help_spans.size()));
     ERUI_UpdateDesc update{};
     update.size = sizeof(update);
     update.kind = ERUI_UPDATE_KIND_ROW;
@@ -1584,57 +1962,341 @@ void verify_api_1_4_row_update_contract() {
     ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
         ERUI_OK);
 
-    // Duplicate targets make the whole batch invalid.
-    std::array<ERUI_UpdateDesc, 2> duplicates{update, update};
-    batch.updates = duplicates.data();
-    batch.update_count = static_cast<std::uint32_t>(duplicates.size());
-    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
-        ERUI_INVALID_ARGUMENT);
-    batch.updates = &update;
-    batch.update_count = 1;
-
-    // Field bits that are absent require a canonical zero view.
-    ERUI_RowUpdateDesc noncanonical = row_update;
-    noncanonical.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
-    noncanonical.help = utf16(L"Hidden payload");
-    update.payload = &noncanonical;
-    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
-        ERUI_INVALID_ARGUMENT);
-    update.payload = &row_update;
-
     std::unique_ptr<erui::Menu> menu = registry.freeze_and_build();
     ERUI_TEST_CHECK(menu != nullptr);
     std::unique_ptr<erui::detail::CompiledMenu> compiled =
         erui::detail::MenuCompiler::compile(*menu);
     ERUI_TEST_CHECK(compiled != nullptr);
     ERUI_TEST_CHECK(compiled->root_page().rows.size() == 1);
-    const erui::detail::CompiledRow& compiled_row =
+    const erui::detail::CompiledRow& compiled_button =
         compiled->root_page().rows.front();
-    ERUI_TEST_CHECK(compiled_row.provider == provider_handle);
-    ERUI_TEST_CHECK(compiled_row.row == row);
+    ERUI_TEST_CHECK(compiled_button.kind == erui::RowKind::button);
+    ERUI_TEST_CHECK(compiled_button.provider == provider_handle);
+    ERUI_TEST_CHECK(compiled_button.row == button_row);
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
+        compiled_button.label_id)) ==
+        L"Styled text: <font color=\"#DAB962\">COLOR</font> / "
+        L"<font color=\"#60B4FF\"><u>UNDERLINE</u></font>");
+    ERUI_TEST_CHECK(std::wstring(compiled->texts.lookup(
+        compiled_button.help_id)) ==
+        L"Fragments can be <font color=\"#FF6060\">colored</font> "
+        L"independently and <font color=\"#60DC80\"><u>underlined</u>"
+        L"</font> without raw HTML.");
+
     ERUI_TEST_CHECK(erui::detail::configure_row_presentation_state(
         *compiled));
     erui::detail::synchronize_pending_row_presentations();
-    const RowPresentationView initial =
-        erui::detail::row_presentation_view(compiled_row.presentation_slot);
-    ERUI_TEST_CHECK(initial);
-    ERUI_TEST_CHECK(std::wstring(initial.label) == L"Updated label");
-    ERUI_TEST_CHECK(std::wstring(initial.help) == L"Updated help");
+    const RowPresentationView presentation =
+        erui::detail::row_presentation_view(
+            compiled_button.presentation_slot);
+    ERUI_TEST_CHECK(presentation);
+    ERUI_TEST_CHECK(std::wstring(presentation.label) ==
+        std::wstring(compiled->texts.lookup(compiled_button.label_id)));
+    ERUI_TEST_CHECK(std::wstring(presentation.help) ==
+        std::wstring(compiled->texts.lookup(compiled_button.help_id)));
 
-    row_update.fields = ERUI_ROW_UPDATE_FIELD_HELP;
-    row_update.label = {};
-    row_update.help = utf16(L"Live help");
+    erui::detail::reset_row_presentation_state();
+}
+
+void verify_api_1_4_caption_update_contract() {
+    using erui::detail::RowPresentationView;
+    erui::detail::reset_row_presentation_state();
+
+    erui::host::Registry registry{};
+    ERUI_TEST_CHECK(registry.enable_updates_backend());
+    registry.open_registration();
+
+    ERUI_ProviderDesc provider{};
+    provider.size = sizeof(provider);
+    provider.api_version = ERUI_API_VERSION_1_4;
+    provider.owner_module = GetModuleHandleW(nullptr);
+    provider.provider_id = ascii("updates.caption.contract");
+    provider.display_name = utf16(L"Caption update contract");
+    ERUI_ProviderHandle provider_handle{};
+    ERUI_PageHandle root{};
+    ERUI_TEST_CHECK(registry.register_provider(
+        ERUI_API_VERSION_1_4,
+        &provider,
+        &provider_handle,
+        &root) == ERUI_OK);
+
+    unsigned presses{};
+    ERUI_ButtonDesc button{};
+    button.size = sizeof(button);
+    button.label = utf16(L"Button row");
+    button.help = utf16(L"Button help");
+    button.callback = &pressed;
+    button.user_data = &presses;
+    button.enabled = 1;
+    ERUI_RowHandle button_row{};
+    ERUI_TEST_CHECK(registry.add_button(
+        provider_handle, root, &button, &button_row) == ERUI_OK);
+
+    const ERUI_Utf16View choices[] = {
+        utf16(L"Zero"), utf16(L"One"), utf16(L"Two")};
+    ERUI_ChoiceDesc popup{};
+    popup.size = sizeof(popup);
+    popup.label = utf16(L"Popup row");
+    popup.help = utf16(L"Popup help");
+    popup.options = choices;
+    popup.option_count = 3;
+    popup.initial_index = 1;
+    ERUI_RowHandle popup_row{};
+    ERUI_TEST_CHECK(registry.add_popup_choice(
+        provider_handle, root, &popup, &popup_row) == ERUI_OK);
+
+    ERUI_ToggleDesc toggle{};
+    toggle.size = sizeof(toggle);
+    toggle.label = utf16(L"Toggle row");
+    toggle.help = utf16(L"Toggle help");
+    toggle.enabled = 1;
+    ERUI_RowHandle toggle_row{};
+    ERUI_TEST_CHECK(registry.add_toggle(
+        provider_handle, root, &toggle, &toggle_row) == ERUI_OK);
+
+    ERUI_SubmenuDesc submenu{};
+    submenu.size = sizeof(submenu);
+    submenu.label = utf16(L"Submenu row");
+    submenu.help = utf16(L"Submenu help");
+    submenu.page_title = utf16(L"Caption child");
+    submenu.enabled = 1;
+    ERUI_PageHandle child{};
+    ERUI_RowHandle submenu_row{};
+    ERUI_TEST_CHECK(registry.add_submenu(
+        provider_handle,
+        root,
+        &submenu,
+        &child,
+        &submenu_row) == ERUI_OK);
+    ERUI_TEST_CHECK(registry.commit_provider(provider_handle) == ERUI_OK);
+
+    ERUI_UpdateDesc update{};
+    update.size = sizeof(update);
+    update.kind = ERUI_UPDATE_KIND_ROW;
+    ERUI_UpdateBatchDesc batch{};
+    batch.size = sizeof(batch);
+    batch.updates = &update;
+    batch.update_count = 1;
+    batch.update_stride = sizeof(update);
+
+    // The caption-expanded API 1.4 descriptor is larger than the earlier
+    // development preview. Its leading size is rejected before the host
+    // copies the complete current descriptor.
+    alignas(ERUI_RowUpdateDesc) std::array<std::byte, 128> stale_storage{};
+    const std::uint32_t stale_size =
+        static_cast<std::uint32_t>(stale_storage.size());
+    std::memcpy(stale_storage.data(), &stale_size, sizeof(stale_size));
+    update.payload = stale_storage.data();
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+
+    ERUI_RowUpdateDesc noncanonical{};
+    noncanonical.size = sizeof(noncanonical);
+    noncanonical.row = button_row;
+    noncanonical.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
+    noncanonical.label = styled_text(L"Label only");
+    noncanonical.caption = styled_text(L"Hidden caption payload");
+    update.payload = &noncanonical;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+
+    ERUI_RowUpdateDesc empty_caption{};
+    empty_caption.size = sizeof(empty_caption);
+    empty_caption.row = button_row;
+    empty_caption.fields = ERUI_ROW_UPDATE_FIELD_CAPTION;
+    empty_caption.caption = styled_text(L"");
+    update.payload = &empty_caption;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+
+    ERUI_RowUpdateDesc forbidden_caption{};
+    forbidden_caption.size = sizeof(forbidden_caption);
+    forbidden_caption.row = toggle_row;
+    forbidden_caption.fields = ERUI_ROW_UPDATE_FIELD_CAPTION;
+    forbidden_caption.caption = styled_text(L"Not a toggle caption");
+    update.payload = &forbidden_caption;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+
+    constexpr ERUI_Color kGold{0xDAu, 0xB9u, 0x62u, 0u};
+    constexpr ERUI_Color kBlue{0x60u, 0xB4u, 0xFFu, 0u};
+    const ERUI_TextStyleSpan button_span = text_style_span(
+        7,
+        4,
+        ERUI_TEXT_STYLE_CUSTOM_COLOR | ERUI_TEXT_STYLE_UNDERLINE,
+        kGold);
+    const ERUI_TextStyleSpan popup_span = text_style_span(
+        6,
+        4,
+        ERUI_TEXT_STYLE_CUSTOM_COLOR,
+        kBlue);
+
+    ERUI_RowUpdateDesc button_caption{};
+    button_caption.size = sizeof(button_caption);
+    button_caption.row = button_row;
+    button_caption.fields = ERUI_ROW_UPDATE_FIELD_CAPTION;
+    button_caption.caption = styled_text(
+        L"Button GOLD caption", &button_span, 1);
+
+    ERUI_RowUpdateDesc popup_caption{};
+    popup_caption.size = sizeof(popup_caption);
+    popup_caption.row = popup_row;
+    popup_caption.fields = ERUI_ROW_UPDATE_FIELD_CAPTION;
+    popup_caption.caption = styled_text(
+        L"Popup BLUE", &popup_span, 1);
+
+    ERUI_RowUpdateDesc submenu_caption{};
+    submenu_caption.size = sizeof(submenu_caption);
+    submenu_caption.row = submenu_row;
+    submenu_caption.fields = ERUI_ROW_UPDATE_FIELD_CAPTION;
+    submenu_caption.caption = styled_text(L"Open details");
+
+    ERUI_RowUpdateDesc toggle_help{};
+    toggle_help.size = sizeof(toggle_help);
+    toggle_help.row = toggle_row;
+    toggle_help.fields = ERUI_ROW_UPDATE_FIELD_HELP;
+    toggle_help.help = styled_text(L"Updated toggle help");
+
+    std::array valid_updates{
+        ERUI_UpdateDesc{
+            sizeof(ERUI_UpdateDesc),
+            ERUI_UPDATE_KIND_ROW,
+            &button_caption,
+            {0, 0},
+        },
+        ERUI_UpdateDesc{
+            sizeof(ERUI_UpdateDesc),
+            ERUI_UPDATE_KIND_ROW,
+            &popup_caption,
+            {0, 0},
+        },
+        ERUI_UpdateDesc{
+            sizeof(ERUI_UpdateDesc),
+            ERUI_UPDATE_KIND_ROW,
+            &submenu_caption,
+            {0, 0},
+        },
+        ERUI_UpdateDesc{
+            sizeof(ERUI_UpdateDesc),
+            ERUI_UPDATE_KIND_ROW,
+            &toggle_help,
+            {0, 0},
+        },
+    };
+    batch.updates = valid_updates.data();
+    batch.update_count = static_cast<std::uint32_t>(valid_updates.size());
     ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
         ERUI_OK);
-    const RowPresentationView before_sync =
-        erui::detail::row_presentation_view(compiled_row.presentation_slot);
-    ERUI_TEST_CHECK(std::wstring(before_sync.help) == L"Updated help");
+
+    // Kind validation participates in the complete transaction. The valid
+    // Button mutation must not publish when a later Toggle caption is invalid.
+    ERUI_RowUpdateDesc rejected_button_caption = button_caption;
+    rejected_button_caption.caption = styled_text(L"Must not publish");
+    std::array rejected_updates{
+        ERUI_UpdateDesc{
+            sizeof(ERUI_UpdateDesc),
+            ERUI_UPDATE_KIND_ROW,
+            &rejected_button_caption,
+            {0, 0},
+        },
+        ERUI_UpdateDesc{
+            sizeof(ERUI_UpdateDesc),
+            ERUI_UPDATE_KIND_ROW,
+            &forbidden_caption,
+            {0, 0},
+        },
+    };
+    batch.updates = rejected_updates.data();
+    batch.update_count = static_cast<std::uint32_t>(rejected_updates.size());
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+
+    // A later label-only update must carry the established caption override
+    // forward rather than returning that field to native ownership.
+    ERUI_RowUpdateDesc button_label{};
+    button_label.size = sizeof(button_label);
+    button_label.row = button_row;
+    button_label.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
+    button_label.label = styled_text(L"Updated button row");
+    update.payload = &button_label;
+    batch.updates = &update;
+    batch.update_count = 1;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+
+    std::unique_ptr<erui::Menu> menu = registry.freeze_and_build();
+    ERUI_TEST_CHECK(menu != nullptr);
+    std::unique_ptr<erui::detail::CompiledMenu> compiled =
+        erui::detail::MenuCompiler::compile(*menu);
+    ERUI_TEST_CHECK(compiled != nullptr);
+    ERUI_TEST_CHECK(erui::detail::configure_row_presentation_state(
+        *compiled));
     erui::detail::synchronize_pending_row_presentations();
-    const RowPresentationView after_sync =
-        erui::detail::row_presentation_view(compiled_row.presentation_slot);
-    ERUI_TEST_CHECK(std::wstring(after_sync.label) == L"Updated label");
-    ERUI_TEST_CHECK(std::wstring(after_sync.help) == L"Live help");
-    ERUI_TEST_CHECK(after_sync.revision > initial.revision);
+
+    const auto find_row = [&](ERUI_RowHandle handle)
+        -> const erui::detail::CompiledRow* {
+        for (const erui::detail::CompiledPage& page : compiled->pages) {
+            for (const erui::detail::CompiledRow& candidate : page.rows) {
+                if (candidate.row == handle) return &candidate;
+            }
+        }
+        return nullptr;
+    };
+    const erui::detail::CompiledRow* const compiled_button =
+        find_row(button_row);
+    const erui::detail::CompiledRow* const compiled_popup =
+        find_row(popup_row);
+    const erui::detail::CompiledRow* const compiled_submenu =
+        find_row(submenu_row);
+    const erui::detail::CompiledRow* const compiled_toggle =
+        find_row(toggle_row);
+    ERUI_TEST_CHECK(compiled_button && compiled_popup && compiled_submenu &&
+        compiled_toggle);
+
+    const RowPresentationView button_view =
+        erui::detail::row_presentation_view(
+            compiled_button->presentation_slot);
+    const RowPresentationView popup_view =
+        erui::detail::row_presentation_view(
+            compiled_popup->presentation_slot);
+    const RowPresentationView submenu_view =
+        erui::detail::row_presentation_view(
+            compiled_submenu->presentation_slot);
+    const RowPresentationView toggle_view =
+        erui::detail::row_presentation_view(
+            compiled_toggle->presentation_slot);
+    ERUI_TEST_CHECK(button_view && popup_view && submenu_view && toggle_view);
+    ERUI_TEST_CHECK(std::wstring(button_view.label) == L"Updated button row");
+    ERUI_TEST_CHECK(button_view.caption != nullptr);
+    ERUI_TEST_CHECK(std::wstring(button_view.caption) ==
+        L"Button <font color=\"#DAB962\"><u>GOLD</u></font> caption");
+    ERUI_TEST_CHECK(popup_view.caption != nullptr);
+    ERUI_TEST_CHECK(std::wstring(popup_view.caption) ==
+        L"Popup <font color=\"#60B4FF\">BLUE</font>");
+    ERUI_TEST_CHECK(submenu_view.caption != nullptr);
+    ERUI_TEST_CHECK(std::wstring(submenu_view.caption) == L"Open details");
+    ERUI_TEST_CHECK(toggle_view.caption == nullptr);
+    ERUI_TEST_CHECK(std::wstring(toggle_view.help) ==
+        L"Updated toggle help");
+
+    const wchar_t* const stable_popup_caption = popup_view.caption;
+    ERUI_RowUpdateDesc popup_help{};
+    popup_help.size = sizeof(popup_help);
+    popup_help.row = popup_row;
+    popup_help.fields = ERUI_ROW_UPDATE_FIELD_HELP;
+    popup_help.help = styled_text(L"Popup help changed later");
+    update.payload = &popup_help;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView popup_after_help =
+        erui::detail::row_presentation_view(
+            compiled_popup->presentation_slot);
+    ERUI_TEST_CHECK(popup_after_help.caption == stable_popup_caption);
+    ERUI_TEST_CHECK(std::wstring(popup_after_help.caption) ==
+        L"Popup <font color=\"#60B4FF\">BLUE</font>");
+    ERUI_TEST_CHECK(std::wstring(popup_after_help.help) ==
+        L"Popup help changed later");
 
     erui::detail::reset_row_presentation_state();
 }
@@ -1652,6 +2314,8 @@ int main() {
     verify_custom_tab_committed_limit();
     verify_fixed_fifty_custom_tab_stress();
     verify_api_1_4_row_update_contract();
+    verify_api_1_4_button_styled_update_before_freeze();
+    verify_api_1_4_caption_update_contract();
 
     ERUI_Api early_v1{};
     early_v1.size = ERUI_API_V1_0_SIZE;

@@ -28,6 +28,7 @@ struct RowIdentityHash {
 struct PendingSnapshot {
     std::wstring label{};
     std::wstring help{};
+    std::optional<std::wstring> caption{};
     std::uint64_t revision{};
 };
 
@@ -35,10 +36,13 @@ struct Entry {
     RowIdentity identity{};
     std::wstring desired_label{};
     std::wstring desired_help{};
+    std::optional<std::wstring> desired_caption{};
     std::unique_ptr<wchar_t[]> label_buffer{};
     std::unique_ptr<wchar_t[]> help_buffer{};
+    std::unique_ptr<wchar_t[]> caption_buffer{};
     std::uint64_t desired_revision{};
     std::uint64_t applied_revision{};
+    bool applied_caption_override{};
     bool dirty{};
 };
 
@@ -55,7 +59,10 @@ bool valid_snapshot(const RowPresentationUpdate& update) noexcept {
     return update.provider != ERUI_INVALID_PROVIDER &&
         update.row != ERUI_INVALID_ROW && !update.label.empty() &&
         update.label.size() <= row_presentation_max_text_units &&
-        update.help.size() <= row_presentation_max_text_units;
+        update.help.size() <= row_presentation_max_text_units &&
+        (!update.caption.has_value() ||
+            (!update.caption->empty() &&
+             update.caption->size() <= row_presentation_max_text_units));
 }
 
 void copy_to_buffer(
@@ -78,6 +85,7 @@ ERUI_Result submit_row_presentation_updates(
         struct PreparedBuffers {
             std::unique_ptr<wchar_t[]> label{};
             std::unique_ptr<wchar_t[]> help{};
+            std::unique_ptr<wchar_t[]> caption{};
         };
         std::lock_guard lock(g_mutex);
         std::uint64_t revision = g_revision + 1u;
@@ -91,6 +99,7 @@ ERUI_Result submit_row_presentation_updates(
                 staged[RowIdentity{update.provider, update.row}] = {
                     .label = std::move(update.label),
                     .help = std::move(update.help),
+                    .caption = std::move(update.caption),
                     .revision = revision,
                 };
             }
@@ -113,7 +122,8 @@ ERUI_Result submit_row_presentation_updates(
 
         // Allocate only buffers that do not exist yet. Every allocation is
         // completed before publication, preserving all-or-nothing OOM
-        // behavior without churning two 4097-unit buffers on every edit.
+        // behavior without churning worst-case encoded-text buffers on every
+        // edit.
         // This work never occurs at the UI frame boundary.
         std::vector<PreparedBuffers> prepared(updates.size());
         for (std::size_t index = 0; index < updates.size(); ++index) {
@@ -124,6 +134,11 @@ ERUI_Result submit_row_presentation_updates(
             }
             if (!entry.help_buffer) {
                 prepared[index].help = std::make_unique<wchar_t[]>(
+                    row_presentation_max_text_units + 1u);
+            }
+            if (updates[index].caption.has_value() &&
+                !entry.caption_buffer) {
+                prepared[index].caption = std::make_unique<wchar_t[]>(
                     row_presentation_max_text_units + 1u);
             }
         }
@@ -138,8 +153,13 @@ ERUI_Result submit_row_presentation_updates(
             if (!entry.help_buffer) {
                 entry.help_buffer = std::move(prepared[index].help);
             }
+            if (updates[index].caption.has_value() &&
+                !entry.caption_buffer) {
+                entry.caption_buffer = std::move(prepared[index].caption);
+            }
             entry.desired_label = std::move(updates[index].label);
             entry.desired_help = std::move(updates[index].help);
+            entry.desired_caption = std::move(updates[index].caption);
             entry.desired_revision = revision;
             entry.dirty = true;
         }
@@ -196,11 +216,16 @@ bool configure_row_presentation_state(CompiledMenu& menu) noexcept {
                     pending != g_preconfiguration_updates.end()) {
                     entry->desired_label = pending->second.label;
                     entry->desired_help = pending->second.help;
+                    entry->desired_caption = pending->second.caption;
                     entry->desired_revision = pending->second.revision;
                     entry->label_buffer = std::make_unique<wchar_t[]>(
                         row_presentation_max_text_units + 1u);
                     entry->help_buffer = std::make_unique<wchar_t[]>(
                         row_presentation_max_text_units + 1u);
+                    if (entry->desired_caption.has_value()) {
+                        entry->caption_buffer = std::make_unique<wchar_t[]>(
+                            row_presentation_max_text_units + 1u);
+                    }
                     entry->dirty = true;
                     g_pending = true;
                 }
@@ -238,12 +263,22 @@ void synchronize_pending_row_presentations() noexcept {
         if (!entry.label_buffer || !entry.help_buffer ||
             entry.desired_label.empty() ||
             entry.desired_label.size() > row_presentation_max_text_units ||
-            entry.desired_help.size() > row_presentation_max_text_units) {
+            entry.desired_help.size() > row_presentation_max_text_units ||
+            (entry.desired_caption.has_value() &&
+                (!entry.caption_buffer || entry.desired_caption->empty() ||
+                 entry.desired_caption->size() >
+                     row_presentation_max_text_units))) {
             still_pending = true;
             continue;
         }
         copy_to_buffer(entry.desired_label, entry.label_buffer.get());
         copy_to_buffer(entry.desired_help, entry.help_buffer.get());
+        if (entry.desired_caption.has_value()) {
+            copy_to_buffer(
+                *entry.desired_caption, entry.caption_buffer.get());
+        }
+        entry.applied_caption_override =
+            entry.desired_caption.has_value();
         entry.applied_revision = entry.desired_revision;
         entry.dirty = false;
     }
@@ -261,6 +296,9 @@ RowPresentationView row_presentation_view(std::size_t slot) noexcept {
     return {
         .label = entry.label_buffer.get(),
         .help = entry.help_buffer.get(),
+        .caption = entry.applied_caption_override
+            ? entry.caption_buffer.get()
+            : nullptr,
         .revision = entry.applied_revision,
     };
 }

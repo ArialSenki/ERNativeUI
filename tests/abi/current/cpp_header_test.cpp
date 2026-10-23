@@ -53,6 +53,22 @@ struct has_edit<T, std::void_t<decltype(std::declval<const T&>().edit())>>
     : std::true_type {};
 
 template <typename T, typename = void>
+struct has_caption : std::false_type {};
+
+template <typename T>
+struct has_caption<T, std::void_t<decltype(
+    std::declval<T&>().caption(std::declval<std::wstring_view>()))>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct has_caption_template_bypass : std::false_type {};
+
+template <typename T>
+struct has_caption_template_bypass<T, std::void_t<decltype(
+    std::declval<T&>().template caption<erui::ButtonRowEdit>(
+        std::declval<std::wstring_view>()))>> : std::true_type {};
+
+template <typename T, typename = void>
 struct has_set_value : std::false_type {};
 
 template <typename T>
@@ -151,10 +167,49 @@ constexpr bool row_edit_value_contract =
         std::declval<std::wstring_view>())), T&> &&
     std::is_same_v<decltype(std::declval<T&&>().help(
         std::declval<std::wstring_view>())), T&&> &&
+    std::is_same_v<decltype(std::declval<T&>().label(
+        std::declval<const erui::StyledText&>())), T&> &&
+    std::is_same_v<decltype(std::declval<T&&>().label(
+        std::declval<erui::StyledText&&>())), T&&> &&
+    std::is_same_v<decltype(std::declval<T&>().help(
+        std::declval<const erui::StyledText&>())), T&> &&
+    std::is_same_v<decltype(std::declval<T&&>().help(
+        std::declval<erui::StyledText&&>())), T&&> &&
     std::is_same_v<decltype(std::declval<T&>().commit()), ERUI_Result> &&
     noexcept(std::declval<T&>().label(std::declval<std::wstring_view>())) &&
     noexcept(std::declval<T&>().help(std::declval<std::wstring_view>())) &&
+    noexcept(std::declval<T&>().label(
+        std::declval<const erui::StyledText&>())) &&
+    noexcept(std::declval<T&>().help(
+        std::declval<erui::StyledText&&>())) &&
     noexcept(std::declval<T&>().commit());
+
+template <typename T>
+constexpr bool caption_edit_value_contract =
+    std::is_same_v<decltype(std::declval<T&>().caption(
+        std::declval<std::wstring_view>())), T&> &&
+    std::is_same_v<decltype(std::declval<T&&>().caption(
+        std::declval<std::wstring_view>())), T&&> &&
+    std::is_same_v<decltype(std::declval<T&>().caption(
+        std::declval<const erui::StyledText&>())), T&> &&
+    std::is_same_v<decltype(std::declval<T&&>().caption(
+        std::declval<const erui::StyledText&>())), T&&> &&
+    std::is_same_v<decltype(std::declval<T&>().caption(
+        std::declval<erui::StyledText&&>())), T&> &&
+    std::is_same_v<decltype(std::declval<T&&>().caption(
+        std::declval<erui::StyledText&&>())), T&&> &&
+    noexcept(std::declval<T&>().caption(
+        std::declval<std::wstring_view>())) &&
+    noexcept(std::declval<T&&>().caption(
+        std::declval<std::wstring_view>())) &&
+    noexcept(std::declval<T&>().caption(
+        std::declval<const erui::StyledText&>())) &&
+    noexcept(std::declval<T&&>().caption(
+        std::declval<const erui::StyledText&>())) &&
+    noexcept(std::declval<T&>().caption(
+        std::declval<erui::StyledText&&>())) &&
+    noexcept(std::declval<T&&>().caption(
+        std::declval<erui::StyledText&&>()));
 
 using ButtonReturn = decltype(std::declval<erui::Page&>().add_button(
     std::declval<std::wstring_view>(),
@@ -346,6 +401,31 @@ static_assert(row_edit_value_contract<erui::InlineChoiceRowEdit>);
 static_assert(row_edit_value_contract<erui::PopupChoiceRowEdit>);
 static_assert(row_edit_value_contract<erui::TextInputRowEdit>);
 static_assert(row_edit_value_contract<erui::ColorPickerRowEdit>);
+static_assert(has_caption<erui::ButtonRowEdit>::value);
+static_assert(!has_caption<erui::ToggleRowEdit>::value);
+static_assert(!has_caption<erui::SliderRowEdit>::value);
+static_assert(!has_caption<erui::NumericSliderRowEdit>::value);
+static_assert(!has_caption<erui::CustomSliderRowEdit>::value);
+static_assert(!has_caption<erui::InlineChoiceRowEdit>::value);
+static_assert(has_caption<erui::PopupChoiceRowEdit>::value);
+static_assert(!has_caption<erui::TextInputRowEdit>::value);
+static_assert(!has_caption<erui::ColorPickerRowEdit>::value);
+static_assert(caption_edit_value_contract<erui::ButtonRowEdit>);
+static_assert(caption_edit_value_contract<erui::PopupChoiceRowEdit>);
+static_assert(!has_caption_template_bypass<erui::ButtonRowEdit>::value);
+static_assert(!has_caption_template_bypass<erui::ToggleRowEdit>::value);
+static_assert(!has_caption_template_bypass<erui::SliderRowEdit>::value);
+static_assert(!has_caption_template_bypass<
+    erui::NumericSliderRowEdit>::value);
+static_assert(!has_caption_template_bypass<
+    erui::CustomSliderRowEdit>::value);
+static_assert(!has_caption_template_bypass<
+    erui::InlineChoiceRowEdit>::value);
+static_assert(!has_caption_template_bypass<
+    erui::PopupChoiceRowEdit>::value);
+static_assert(!has_caption_template_bypass<erui::TextInputRowEdit>::value);
+static_assert(!has_caption_template_bypass<
+    erui::ColorPickerRowEdit>::value);
 
 static_assert(!has_set_value<erui::ButtonRow>::value);
 static_assert(!has_get_value<erui::ButtonRow>::value);
@@ -614,14 +694,31 @@ static_assert(std::is_same<
 static_assert(!has_legacy_title_screen_text_overload<erui::Menu>::value);
 #endif
 #if defined(ERUI_API_VERSION_1_4)
-static_assert(sizeof(ERUI_RowUpdateDesc) == 64);
+static_assert(sizeof(ERUI_TextStyleSpan) == 32);
+static_assert(sizeof(ERUI_StyledTextView) == 48);
+static_assert(sizeof(ERUI_RowUpdateDesc) == 176);
 static_assert(sizeof(ERUI_UpdateDesc) == 24);
 static_assert(sizeof(ERUI_UpdateBatchDesc) == 32);
+static_assert(std::is_trivially_copyable_v<ERUI_TextStyleSpan>);
+static_assert(std::is_trivially_copyable_v<ERUI_StyledTextView>);
 static_assert(std::is_trivially_copyable_v<ERUI_RowUpdateDesc>);
 static_assert(std::is_trivially_copyable_v<ERUI_UpdateDesc>);
 static_assert(std::is_trivially_copyable_v<ERUI_UpdateBatchDesc>);
 static_assert(static_cast<ERUI_Capabilities>(erui::Capability::updates) ==
     ERUI_CAP_UPDATES);
+static_assert(std::is_same_v<decltype(std::declval<erui::TextStyle&>().color(
+    std::declval<erui::Color>())), erui::TextStyle&>);
+static_assert(std::is_same_v<decltype(erui::TextStyle{}.bold()),
+    erui::TextStyle&&>);
+static_assert(std::is_same_v<decltype(erui::TextStyle{}.italic()),
+    erui::TextStyle&&>);
+static_assert(std::is_same_v<decltype(erui::TextStyle{}.underline()),
+    erui::TextStyle&&>);
+static_assert(std::is_same_v<decltype(std::declval<erui::StyledText&>().append(
+    std::declval<std::wstring_view>())), erui::StyledText&>);
+static_assert(std::is_same_v<decltype(erui::StyledText{}.append(
+    std::declval<std::wstring_view>(),
+    std::declval<erui::TextStyle>())), erui::StyledText&&>);
 static_assert(ERUI_API_V1_4_SIZE == 392u);
 #endif
 #endif
@@ -789,7 +886,24 @@ int main() {
     if (page.valid()) return 34;
     if (ERUI_API_V1_3_SIZE != 384u) return 35;
 #if defined(ERUI_API_VERSION_1_4)
-    if (ERUI_API_V1_4_SIZE != 392u) return 36;
+    erui::StyledText styled{};
+    styled.append(L"Plain ")
+        .append(
+            L"gold",
+            erui::TextStyle{}
+                .color(erui::Color{107u, 100u, 80u})
+                .underline())
+        .append(L" and ")
+        .append(L"bold italic", erui::TextStyle{}.bold().italic());
+    if (styled.text() != L"Plain gold and bold italic") return 36;
+    if (styled.span_count() != 2u) return 37;
+    const erui::TextStyle underline = erui::TextStyle{}.underline();
+    erui::StyledText merged{};
+    merged.append(L"adjacent", underline).append(L" spans", underline);
+    if (merged.text() != L"adjacent spans" || merged.span_count() != 1u) {
+        return 38;
+    }
+    if (ERUI_API_V1_4_SIZE != 392u) return 39;
 #endif
 #endif
 #endif

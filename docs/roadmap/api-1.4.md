@@ -115,18 +115,80 @@ The planned row-level mutations are:
 
 - label text;
 - help text;
-- label color, if native selected, unselected, and disabled states can be
-  preserved reliably; and
+- the right-hand control caption where that control owns text;
+- structured fragments within label, caption, and help text, including color and
+  underline; and
 - runtime interactivity.
 
-An explicit color can be replaced later or reset to the inherited native
-color. The exact color representation remains provisional until the native
+Plain `label(...)` and `help(...)` values remain literal text. ERNativeUI
+escapes characters that have meaning to Scaleform HTML, so a mod does not
+need to sanitize ordinary localized or player-derived strings. Raw HTML is not
+part of the public API.
+
+For deliberate presentation, `erui::StyledText` composes visible text from
+plain fragments and an allowlisted `erui::TextStyle`. A fragment may inherit
+the native appearance or request an opaque RGB color, underline, bold, italic,
+or a combination of those properties. The host validates the fragment ranges,
+escapes every visible fragment, and generates the Scaleform markup itself.
+This permits multiple colors and styles in one label or help message without
+exposing arbitrary movie markup to client mods.
+
+`label(...)` always means the left-hand row label. `caption(...)` means the
+text rendered inside the right-hand control. The first caption-capable C++
+drafts are `ButtonRowEdit` and `PopupChoiceRowEdit`; sliders, Toggle,
+Inline Choice, TextInput, and ColorPicker do not advertise an operation that
+their native control cannot represent safely. Caption values accept the same
+plain or structured text as labels and help messages.
+
+A Popup Choice caption is an explicit display override for its closed row. It
+does not replace the popup entries or selected index, but it does mask the
+ordinary selected-value summary until a future, separately proven reset
+operation is introduced. Captions are therefore non-empty and sticky in the
+initial API 1.4 implementation. Omitting `caption(...)` from a later edit
+preserves the existing override.
+
+```cpp
+auto label = erui::StyledText{}
+    .append(L"Profile: ")
+    .append(
+        L"custom",
+        erui::TextStyle{}
+            .color(erui::Color{107, 100, 80})
+            .underline());
+
+difficulty.edit().label(std::move(label)).commit();
+```
+
+Color and underline are supported by the effective vanilla settings movies.
+Bold and italic requests are represented correctly, but their visible result
+depends on matching font faces being available in the effective Scaleform font
+configuration. ERNativeUI does not patch or replace font resources, so a
+vanilla installation may render those two styles like ordinary text. A
+compatible effective font configuration may make them visually distinct, but
+that configuration has not yet been validated.
+
+Structured text is separate from a future whole-row presentation color. A
+colored fragment controls only the glyphs it contains; it does not replace the
+native selected, unselected, highlighted, or disabled timeline behavior of the
+row itself.
+
+Before presentation work expands, the development showcase must live-validate
+label and help replacement independently on every currently editable row type:
+Button, Toggle, byte Slider, Numeric Slider, Custom Slider, Inline Choice,
+Popup Choice, TextInput, and ColorPicker. The matrix uses explicit A/B variants
+and tests both the Game Options root action layout and the distinct logical-
+subpage action layout. A successful API commit alone is insufficient evidence;
+the changed label and focused help must both remain visible through frame
+updates, focus changes, leaving and reopening the page.
+
+An explicit whole-row color could be replaced later or reset to the inherited
+native color. Its exact representation remains provisional until the native
 focus and disabled-state behavior is proven.
 
-Label color requires its own proof gate. A direct RGB write is not enough if
-the native timeline overwrites it during focus, selection, disable, page
-transition, or reconstruction. The final API may use semantic native colors
-instead of arbitrary RGB if that is the only stable behavior.
+Whole-row label color requires its own proof gate. A direct RGB write is not
+enough if the native timeline overwrites it during focus, selection, disable,
+page transition, or reconstruction. The final API may use semantic native
+colors instead of arbitrary RGB if that is the only stable behavior.
 
 `interactive` and `visible` are deliberately different concepts:
 
@@ -384,9 +446,11 @@ concise `1.3-to-1.4` migration guide before the API is frozen.
 |---|---|---|
 | Freeze the shipped API 1.3 ABI fixture | Complete | Headers recovered from `ERNativeUI-v1.3.0`, immutable provenance and hashes, exact layout and bidirectional contract fixtures, and public-only frozen-client/current-host smoke tests |
 | Typed C++ row foundation | Complete | Concrete typed rows returned by row builders, preserved raw `RowHandle`, one-way implicit raw conversion, type-safe forwarding, MSVC/MinGW tests, rebuilt examples, and live regression validation |
-| Update batch and generation model | Proposed | Unit-tested atomic validation, copy semantics, coalescing, failure rollback, thread ownership, and callback-originated commits without reentrancy |
-| Mutable label and help text | Proposed | Live selected/unselected rows, pagination slices, close/reopen, and movie reconstruction |
-| Label color | Proposed; separate research gate | Proven behavior through focus, disable, transitions, and native timeline updates |
+| Update batch and generation model | Initial row-update foundation complete; richer batching remains proposed | Unit-tested atomic validation, copy semantics, failure rollback, callback-originated commits, then multi-control coalescing without reentrancy |
+| Mutable label and help text | Complete for the current presentation scope | Live callback updates passed on all editable row types, including focus changes, tab changes, editor transitions, and close/reopen reconstruction |
+| Structured label and help text | Complete for the current presentation scope | Escaping and span-validation tests plus live color, underline, mixed-fragment, callback-update, tab-change, and close/reopen validation |
+| Button and Popup Choice captions | Complete for the current presentation scope | Typed availability, atomic label/caption/help commits, Family A/B target mapping, styled captions, Popup selection independence, frame reapplication, and reconstruction all passed automated and live validation |
+| Whole-row presentation color | Proposed; separate research gate | Proven behavior through focus, disable, transitions, and native timeline updates |
 | Runtime interactivity | Proposed | Every admitted row type skips focus and activation while preserving navigation and help semantics |
 | Recursive Collapse control | Proposed; blocked by update foundation | Acyclic nested groups, preserved descendant state, native header presentation, focus relocation, and pagination flattening |
 | Conditional groups and row visibility | Proposed; blocked by update foundation | Correct visible model, active-editor policy, focus relocation, and atomic publication |
@@ -450,8 +514,11 @@ concise `1.3-to-1.4` migration guide before the API is frozen.
 ### R3 — presentation-only live changes
 
 - Prove label and help replacement across every supported page lifecycle.
+- Add validated `StyledText` fragments while preserving literal semantics for
+  every existing plain-string overload.
 - Prove runtime interactivity for each admitted row type.
-- Research label color without weakening Elden Ring's focus/disabled states.
+- Research whole-row presentation color without weakening Elden Ring's
+  focus/disabled states.
 - Publish the first runtime-only alpha only after stable API 1.0–1.3 paths
   pass unchanged.
 
@@ -517,6 +584,8 @@ contains it. Do not use this log as a substitute for the stable changelog.
 
 | Date | Change | Evidence or build |
 |---|---|---|
+| 2026-10-24 | Added and live-validated a typed, sticky right-hand caption override for Button and Popup Choice edits. Captions share the validated structured-text model; unsupported controls do not expose the operation. | ABI/layout, atomic registry, stable-buffer, Family A/B mapping, typed-wrapper, and showcase regression tests plus live root/subpage, styled caption, Popup selection, repaint, and reconstruction validation |
+| 2026-10-23 | Structured row label/help text moved from research into the API 1.4 production path. Plain text remains escaped; allowlisted fragments support color and underline, while bold/italic remain dependent on effective font faces. | Scaleform HTML escaping/span regression tests and live label/help style proof across callback updates, tab changes, and System close/reopen |
 | 2026-10-22 | Typed C++ row foundation completed without changing the frozen C API 1.3 contract; automated MSVC/MinGW validation and live Tarnished UI Showcase/Custom Tabs Stress regression passed. | `ERNativeUI.ABI.TypedRows.CurrentProductionCpp`, the API 1.0–1.3 compatibility matrix, and live development-build validation |
 | 2026-10-22 | Manual runtime-alpha packaging and GitHub prerelease workflow added; initial `api-1.4` publication succeeded, with deletion/reuse rehearsal still pending. | [Alpha build policy](../contributing/alpha-builds.md) |
 | 2026-10-22 | Initial reactive-menu roadmap recorded; all API 1.4 workstreams remain proposed. | This roadmap |

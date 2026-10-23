@@ -89,6 +89,10 @@ struct TextInputAddressProfile {
     std::uintptr_t pad_setting_dialog_vtable_rva{};
     std::uintptr_t edit_property_vtable_rva{};
     std::uintptr_t text_input_controller_vtable_rva{};
+    // Action buttons and submenus retain the same EditProperty row envelope,
+    // but their controller owns both the row caption and boxed-button movie
+    // proxies through a distinct exact-build vtable.
+    std::uintptr_t action_button_controller_vtable_rva{};
     std::uintptr_t software_keyboard_job_vtable_rva{};
 };
 
@@ -106,6 +110,7 @@ inline constexpr std::array<TextInputAddressProfile, 3>
             0x2B16DD8,
             0x2AD73D0,
             0x2B1B128,
+            0x2AD7430,
             0x2AC5AD0,
         },
         {
@@ -120,6 +125,7 @@ inline constexpr std::array<TextInputAddressProfile, 3>
             0x2B16DD8,
             0x2AD73D0,
             0x2B1B128,
+            0x2AD7430,
             0x2AC5AD0,
         },
         {
@@ -134,6 +140,7 @@ inline constexpr std::array<TextInputAddressProfile, 3>
             0x2B18EC8,
             0x2AD94C0,
             0x2B1D218,
+            0x2AD9520,
             0x2AC7BC0,
         },
     }};

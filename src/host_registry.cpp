@@ -36,7 +36,7 @@ static_assert(ERUI_TITLE_SCREEN_TEXT_MAX_CODE_UNITS == 255u);
 static_assert(ERUI_TITLE_SCREEN_TEXT_MAX_LINES == 16u);
 static_assert(ERUI_UPDATE_MAX_COUNT == 4096u);
 static_assert(kMaxTextUnits ==
-    erui::detail::row_presentation_max_text_units);
+    erui::detail::scaleform_text_max_visible_units);
 
 static_assert(ERUI_BUILTIN_PAGE_GAME_OPTIONS ==
     static_cast<ERUI_BuiltinPage>(
@@ -312,6 +312,23 @@ erui::detail::RgbColor to_internal_color(ERUI_Color color) noexcept {
 
 ERUI_Color to_public_color(erui::detail::RgbColor color) noexcept {
     return {color.red, color.green, color.blue, 0};
+}
+
+std::wstring encode_registered_row_text(
+    std::wstring_view text,
+    const std::vector<erui::detail::ScaleformTextStyleSpan>& styles) {
+    erui::detail::ScaleformStyledText input{};
+    input.text.assign(text);
+    input.spans = styles;
+    std::wstring output{};
+    const ERUI_Result result =
+        erui::detail::encode_scaleform_html(input, output);
+    if (result == ERUI_OUT_OF_MEMORY) throw std::bad_alloc{};
+    if (result != ERUI_OK) {
+        throw std::logic_error(
+            "validated row text could not be encoded for Scaleform");
+    }
+    return output;
 }
 
 bool address_belongs_to_module(const void* address, HMODULE module) noexcept {
@@ -2669,13 +2686,19 @@ ERUI_Result Registry::commit_updates(
     struct ParsedRowUpdate {
         ERUI_RowHandle row{};
         ERUI_RowUpdateFields fields{};
-        std::wstring label{};
-        std::wstring help{};
+        erui::detail::ScaleformStyledText label{};
+        erui::detail::ScaleformStyledText help{};
+        erui::detail::ScaleformStyledText caption{};
     };
     struct PendingRowMutation {
         Row* row{};
-        std::wstring label{};
-        std::wstring help{};
+        erui::detail::ScaleformStyledText label{};
+        erui::detail::ScaleformStyledText help{};
+        erui::detail::ScaleformStyledText caption{};
+        std::wstring label_html{};
+        std::wstring help_html{};
+        std::wstring caption_html{};
+        bool caption_overridden{};
         bool materialized{};
     };
 
@@ -2685,7 +2708,8 @@ ERUI_Result Registry::commit_updates(
         const auto* const update_bytes = reinterpret_cast<const std::byte*>(
             description->updates);
         constexpr ERUI_RowUpdateFields kKnownRowFields =
-            ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP;
+            ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP |
+            ERUI_ROW_UPDATE_FIELD_CAPTION;
 
         for (std::uint32_t index = 0;
              index < description->update_count;
@@ -2703,10 +2727,19 @@ ERUI_Result Registry::commit_updates(
                 return ERUI_INVALID_ARGUMENT;
             }
 
+            // Read the leading size before the complete descriptor. This
+            // rejects stale API 1.4 alpha payloads without reading past their
+            // former, shorter RowUpdateDesc allocation.
+            std::uint32_t row_update_size{};
+            std::memcpy(
+                &row_update_size, update.payload, sizeof(row_update_size));
+            if (row_update_size != sizeof(ERUI_RowUpdateDesc)) {
+                return ERUI_INVALID_ARGUMENT;
+            }
             ERUI_RowUpdateDesc row_update{};
             std::memcpy(&row_update, update.payload, sizeof(row_update));
-            if (row_update.size != sizeof(row_update) ||
-                row_update.flags != 0 || row_update.row == ERUI_INVALID_ROW ||
+            if (row_update.flags != 0 ||
+                row_update.row == ERUI_INVALID_ROW ||
                 row_update.fields == 0 ||
                 (row_update.fields & ~kKnownRowFields) != 0 ||
                 row_update.reserved0 != 0 ||
@@ -2715,18 +2748,23 @@ ERUI_Result Registry::commit_updates(
                 return ERUI_INVALID_ARGUMENT;
             }
 
-            const auto canonical_zero_view = [](ERUI_Utf16View view) {
-                return view.data == nullptr && view.length == 0 &&
-                    view.reserved == 0;
+            const auto canonical_zero_view = [](const ERUI_StyledTextView& view) {
+                return view.size == 0 && view.flags == 0 &&
+                    view.text.data == nullptr && view.text.length == 0 &&
+                    view.text.reserved == 0 && view.spans == nullptr &&
+                    view.span_count == 0 && view.span_stride == 0 &&
+                    view.reserved[0] == 0 && view.reserved[1] == 0;
             };
             const bool changes_label =
                 (row_update.fields & ERUI_ROW_UPDATE_FIELD_LABEL) != 0;
             const bool changes_help =
                 (row_update.fields & ERUI_ROW_UPDATE_FIELD_HELP) != 0;
+            const bool changes_caption =
+                (row_update.fields & ERUI_ROW_UPDATE_FIELD_CAPTION) != 0;
             if ((!changes_label && !canonical_zero_view(row_update.label)) ||
                 (!changes_help && !canonical_zero_view(row_update.help)) ||
-                (changes_label && !valid_view(row_update.label)) ||
-                (changes_help && !valid_view(row_update.help))) {
+                (!changes_caption &&
+                    !canonical_zero_view(row_update.caption))) {
                 return ERUI_INVALID_ARGUMENT;
             }
 
@@ -2734,10 +2772,22 @@ ERUI_Result Registry::commit_updates(
             parsed_update.row = row_update.row;
             parsed_update.fields = row_update.fields;
             if (changes_label) {
-                parsed_update.label = copy_utf16(row_update.label, false);
+                const ERUI_Result parsed_label =
+                    erui::detail::parse_scaleform_styled_text(
+                        row_update.label, false, parsed_update.label);
+                if (parsed_label != ERUI_OK) return parsed_label;
             }
             if (changes_help) {
-                parsed_update.help = copy_utf16(row_update.help);
+                const ERUI_Result parsed_help =
+                    erui::detail::parse_scaleform_styled_text(
+                        row_update.help, true, parsed_update.help);
+                if (parsed_help != ERUI_OK) return parsed_help;
+            }
+            if (changes_caption) {
+                const ERUI_Result parsed_caption =
+                    erui::detail::parse_scaleform_styled_text(
+                        row_update.caption, false, parsed_update.caption);
+                if (parsed_caption != ERUI_OK) return parsed_caption;
             }
             parsed.push_back(std::move(parsed_update));
         }
@@ -2765,22 +2815,60 @@ ERUI_Result Registry::commit_updates(
                 return ERUI_INVALID_HANDLE;
             }
             Row& row = *row_it->second;
+            const bool changes_caption =
+                (update.fields & ERUI_ROW_UPDATE_FIELD_CAPTION) != 0;
+            const bool caption_supported = row.kind == RowKind::button ||
+                row.kind == RowKind::popup_choice ||
+                row.kind == RowKind::submenu;
+            if (changes_caption && !caption_supported) {
+                return ERUI_INVALID_ARGUMENT;
+            }
             PendingRowMutation mutation{};
             mutation.row = &row;
             mutation.label =
                 (update.fields & ERUI_ROW_UPDATE_FIELD_LABEL) != 0
                 ? std::move(update.label)
-                : row.label;
+                : erui::detail::ScaleformStyledText{
+                    .text = row.label,
+                    .spans = row.label_styles,
+                };
             mutation.help =
                 (update.fields & ERUI_ROW_UPDATE_FIELD_HELP) != 0
                 ? std::move(update.help)
-                : row.help;
+                : erui::detail::ScaleformStyledText{
+                    .text = row.help,
+                    .spans = row.help_styles,
+                };
+            mutation.caption_overridden =
+                changes_caption || row.caption_overridden;
+            if (changes_caption) {
+                mutation.caption = std::move(update.caption);
+            } else if (row.caption_overridden) {
+                mutation.caption = erui::detail::ScaleformStyledText{
+                    .text = row.caption,
+                    .spans = row.caption_styles,
+                };
+            }
             // These action-row families have no native disabled state and
             // are deliberately omitted by MenuCompiler while disabled.
             mutation.materialized = row.enabled ||
                 (row.kind != RowKind::button &&
                  row.kind != RowKind::color_picker &&
                  row.kind != RowKind::submenu);
+            const ERUI_Result label_encoded =
+                erui::detail::encode_scaleform_html(
+                    mutation.label, mutation.label_html);
+            if (label_encoded != ERUI_OK) return label_encoded;
+            const ERUI_Result help_encoded =
+                erui::detail::encode_scaleform_html(
+                    mutation.help, mutation.help_html);
+            if (help_encoded != ERUI_OK) return help_encoded;
+            if (mutation.caption_overridden) {
+                const ERUI_Result caption_encoded =
+                    erui::detail::encode_scaleform_html(
+                        mutation.caption, mutation.caption_html);
+                if (caption_encoded != ERUI_OK) return caption_encoded;
+            }
             mutations.push_back(std::move(mutation));
         }
 
@@ -2788,12 +2876,16 @@ ERUI_Result Registry::commit_updates(
         snapshots.reserve(mutations.size());
         for (const PendingRowMutation& mutation : mutations) {
             if (!mutation.materialized) continue;
-            snapshots.push_back({
+            erui::detail::RowPresentationUpdate snapshot{
                 .provider = provider_handle,
                 .row = mutation.row->handle,
-                .label = mutation.label,
-                .help = mutation.help,
-            });
+                .label = mutation.label_html,
+                .help = mutation.help_html,
+            };
+            if (mutation.caption_overridden) {
+                snapshot.caption = mutation.caption_html;
+            }
+            snapshots.push_back(std::move(snapshot));
         }
         if (!snapshots.empty()) {
             const ERUI_Result published =
@@ -2806,8 +2898,13 @@ ERUI_Result Registry::commit_updates(
         // noexcept, so the registry model and the native desired generation
         // cannot diverge through partial mutation.
         for (PendingRowMutation& mutation : mutations) {
-            mutation.row->label = std::move(mutation.label);
-            mutation.row->help = std::move(mutation.help);
+            mutation.row->label = std::move(mutation.label.text);
+            mutation.row->label_styles = std::move(mutation.label.spans);
+            mutation.row->help = std::move(mutation.help.text);
+            mutation.row->help_styles = std::move(mutation.help.spans);
+            mutation.row->caption = std::move(mutation.caption.text);
+            mutation.row->caption_styles = std::move(mutation.caption.spans);
+            mutation.row->caption_overridden = mutation.caption_overridden;
         }
         ++generation_;
         if (open_) note_activity_locked();
@@ -3123,23 +3220,31 @@ void Registry::append_page_locked(
         });
     }
     for (Row* row : source.rows) {
+        // Native row labels and help are both ultimately assigned through
+        // Scaleform's HTML text mode. Encode even the initial plain
+        // registration so client '<', '>' and '&' characters remain literal
+        // on the very first frame rather than becoming accidental markup.
+        std::wstring label_html = encode_registered_row_text(
+            row->label, row->label_styles);
+        std::wstring help_html = encode_registered_row_text(
+            row->help, row->help_styles);
         switch (row->kind) {
         case RowKind::button:
-            destination.add_button(row->label, row->help,
+            destination.add_button(std::move(label_html), std::move(help_html),
                 {.callback = &Registry::button_bridge, .user_data = row}, row->enabled);
             break;
         case RowKind::toggle:
-            destination.add_toggle(row->label, row->help, row->native_value, row->enabled,
+            destination.add_toggle(std::move(label_html), std::move(help_html), row->native_value, row->enabled,
                 {.callback = &Registry::value_bridge, .user_data = row});
             break;
         case RowKind::slider:
-            destination.add_slider(row->label, row->help, row->native_value, row->slider,
+            destination.add_slider(std::move(label_html), std::move(help_html), row->native_value, row->slider,
                 row->enabled, {.callback = &Registry::value_bridge, .user_data = row});
             break;
         case RowKind::numeric_slider:
             destination.add_numeric_slider(
-                row->label,
-                row->help,
+                std::move(label_html),
+                std::move(help_html),
                 row->native_value,
                 row->slider_value_texts,
                 row->enabled,
@@ -3147,8 +3252,8 @@ void Registry::append_page_locked(
             break;
         case RowKind::custom_slider:
             destination.add_custom_slider(
-                row->label,
-                row->help,
+                std::move(label_html),
+                std::move(help_html),
                 row->native_value,
                 row->slider_value_texts,
                 row->enabled,
@@ -3156,13 +3261,13 @@ void Registry::append_page_locked(
             break;
         case RowKind::inline_choice:
             destination.add_inline_choice(
-                row->label, row->help, row->native_value,
+                std::move(label_html), std::move(help_html), row->native_value,
                 row->choices, row->enabled,
                 {.callback = &Registry::value_bridge, .user_data = row});
             break;
         case RowKind::popup_choice:
             destination.add_popup_choice(
-                row->label, row->help, row->native_value,
+                std::move(label_html), std::move(help_html), row->native_value,
                 row->choices, row->enabled,
                 {.callback = &Registry::value_bridge, .user_data = row});
             break;
@@ -3171,8 +3276,8 @@ void Registry::append_page_locked(
                 throw std::logic_error("TextInput state is missing");
             }
             destination.add_text_input(
-                row->label,
-                row->help,
+                std::move(label_html),
+                std::move(help_html),
                 *row->text_input_state,
                 {.callback = &Registry::text_input_bridge,
                     .user_data = row});
@@ -3182,8 +3287,8 @@ void Registry::append_page_locked(
                 throw std::logic_error("ColorPicker state is missing");
             }
             destination.add_color_picker(
-                row->label,
-                row->help,
+                std::move(label_html),
+                std::move(help_html),
                 *row->color_picker_state,
                 row->enabled,
                 {.callback = &Registry::color_picker_bridge,
@@ -3195,7 +3300,8 @@ void Registry::append_page_locked(
                 throw std::logic_error("submenu target is missing");
             }
             erui::Page& target = destination.add_submenu(
-                row->label, row->help, child->second->title, child->second->help, row->enabled);
+                std::move(label_html), std::move(help_html),
+                child->second->title, child->second->help, row->enabled);
             append_page_locked(provider, *child->second, target);
             break;
         }

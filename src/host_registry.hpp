@@ -3,6 +3,7 @@
 #include <ernativeui/erui.h>
 #include "host_storage.hpp"
 #include "menu.hpp"
+#include "scaleform_html.hpp"
 #include "tab_configuration.hpp"
 
 #include <Windows.h>
@@ -280,6 +281,11 @@ private:
         RowKind kind{RowKind::button};
         std::wstring label{};
         std::wstring help{};
+        std::wstring caption{};
+        std::vector<erui::detail::ScaleformTextStyleSpan> label_styles{};
+        std::vector<erui::detail::ScaleformTextStyleSpan> help_styles{};
+        std::vector<erui::detail::ScaleformTextStyleSpan> caption_styles{};
+        bool caption_overridden{};
         bool enabled{true};
         ERUI_ButtonCallback button_callback{};
         ERUI_ValueChangedCallback changed_callback{};

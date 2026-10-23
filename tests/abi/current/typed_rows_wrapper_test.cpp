@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -247,8 +248,22 @@ int main(int argc, char** argv) {
     CHECK(rows.text.valid());
     CHECK(rows.color.valid());
 
+    erui::StyledText styled_label{};
+    styled_label
+        .append(L"Button ")
+        .append(
+            L"updated",
+            erui::TextStyle{}
+                .color(erui::Color{107u, 100u, 80u})
+                .underline());
+    erui::StyledText styled_help{};
+    styled_help
+        .append(L"Styled ")
+        .append(L"button help", erui::TextStyle{}.bold().italic());
     CHECK(rows.button.edit()
-        .label(L"Button updated")
+        .label(styled_label)
+        .caption(L"Button caption")
+        .help(std::move(styled_help))
         .commit() == ERUI_OK);
     CHECK(rows.toggle.edit()
         .help(L"Updated toggle help")
@@ -269,8 +284,17 @@ int main(int argc, char** argv) {
         .label(L"Inline updated")
         .help(L"Updated inline help")
         .commit() == ERUI_OK);
+    erui::StyledText popup_caption{};
+    popup_caption
+        .append(L"Selected: ")
+        .append(
+            L"Two",
+            erui::TextStyle{}
+                .color(erui::Color{96u, 220u, 128u})
+                .underline());
     CHECK(rows.popup_choice.edit()
         .label(L"Popup updated")
+        .caption(std::move(popup_caption))
         .help(L"Updated popup help")
         .commit() == ERUI_OK);
     CHECK(rows.text.edit()
@@ -281,10 +305,41 @@ int main(int argc, char** argv) {
         .label(L"Color updated")
         .help(L"Updated color help")
         .commit() == ERUI_OK);
+    CHECK(rows.toggle.edit().help(L"").commit() == ERUI_OK);
 
     auto empty_edit = rows.toggle.edit();
     CHECK(empty_edit.commit() == ERUI_INVALID_ARGUMENT);
     CHECK(empty_edit.commit() == ERUI_ALREADY_COMMITTED);
+
+    CHECK(rows.button.edit().caption(L"").commit() ==
+        ERUI_INVALID_ARGUMENT);
+    erui::StyledText empty_caption{};
+    CHECK(rows.popup_choice.edit()
+        .caption(std::move(empty_caption))
+        .commit() == ERUI_INVALID_ARGUMENT);
+
+    erui::StyledText overlong(std::wstring(
+        ERUI_STYLED_TEXT_MAX_CODE_UNITS + 1u, L'x'));
+    CHECK(rows.toggle.edit().label(std::move(overlong)).commit() ==
+        ERUI_INVALID_ARGUMENT);
+    CHECK(rows.button.edit()
+        .caption(std::wstring(
+            ERUI_STYLED_TEXT_MAX_CODE_UNITS + 1u, L'x'))
+        .commit() == ERUI_INVALID_ARGUMENT);
+
+    erui::StyledText too_many_spans{};
+    for (std::uint32_t index = 0;
+         index <= ERUI_STYLED_TEXT_MAX_SPANS;
+         ++index) {
+        too_many_spans.append(
+            L"x",
+            (index & 1u) != 0
+                ? erui::TextStyle{}.underline()
+                : erui::TextStyle{}.italic());
+    }
+    CHECK(rows.toggle.edit()
+        .help(std::move(too_many_spans))
+        .commit() == ERUI_INVALID_ARGUMENT);
 
     CHECK(rows.button != ERUI_INVALID_ROW);
     CHECK(ERUI_INVALID_ROW != rows.toggle);

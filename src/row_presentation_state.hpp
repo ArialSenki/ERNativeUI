@@ -1,28 +1,34 @@
 #pragma once
 
 #include "menu_compiler.hpp"
+#include "scaleform_html.hpp"
 
 #include <ernativeui/erui.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace erui::detail {
 
-inline constexpr std::size_t row_presentation_max_text_units = 4096;
+inline constexpr std::size_t row_presentation_max_text_units =
+    scaleform_html_max_units;
 
 struct RowPresentationUpdate {
     ERUI_ProviderHandle provider{ERUI_INVALID_PROVIDER};
     ERUI_RowHandle row{ERUI_INVALID_ROW};
     std::wstring label{};
     std::wstring help{};
+    std::optional<std::wstring> caption{};
 };
 
 struct RowPresentationView {
     const wchar_t* label{};
     const wchar_t* help{};
+    // Null keeps the right-hand control text under native ownership.
+    const wchar_t* caption{};
     std::uint64_t revision{};
 
     [[nodiscard]] explicit operator bool() const noexcept {

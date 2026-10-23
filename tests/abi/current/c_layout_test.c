@@ -430,9 +430,47 @@ _Static_assert(ERUI_ROW_UPDATE_FIELD_LABEL == (1u << 0),
     "row-label field bit drift");
 _Static_assert(ERUI_ROW_UPDATE_FIELD_HELP == (1u << 1),
     "row-help field bit drift");
+_Static_assert(ERUI_ROW_UPDATE_FIELD_CAPTION == (1u << 2),
+    "row-caption field bit drift");
 _Static_assert(ERUI_UPDATE_MAX_COUNT == 4096u,
     "update batch limit drift");
-_Static_assert(sizeof(ERUI_RowUpdateDesc) == 64u,
+_Static_assert(ERUI_STYLED_TEXT_MAX_CODE_UNITS == 4096u,
+    "styled-text length limit drift");
+_Static_assert(ERUI_STYLED_TEXT_MAX_SPANS == 256u,
+    "styled-text span limit drift");
+_Static_assert(ERUI_TEXT_STYLE_CUSTOM_COLOR == (1u << 0),
+    "custom-color style bit drift");
+_Static_assert(ERUI_TEXT_STYLE_BOLD == (1u << 1),
+    "bold style bit drift");
+_Static_assert(ERUI_TEXT_STYLE_ITALIC == (1u << 2),
+    "italic style bit drift");
+_Static_assert(ERUI_TEXT_STYLE_UNDERLINE == (1u << 3),
+    "underline style bit drift");
+_Static_assert(sizeof(ERUI_TextStyleSpan) == 32u,
+    "text-style span size drift");
+_Static_assert(offsetof(ERUI_TextStyleSpan, flags) == 4u,
+    "text-style flags offset drift");
+_Static_assert(offsetof(ERUI_TextStyleSpan, offset) == 8u,
+    "text-style range offset drift");
+_Static_assert(offsetof(ERUI_TextStyleSpan, length) == 12u,
+    "text-style length offset drift");
+_Static_assert(offsetof(ERUI_TextStyleSpan, color) == 16u,
+    "text-style color offset drift");
+_Static_assert(offsetof(ERUI_TextStyleSpan, reserved) == 20u,
+    "text-style reserved offset drift");
+_Static_assert(sizeof(ERUI_StyledTextView) == 48u,
+    "styled-text view size drift");
+_Static_assert(offsetof(ERUI_StyledTextView, text) == 8u,
+    "styled-text content offset drift");
+_Static_assert(offsetof(ERUI_StyledTextView, spans) == 24u,
+    "styled-text spans offset drift");
+_Static_assert(offsetof(ERUI_StyledTextView, span_count) == 32u,
+    "styled-text span-count offset drift");
+_Static_assert(offsetof(ERUI_StyledTextView, span_stride) == 36u,
+    "styled-text span-stride offset drift");
+_Static_assert(offsetof(ERUI_StyledTextView, reserved) == 40u,
+    "styled-text reserved offset drift");
+_Static_assert(sizeof(ERUI_RowUpdateDesc) == 176u,
     "row-update descriptor size drift");
 _Static_assert(offsetof(ERUI_RowUpdateDesc, row) == 8u,
     "row-update handle offset drift");
@@ -440,9 +478,11 @@ _Static_assert(offsetof(ERUI_RowUpdateDesc, fields) == 16u,
     "row-update fields offset drift");
 _Static_assert(offsetof(ERUI_RowUpdateDesc, label) == 24u,
     "row-update label offset drift");
-_Static_assert(offsetof(ERUI_RowUpdateDesc, help) == 40u,
+_Static_assert(offsetof(ERUI_RowUpdateDesc, help) == 72u,
     "row-update help offset drift");
-_Static_assert(offsetof(ERUI_RowUpdateDesc, reserved) == 56u,
+_Static_assert(offsetof(ERUI_RowUpdateDesc, caption) == 120u,
+    "row-update caption offset drift");
+_Static_assert(offsetof(ERUI_RowUpdateDesc, reserved) == 168u,
     "row-update reserved offset drift");
 _Static_assert(sizeof(ERUI_UpdateDesc) == 24u,
     "update-envelope descriptor size drift");

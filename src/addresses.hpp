@@ -197,6 +197,7 @@ struct GameAddresses {
     const void* pad_setting_dialog_vtable{};
     const void* edit_property_vtable{};
     const void* text_input_controller_vtable{};
+    const void* action_button_controller_vtable{};
     const void* software_keyboard_job_vtable{};
 
     [[nodiscard]] bool text_input_complete() const noexcept {
@@ -215,12 +216,14 @@ struct GameAddresses {
     }
 
     // API 1.4 row presentation updates reuse only the validated physical
-    // OptionSetting row identity, the common caption-controller identity,
-    // the page-frame boundary, and the narrow Scaleform title bridge. They
-    // deliberately do not depend on the software-keyboard/TextInput path.
+    // OptionSetting row identity, the ordinary-caption and action-controller
+    // identities, the page-frame boundary, and the narrow Scaleform title
+    // bridge. They deliberately do not depend on the software-keyboard editor
+    // path.
     [[nodiscard]] bool row_presentation_complete() const noexcept {
         return page_frame && option_setting_dialog_vtable &&
             edit_property_vtable && text_input_controller_vtable &&
+            action_button_controller_vtable &&
             title_bridge_complete();
     }
 

@@ -1960,15 +1960,23 @@ void __fastcall page_frame_gate_detour(
     synchronize_pending_text_inputs();
     synchronize_color_picker_previews(page);
     erui::detail::synchronize_pending_row_presentations();
-    apply_native_row_presentations(page, g_addresses);
 
     PageFrameFn original = g_original_page_frame.load(std::memory_order_acquire);
     if (!original) return;
     if (native_dialog_owns_menu_input() &&
         page == g_dialog_input_page.load(std::memory_order_acquire)) {
+        // The native page frame is intentionally paused while the dialog owns
+        // input, so there is no native presentation pass to overwrite us.
+        apply_native_row_presentations(page, g_addresses);
         return;
     }
     original(page, frame_value, input_enabled);
+
+    // Action controllers republish their cached caption during the native
+    // frame pass. Apply client presentation afterward so Button/Submenu-style
+    // rows cannot immediately overwrite an accepted label edit. Every target
+    // is identity-validated again inside the bridge before it is touched.
+    apply_native_row_presentations(page, g_addresses);
 }
 
 bool install_page_frame_gate(const GameAddresses& addresses) noexcept {

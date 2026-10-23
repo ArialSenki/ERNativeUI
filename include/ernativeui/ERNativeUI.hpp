@@ -222,6 +222,7 @@ struct ActionInputsAccess;
 template <auto> struct StaticAssignmentsChangedState;
 template <auto, typename> struct StatefulAssignmentsChangedState;
 template <auto, typename> struct OwnedAssignmentsChangedState;
+template <typename> class RowEditDraft;
 }
 
 class ActionInputs {
@@ -617,6 +618,175 @@ struct Color {
     std::uint8_t red{};
     std::uint8_t green{};
     std::uint8_t blue{};
+};
+
+class TextStyle {
+public:
+    constexpr TextStyle() noexcept = default;
+
+    constexpr TextStyle& color(Color value) & noexcept {
+        color_ = value;
+        flags_ |= ERUI_TEXT_STYLE_CUSTOM_COLOR;
+        return *this;
+    }
+
+    constexpr TextStyle&& color(Color value) && noexcept {
+        color_ = value;
+        flags_ |= ERUI_TEXT_STYLE_CUSTOM_COLOR;
+        return std::move(*this);
+    }
+
+    constexpr TextStyle& bold(bool enabled = true) & noexcept {
+        set(ERUI_TEXT_STYLE_BOLD, enabled);
+        return *this;
+    }
+
+    constexpr TextStyle&& bold(bool enabled = true) && noexcept {
+        set(ERUI_TEXT_STYLE_BOLD, enabled);
+        return std::move(*this);
+    }
+
+    constexpr TextStyle& italic(bool enabled = true) & noexcept {
+        set(ERUI_TEXT_STYLE_ITALIC, enabled);
+        return *this;
+    }
+
+    constexpr TextStyle&& italic(bool enabled = true) && noexcept {
+        set(ERUI_TEXT_STYLE_ITALIC, enabled);
+        return std::move(*this);
+    }
+
+    constexpr TextStyle& underline(bool enabled = true) & noexcept {
+        set(ERUI_TEXT_STYLE_UNDERLINE, enabled);
+        return *this;
+    }
+
+    constexpr TextStyle&& underline(bool enabled = true) && noexcept {
+        set(ERUI_TEXT_STYLE_UNDERLINE, enabled);
+        return std::move(*this);
+    }
+
+private:
+    friend class StyledText;
+
+    constexpr void set(
+        ERUI_TextStyleFlags flag,
+        bool enabled) noexcept {
+        if (enabled) flags_ |= flag;
+        else flags_ &= ~flag;
+    }
+
+    ERUI_TextStyleFlags flags_{};
+    Color color_{};
+};
+
+/*
+ * Owned structured text. append() records formatting as UTF-16 ranges; the
+ * wrapper passes plain text plus those ranges across the C ABI, never raw
+ * Scaleform markup supplied by a client.
+ */
+class StyledText {
+public:
+    StyledText() noexcept = default;
+
+    explicit StyledText(std::wstring_view value) noexcept {
+        append(value);
+    }
+
+    StyledText& append(std::wstring_view value) & noexcept {
+        append_impl(value, nullptr);
+        return *this;
+    }
+
+    StyledText&& append(std::wstring_view value) && noexcept {
+        append_impl(value, nullptr);
+        return std::move(*this);
+    }
+
+    StyledText& append(
+        std::wstring_view value,
+        TextStyle style) & noexcept {
+        append_impl(value, &style);
+        return *this;
+    }
+
+    StyledText&& append(
+        std::wstring_view value,
+        TextStyle style) && noexcept {
+        append_impl(value, &style);
+        return std::move(*this);
+    }
+
+    [[nodiscard]] bool empty() const noexcept { return text_.empty(); }
+    [[nodiscard]] std::wstring_view text() const noexcept { return text_; }
+    [[nodiscard]] std::size_t span_count() const noexcept {
+        return spans_.size();
+    }
+
+private:
+    template <typename>
+    friend class detail::RowEditDraft;
+
+    static bool same_style(
+        const ERUI_TextStyleSpan& left,
+        const ERUI_TextStyleSpan& right) noexcept {
+        return left.flags == right.flags &&
+            left.color.red == right.color.red &&
+            left.color.green == right.color.green &&
+            left.color.blue == right.color.blue;
+    }
+
+    void append_impl(
+        std::wstring_view value,
+        const TextStyle* style) noexcept {
+        if (error_ != ERUI_OK || value.empty()) return;
+        if (text_.size() > ERUI_STYLED_TEXT_MAX_CODE_UNITS ||
+            value.size() >
+                ERUI_STYLED_TEXT_MAX_CODE_UNITS - text_.size()) {
+            error_ = ERUI_INVALID_ARGUMENT;
+            return;
+        }
+
+        const std::uint32_t offset =
+            static_cast<std::uint32_t>(text_.size());
+        try {
+            text_.append(value.data(), value.size());
+        } catch (...) {
+            error_ = ERUI_OUT_OF_MEMORY;
+            return;
+        }
+
+        if (!style || style->flags_ == 0) return;
+
+        ERUI_TextStyleSpan span{};
+        span.size = sizeof(span);
+        span.flags = style->flags_;
+        span.offset = offset;
+        span.length = static_cast<std::uint32_t>(value.size());
+        span.color.red = style->color_.red;
+        span.color.green = style->color_.green;
+        span.color.blue = style->color_.blue;
+
+        if (!spans_.empty() &&
+            spans_.back().offset + spans_.back().length == span.offset &&
+            same_style(spans_.back(), span)) {
+            spans_.back().length += span.length;
+            return;
+        }
+        if (spans_.size() >= ERUI_STYLED_TEXT_MAX_SPANS) {
+            error_ = ERUI_INVALID_ARGUMENT;
+            return;
+        }
+        try {
+            spans_.push_back(span);
+        } catch (...) {
+            error_ = ERUI_OUT_OF_MEMORY;
+        }
+    }
+
+    std::wstring text_{};
+    std::vector<ERUI_TextStyleSpan> spans_{};
+    ERUI_Result error_{ERUI_OK};
 };
 
 struct TitleScreenTextOptions {
@@ -1912,6 +2082,28 @@ public:
         return std::move(derived());
     }
 
+    Derived& label(const StyledText& value) & noexcept {
+        set_styled_text(value, label_, ERUI_ROW_UPDATE_FIELD_LABEL);
+        return derived();
+    }
+
+    Derived&& label(const StyledText& value) && noexcept {
+        set_styled_text(value, label_, ERUI_ROW_UPDATE_FIELD_LABEL);
+        return std::move(derived());
+    }
+
+    Derived& label(StyledText&& value) & noexcept {
+        set_styled_text(
+            std::move(value), label_, ERUI_ROW_UPDATE_FIELD_LABEL);
+        return derived();
+    }
+
+    Derived&& label(StyledText&& value) && noexcept {
+        set_styled_text(
+            std::move(value), label_, ERUI_ROW_UPDATE_FIELD_LABEL);
+        return std::move(derived());
+    }
+
     Derived& help(std::wstring_view value) & noexcept {
         set_text(value, help_, ERUI_ROW_UPDATE_FIELD_HELP);
         return derived();
@@ -1919,6 +2111,28 @@ public:
 
     Derived&& help(std::wstring_view value) && noexcept {
         set_text(value, help_, ERUI_ROW_UPDATE_FIELD_HELP);
+        return std::move(derived());
+    }
+
+    Derived& help(const StyledText& value) & noexcept {
+        set_styled_text(value, help_, ERUI_ROW_UPDATE_FIELD_HELP);
+        return derived();
+    }
+
+    Derived&& help(const StyledText& value) && noexcept {
+        set_styled_text(value, help_, ERUI_ROW_UPDATE_FIELD_HELP);
+        return std::move(derived());
+    }
+
+    Derived& help(StyledText&& value) & noexcept {
+        set_styled_text(
+            std::move(value), help_, ERUI_ROW_UPDATE_FIELD_HELP);
+        return derived();
+    }
+
+    Derived&& help(StyledText&& value) && noexcept {
+        set_styled_text(
+            std::move(value), help_, ERUI_ROW_UPDATE_FIELD_HELP);
         return std::move(derived());
     }
 
@@ -1942,10 +2156,13 @@ public:
         row_update.row = row_;
         row_update.fields = fields_;
         if ((fields_ & ERUI_ROW_UPDATE_FIELD_LABEL) != 0) {
-            row_update.label = utf16_view(label_);
+            row_update.label = styled_text_view(label_);
         }
         if ((fields_ & ERUI_ROW_UPDATE_FIELD_HELP) != 0) {
-            row_update.help = utf16_view(help_);
+            row_update.help = styled_text_view(help_);
+        }
+        if ((fields_ & ERUI_ROW_UPDATE_FIELD_CAPTION) != 0) {
+            row_update.caption = styled_text_view(caption_);
         }
 
         ERUI_UpdateDesc update{};
@@ -1967,6 +2184,19 @@ protected:
         RowHandle row) noexcept
         : context_(std::move(context)), row_(row) {}
 
+    void set_caption(std::wstring_view value) noexcept {
+        set_text(value, caption_, ERUI_ROW_UPDATE_FIELD_CAPTION);
+    }
+
+    void set_caption(const StyledText& value) noexcept {
+        set_styled_text(value, caption_, ERUI_ROW_UPDATE_FIELD_CAPTION);
+    }
+
+    void set_caption(StyledText&& value) noexcept {
+        set_styled_text(
+            std::move(value), caption_, ERUI_ROW_UPDATE_FIELD_CAPTION);
+    }
+
 private:
     [[nodiscard]] Derived& derived() noexcept {
         return static_cast<Derived&>(*this);
@@ -1974,21 +2204,89 @@ private:
 
     void set_text(
         std::wstring_view value,
-        std::wstring& destination,
+        StyledText& destination,
         ERUI_RowUpdateFields field) noexcept {
         if (committed_ || error_ != ERUI_OK) return;
         if (!view_size_fits(value.size()) ||
-            (field == ERUI_ROW_UPDATE_FIELD_LABEL && value.empty())) {
+            ((field == ERUI_ROW_UPDATE_FIELD_LABEL ||
+              field == ERUI_ROW_UPDATE_FIELD_CAPTION) && value.empty())) {
             error_ = ERUI_INVALID_ARGUMENT;
             return;
         }
+
+        StyledText replacement(value);
+        if (replacement.error_ != ERUI_OK) {
+            error_ = replacement.error_;
+            return;
+        }
         try {
-            if (value.empty()) destination.clear();
-            else destination.assign(value.data(), value.size());
+            destination = std::move(replacement);
             fields_ |= field;
         } catch (...) {
             error_ = ERUI_OUT_OF_MEMORY;
         }
+    }
+
+    void set_styled_text(
+        const StyledText& value,
+        StyledText& destination,
+        ERUI_RowUpdateFields field) noexcept {
+        if (committed_ || error_ != ERUI_OK) return;
+        if (value.error_ != ERUI_OK) {
+            error_ = value.error_;
+            return;
+        }
+        if ((field == ERUI_ROW_UPDATE_FIELD_LABEL ||
+             field == ERUI_ROW_UPDATE_FIELD_CAPTION) &&
+            value.text_.empty()) {
+            error_ = ERUI_INVALID_ARGUMENT;
+            return;
+        }
+        try {
+            destination = value;
+            fields_ |= field;
+        } catch (...) {
+            error_ = ERUI_OUT_OF_MEMORY;
+        }
+    }
+
+    void set_styled_text(
+        StyledText&& value,
+        StyledText& destination,
+        ERUI_RowUpdateFields field) noexcept {
+        if (committed_ || error_ != ERUI_OK) return;
+        if (value.error_ != ERUI_OK) {
+            error_ = value.error_;
+            return;
+        }
+        if ((field == ERUI_ROW_UPDATE_FIELD_LABEL ||
+             field == ERUI_ROW_UPDATE_FIELD_CAPTION) &&
+            value.text_.empty()) {
+            error_ = ERUI_INVALID_ARGUMENT;
+            return;
+        }
+        try {
+            destination = std::move(value);
+            fields_ |= field;
+        } catch (...) {
+            error_ = ERUI_OUT_OF_MEMORY;
+        }
+    }
+
+    static ERUI_StyledTextView styled_text_view(
+        const StyledText& value) noexcept {
+        static_assert(sizeof(wchar_t) == sizeof(std::uint16_t),
+            "ERNativeUI requires Windows UTF-16 wchar_t");
+        ERUI_StyledTextView result{};
+        result.size = sizeof(result);
+        result.text.data = value.text_.empty()
+            ? nullptr
+            : reinterpret_cast<const std::uint16_t*>(value.text_.data());
+        result.text.length = static_cast<std::uint32_t>(value.text_.size());
+        result.spans = value.spans_.empty() ? nullptr : value.spans_.data();
+        result.span_count = static_cast<std::uint32_t>(value.spans_.size());
+        result.span_stride = sizeof(ERUI_TextStyleSpan);
+        return result;
     }
 
     std::shared_ptr<RowContext> context_{};
@@ -1996,8 +2294,9 @@ private:
     ERUI_RowUpdateFields fields_{};
     ERUI_Result error_{ERUI_OK};
     bool committed_{};
-    std::wstring label_{};
-    std::wstring help_{};
+    StyledText label_{};
+    StyledText help_{};
+    StyledText caption_{};
 };
 
 } // namespace detail
@@ -2019,6 +2318,36 @@ public:
     ButtonRowEdit(ButtonRowEdit&&) noexcept = default;
     ButtonRowEdit& operator=(ButtonRowEdit&&) noexcept = default;
     ~ButtonRowEdit() = default;
+
+    ButtonRowEdit& caption(std::wstring_view value) & noexcept {
+        set_caption(value);
+        return *this;
+    }
+
+    ButtonRowEdit&& caption(std::wstring_view value) && noexcept {
+        set_caption(value);
+        return std::move(*this);
+    }
+
+    ButtonRowEdit& caption(const StyledText& value) & noexcept {
+        set_caption(value);
+        return *this;
+    }
+
+    ButtonRowEdit&& caption(const StyledText& value) && noexcept {
+        set_caption(value);
+        return std::move(*this);
+    }
+
+    ButtonRowEdit& caption(StyledText&& value) & noexcept {
+        set_caption(std::move(value));
+        return *this;
+    }
+
+    ButtonRowEdit&& caption(StyledText&& value) && noexcept {
+        set_caption(std::move(value));
+        return std::move(*this);
+    }
 private:
     friend class ButtonRow;
     ButtonRowEdit(
@@ -2116,6 +2445,36 @@ public:
     PopupChoiceRowEdit(PopupChoiceRowEdit&&) noexcept = default;
     PopupChoiceRowEdit& operator=(PopupChoiceRowEdit&&) noexcept = default;
     ~PopupChoiceRowEdit() = default;
+
+    PopupChoiceRowEdit& caption(std::wstring_view value) & noexcept {
+        set_caption(value);
+        return *this;
+    }
+
+    PopupChoiceRowEdit&& caption(std::wstring_view value) && noexcept {
+        set_caption(value);
+        return std::move(*this);
+    }
+
+    PopupChoiceRowEdit& caption(const StyledText& value) & noexcept {
+        set_caption(value);
+        return *this;
+    }
+
+    PopupChoiceRowEdit&& caption(const StyledText& value) && noexcept {
+        set_caption(value);
+        return std::move(*this);
+    }
+
+    PopupChoiceRowEdit& caption(StyledText&& value) & noexcept {
+        set_caption(std::move(value));
+        return *this;
+    }
+
+    PopupChoiceRowEdit&& caption(StyledText&& value) && noexcept {
+        set_caption(std::move(value));
+        return std::move(*this);
+    }
 private:
     friend class PopupChoiceRow;
     PopupChoiceRowEdit(

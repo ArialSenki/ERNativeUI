@@ -469,6 +469,7 @@ if(_ernativeui_need_native_core)
         src/runtime_log.cpp
         src/runtime_state.cpp
         src/row_presentation_state.cpp
+        src/scaleform_html.cpp
         src/steam_dlc.cpp
         src/storage_document.cpp
         src/submenu_navigation.cpp
@@ -900,6 +901,15 @@ if(_ernativeui_enable_tests)
         cxx_std_20)
     add_test(NAME ERNativeUI.RowPresentationState
         COMMAND ERNativeUIRowPresentationStateTests)
+
+    add_executable(ERNativeUIScaleformHtmlTests
+        tests/scaleform_html_test.cpp
+        src/scaleform_html.cpp)
+    target_include_directories(ERNativeUIScaleformHtmlTests PRIVATE
+        src include)
+    target_compile_features(ERNativeUIScaleformHtmlTests PRIVATE cxx_std_20)
+    add_test(NAME ERNativeUI.ScaleformHtml
+        COMMAND ERNativeUIScaleformHtmlTests)
 
     add_executable(ERNativeUIRuntimeOptionsTests tests/runtime_options_test.cpp)
     target_include_directories(ERNativeUIRuntimeOptionsTests PRIVATE src include)

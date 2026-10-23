@@ -899,16 +899,72 @@ ERUI_Result ERUI_CALL commit_updates(
         }
     }
 
-    const auto canonical_zero_view = [](ERUI_Utf16View view) noexcept {
-        return view.data == nullptr && view.length == 0 &&
-            view.reserved == 0;
+    const auto canonical_zero_view = [](
+        const ERUI_StyledTextView& view) noexcept {
+        return view.size == 0 && view.flags == 0 &&
+            view.text.data == nullptr && view.text.length == 0 &&
+            view.text.reserved == 0 && view.spans == nullptr &&
+            view.span_count == 0 && view.span_stride == 0 &&
+            view.reserved[0] == 0 && view.reserved[1] == 0;
     };
-    const auto valid_view = [](ERUI_Utf16View view) noexcept {
-        return view.reserved == 0 &&
-            (view.length == 0 || view.data != nullptr);
+    const auto valid_view = [](
+        const ERUI_StyledTextView& view,
+        bool allow_empty) noexcept {
+        constexpr ERUI_TextStyleFlags kKnownStyleFlags =
+            ERUI_TEXT_STYLE_CUSTOM_COLOR | ERUI_TEXT_STYLE_BOLD |
+            ERUI_TEXT_STYLE_ITALIC | ERUI_TEXT_STYLE_UNDERLINE;
+        if (view.size != sizeof(view) || view.flags != 0 ||
+            view.text.reserved != 0 ||
+            view.text.length > ERUI_STYLED_TEXT_MAX_CODE_UNITS ||
+            view.span_count > ERUI_STYLED_TEXT_MAX_SPANS ||
+            view.reserved[0] != 0 || view.reserved[1] != 0) {
+            return false;
+        }
+        if (view.text.length == 0) {
+            if (!allow_empty || view.text.data != nullptr) return false;
+        } else if (!view.text.data) {
+            return false;
+        }
+        if (view.span_count == 0) {
+            return view.spans == nullptr &&
+                view.span_stride == sizeof(ERUI_TextStyleSpan);
+        }
+        if (!view.spans ||
+            view.span_stride != sizeof(ERUI_TextStyleSpan)) {
+            return false;
+        }
+
+        const auto* const span_bytes =
+            reinterpret_cast<const std::byte*>(view.spans);
+        std::uint32_t previous_end = 0;
+        for (std::uint32_t index = 0; index < view.span_count; ++index) {
+            ERUI_TextStyleSpan span{};
+            std::memcpy(
+                &span,
+                span_bytes + static_cast<std::size_t>(index) *
+                    view.span_stride,
+                sizeof(span));
+            if (span.size != sizeof(span) || span.flags == 0 ||
+                (span.flags & ~kKnownStyleFlags) != 0 ||
+                span.offset < previous_end || span.length == 0 ||
+                span.offset > view.text.length ||
+                span.length > view.text.length - span.offset ||
+                span.color.reserved != 0 || span.reserved[0] != 0 ||
+                span.reserved[1] != 0 || span.reserved[2] != 0) {
+                return false;
+            }
+            if ((span.flags & ERUI_TEXT_STYLE_CUSTOM_COLOR) == 0 &&
+                (span.color.red != 0 || span.color.green != 0 ||
+                 span.color.blue != 0)) {
+                return false;
+            }
+            previous_end = span.offset + span.length;
+        }
+        return true;
     };
     constexpr ERUI_RowUpdateFields kKnownFields =
-        ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP;
+        ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP |
+        ERUI_ROW_UPDATE_FIELD_CAPTION;
     std::unordered_set<ERUI_RowHandle> rows{};
     try {
         rows.reserve(description->update_count);
@@ -931,10 +987,14 @@ ERUI_Result ERUI_CALL commit_updates(
             return ERUI_INVALID_ARGUMENT;
         }
 
+        std::uint32_t row_size{};
+        std::memcpy(&row_size, update.payload, sizeof(row_size));
+        if (row_size != sizeof(ERUI_RowUpdateDesc)) {
+            return ERUI_INVALID_ARGUMENT;
+        }
         ERUI_RowUpdateDesc row{};
         std::memcpy(&row, update.payload, sizeof(row));
-        if (row.size != sizeof(row) || row.flags != 0 ||
-            row.row == ERUI_INVALID_ROW || row.fields == 0 ||
+        if (row.flags != 0 || row.row == ERUI_INVALID_ROW || row.fields == 0 ||
             (row.fields & ~kKnownFields) != 0 || row.reserved0 != 0 ||
             row.reserved[0] != 0 || row.reserved[1] != 0) {
             return ERUI_INVALID_ARGUMENT;
@@ -947,10 +1007,14 @@ ERUI_Result ERUI_CALL commit_updates(
         const bool label =
             (row.fields & ERUI_ROW_UPDATE_FIELD_LABEL) != 0;
         const bool help = (row.fields & ERUI_ROW_UPDATE_FIELD_HELP) != 0;
+        const bool caption =
+            (row.fields & ERUI_ROW_UPDATE_FIELD_CAPTION) != 0;
         if ((!label && !canonical_zero_view(row.label)) ||
             (!help && !canonical_zero_view(row.help)) ||
-            (label && (row.label.length == 0 || !valid_view(row.label))) ||
-            (help && !valid_view(row.help))) {
+            (!caption && !canonical_zero_view(row.caption)) ||
+            (label && !valid_view(row.label, false)) ||
+            (help && !valid_view(row.help, true)) ||
+            (caption && !valid_view(row.caption, false))) {
             return ERUI_INVALID_ARGUMENT;
         }
     }

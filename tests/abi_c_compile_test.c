@@ -127,7 +127,17 @@ _Static_assert(offsetof(ERUI_Api, commit_updates) == 384u,
 _Static_assert(ERUI_API_V1_4_SIZE == 392u, "ERUI API 1.4 size drift");
 _Static_assert(ERUI_API_CURRENT_SIZE == ERUI_API_V1_4_SIZE,
     "ERUI current API does not select 1.4");
-_Static_assert(sizeof(ERUI_RowUpdateDesc) == 64u,
+_Static_assert(sizeof(ERUI_TextStyleSpan) == 32u,
+    "ERUI text-style span ABI drift");
+_Static_assert(ERUI_STYLED_TEXT_MAX_CODE_UNITS == 4096u,
+    "ERUI styled-text length limit drift");
+_Static_assert(ERUI_STYLED_TEXT_MAX_SPANS == 256u,
+    "ERUI styled-text span limit drift");
+_Static_assert(sizeof(ERUI_StyledTextView) == 48u,
+    "ERUI styled-text view ABI drift");
+_Static_assert(ERUI_ROW_UPDATE_FIELD_CAPTION == (1u << 2),
+    "ERUI row-caption field bit drift");
+_Static_assert(sizeof(ERUI_RowUpdateDesc) == 176u,
     "ERUI row-update descriptor ABI drift");
 _Static_assert(sizeof(ERUI_UpdateDesc) == 24u,
     "ERUI update descriptor ABI drift");
@@ -287,6 +297,7 @@ int main(void) {
     ERUI_InputActionDesc binding = {0};
     ERUI_PagePresentationDesc presentation = {0};
     ERUI_AlertDesc alert = {0};
+    ERUI_TextStyleSpan text_style = {0};
     ERUI_RowUpdateDesc row_update = {0};
     ERUI_UpdateDesc update = {0};
     ERUI_UpdateBatchDesc update_batch = {0};
@@ -327,9 +338,22 @@ int main(void) {
     alert.callback = &alert_callback;
     alert.buttons = ERUI_ALERT_BUTTONS_YES_NO;
     alert.placement = ERUI_ALERT_PLACEMENT_CENTER;
+    text_style.size = (uint32_t)sizeof(text_style);
+    text_style.flags = ERUI_TEXT_STYLE_CUSTOM_COLOR |
+        ERUI_TEXT_STYLE_UNDERLINE;
+    text_style.length = 1u;
+    text_style.color.red = 107u;
+    text_style.color.green = 100u;
+    text_style.color.blue = 80u;
     row_update.size = (uint32_t)sizeof(row_update);
     row_update.fields = ERUI_ROW_UPDATE_FIELD_LABEL |
         ERUI_ROW_UPDATE_FIELD_HELP;
+    row_update.label.size = (uint32_t)sizeof(row_update.label);
+    row_update.label.spans = &text_style;
+    row_update.label.span_count = 1u;
+    row_update.label.span_stride = (uint32_t)sizeof(text_style);
+    row_update.help.size = (uint32_t)sizeof(row_update.help);
+    row_update.help.span_stride = (uint32_t)sizeof(text_style);
     update.size = (uint32_t)sizeof(update);
     update.kind = ERUI_UPDATE_KIND_ROW;
     update.payload = &row_update;

@@ -1017,6 +1017,11 @@ bool preflight_row_presentation_addresses(
         "row controller vtable",
         text_input_profile->text_input_controller_vtable_rva,
         6);
+    addresses.action_button_controller_vtable = resolve_profile_vtable(
+        game,
+        "action-button controller vtable",
+        text_input_profile->action_button_controller_vtable_rva,
+        6);
     addresses.page_frame = reinterpret_cast<PageFrameFn>(
         resolve_optional_direct(
             game,
@@ -1560,6 +1565,11 @@ bool resolve_game_addresses(
             "row controller vtable",
             text_input_profile->text_input_controller_vtable_rva,
             6);
+        output.action_button_controller_vtable = resolve_profile_vtable(
+            game,
+            "action-button controller vtable",
+            text_input_profile->action_button_controller_vtable_rva,
+            6);
         if (require_text_inputs) {
             output.pad_setting_dialog_vtable = resolve_profile_vtable(
                 game,
@@ -1578,7 +1588,8 @@ bool resolve_game_addresses(
         if (require_row_presentations &&
             (!output.option_setting_dialog_vtable ||
              !output.edit_property_vtable ||
-             !output.text_input_controller_vtable)) {
+             !output.text_input_controller_vtable ||
+             !output.action_button_controller_vtable)) {
             erui::detail::logf(
                 erui::LogLevel::error,
                 "Runtime row presentation unavailable: one or more exact-profile vtables failed validation");

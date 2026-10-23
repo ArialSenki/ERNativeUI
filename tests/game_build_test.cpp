@@ -48,6 +48,8 @@ bool same_profile(
             right.edit_property_vtable_rva &&
         left.text_input_controller_vtable_rva ==
             right.text_input_controller_vtable_rva &&
+        left.action_button_controller_vtable_rva ==
+            right.action_button_controller_vtable_rva &&
         left.software_keyboard_job_vtable_rva ==
             right.software_keyboard_job_vtable_rva;
 }
@@ -283,21 +285,21 @@ int main() {
             EldenRingBuild::v2_7_0_0,
             0x976EF0, 0x5EE0F0, 0x6766F0, 0x1BCC60,
             0x915D70, 0x81D610, 0x2B14888, 0x2B16DD8,
-            0x2AD73D0, 0x2B1B128, 0x2AC5AD0}));
+            0x2AD73D0, 0x2B1B128, 0x2AD7430, 0x2AC5AD0}));
     ERUI_TEST_CHECK(same_profile(
         *text_271,
         erui::native::TextInputAddressProfile{
             EldenRingBuild::v2_7_1_0,
             0x976EF0, 0x5EE0F0, 0x6766F0, 0x1BCC60,
             0x915D70, 0x81D610, 0x2B14888, 0x2B16DD8,
-            0x2AD73D0, 0x2B1B128, 0x2AC5AD0}));
+            0x2AD73D0, 0x2B1B128, 0x2AD7430, 0x2AC5AD0}));
     ERUI_TEST_CHECK(same_profile(
         *text_272,
         erui::native::TextInputAddressProfile{
             EldenRingBuild::v2_7_2_0,
             0x9773A0, 0x5EE5A0, 0x676BA0, 0x1BCC60,
             0x916220, 0x81DAC0, 0x2B16978, 0x2B18EC8,
-            0x2AD94C0, 0x2B1D218, 0x2AC7BC0}));
+            0x2AD94C0, 0x2B1D218, 0x2AD9520, 0x2AC7BC0}));
 
     const auto* const menu_270 =
         erui::native::find_menu_runtime_address_profile(
