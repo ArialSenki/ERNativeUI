@@ -60,7 +60,7 @@ _Static_assert(sizeof(ERUI_PageTitleFormatContext) == 56u,
 _Static_assert(sizeof(ERUI_PagePresentationDesc) == 64u,
     "ERUI_PagePresentationDesc ABI drift");
 _Static_assert(sizeof(ERUI_AlertDesc) == 48u, "ERUI_AlertDesc ABI drift");
-_Static_assert(sizeof(ERUI_Api) == 384u, "ERUI_Api ABI drift");
+_Static_assert(sizeof(ERUI_Api) == 392u, "ERUI_Api ABI drift");
 _Static_assert(_Alignof(ERUI_Api) == 8u, "ERUI_Api alignment drift");
 _Static_assert(offsetof(ERUI_ProviderDesc, owner_module) == 16u,
     "ERUI_ProviderDesc offset drift");
@@ -122,6 +122,17 @@ _Static_assert(offsetof(ERUI_Api, add_tab) == 368u,
 _Static_assert(offsetof(ERUI_Api, add_title_screen_text) == 376u,
     "ERUI_Api title-screen text block drift");
 _Static_assert(ERUI_API_V1_3_SIZE == 384u, "ERUI API 1.3 size drift");
+_Static_assert(offsetof(ERUI_Api, commit_updates) == 384u,
+    "ERUI_Api update block drift");
+_Static_assert(ERUI_API_V1_4_SIZE == 392u, "ERUI API 1.4 size drift");
+_Static_assert(ERUI_API_CURRENT_SIZE == ERUI_API_V1_4_SIZE,
+    "ERUI current API does not select 1.4");
+_Static_assert(sizeof(ERUI_RowUpdateDesc) == 64u,
+    "ERUI row-update descriptor ABI drift");
+_Static_assert(sizeof(ERUI_UpdateDesc) == 24u,
+    "ERUI update descriptor ABI drift");
+_Static_assert(sizeof(ERUI_UpdateBatchDesc) == 32u,
+    "ERUI update-batch descriptor ABI drift");
 _Static_assert(sizeof(ERUI_TitleScreenTextDesc) == 40u,
     "ERUI title-screen text descriptor ABI drift");
 _Static_assert(offsetof(ERUI_TitleScreenTextDesc, flags) == 4u,
@@ -158,6 +169,8 @@ _Static_assert(ERUI_TITLE_SCREEN_TEXT_LIMIT_REACHED == 23u,
     "ERUI title-screen text limit result drift");
 _Static_assert(ERUI_CAP_TITLE_SCREEN_TEXT == (UINT64_C(1) << 19),
     "ERUI title-screen text capability drift");
+_Static_assert(ERUI_CAP_UPDATES == (UINT64_C(1) << 20),
+    "ERUI updates capability drift");
 _Static_assert(ERUI_TITLE_SCREEN_TEXT_USE_CUSTOM_COLOR == (1u << 0),
     "ERUI title-screen custom-color flag drift");
 _Static_assert(ERUI_TITLE_SCREEN_CORNER_TOP_LEFT == 1u,
@@ -274,6 +287,9 @@ int main(void) {
     ERUI_InputActionDesc binding = {0};
     ERUI_PagePresentationDesc presentation = {0};
     ERUI_AlertDesc alert = {0};
+    ERUI_RowUpdateDesc row_update = {0};
+    ERUI_UpdateDesc update = {0};
+    ERUI_UpdateBatchDesc update_batch = {0};
     ERUI_Api api = {0};
     ERUI_GameLanguageInfo language = {0};
     provider.size = (uint32_t)sizeof(provider);
@@ -311,6 +327,16 @@ int main(void) {
     alert.callback = &alert_callback;
     alert.buttons = ERUI_ALERT_BUTTONS_YES_NO;
     alert.placement = ERUI_ALERT_PLACEMENT_CENTER;
+    row_update.size = (uint32_t)sizeof(row_update);
+    row_update.fields = ERUI_ROW_UPDATE_FIELD_LABEL |
+        ERUI_ROW_UPDATE_FIELD_HELP;
+    update.size = (uint32_t)sizeof(update);
+    update.kind = ERUI_UPDATE_KIND_ROW;
+    update.payload = &row_update;
+    update_batch.size = (uint32_t)sizeof(update_batch);
+    update_batch.updates = &update;
+    update_batch.update_count = 1u;
+    update_batch.update_stride = (uint32_t)sizeof(update);
     api.size = (uint32_t)sizeof(api);
     language.size = (uint32_t)sizeof(language);
 
@@ -340,6 +366,8 @@ int main(void) {
         ERUI_CAP_GAME_LANGUAGE == 0u || ERUI_CAP_COLOR_PICKER == 0u ||
         ERUI_CAP_BUILTIN_PAGES == 0u || ERUI_CAP_INPUT_BINDINGS == 0u ||
         ERUI_CAP_STORAGE == 0u || ERUI_CAP_NUMERIC_SLIDER == 0u ||
-        ERUI_CAP_CUSTOM_SLIDER == 0u ||
+        ERUI_CAP_CUSTOM_SLIDER == 0u || ERUI_CAP_UPDATES == 0u ||
+        update_batch.updates != &update ||
+        update.payload != &row_update ||
         ERUI_PAGE_TITLE_BUFFER_CAPACITY < 1u;
 }

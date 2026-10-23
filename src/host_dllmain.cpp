@@ -8,6 +8,7 @@
 #include "native_dialog.hpp"
 #include "native_gfx_loader.hpp"
 #include "native_input_bindings.hpp"
+#include "native_row_presentation.hpp"
 #include "native_tabs.hpp"
 #include "color_picker.hpp"
 #include "runtime_log.hpp"
@@ -1138,6 +1139,27 @@ DWORD run_host() noexcept {
             log::write(
                 erui::LogLevel::warning,
                 "Native custom-tab backend interface validation failed; API 1.3 remains negotiable without ERUI_CAP_CUSTOM_TABS");
+        }
+
+        erui::native::ModuleView row_update_game{};
+        if (row_update_game.initialize(GetModuleHandleW(nullptr)) &&
+            erui::native::native_row_presentation_build_supported(
+                row_update_game) &&
+            erui::native::preflight_row_presentation_addresses(
+                row_update_game)) {
+            if (!registry().enable_updates_backend()) {
+                log::write(
+                    erui::LogLevel::fatal,
+                    "Runtime row-presentation backend passed preflight but API 1.4 updates could not be published before registration opened");
+                set_api_state(ApiState::failed);
+                return 1;
+            }
+            log::write(
+                "Runtime row-presentation backend preflight passed; API 1.4 label/help updates are available");
+        } else {
+            log::write(
+                erui::LogLevel::warning,
+                "Runtime row-presentation backend is unavailable for this game executable; API 1.4 remains negotiable without ERUI_CAP_UPDATES");
         }
 
         const auto cooldown = static_cast<std::uint32_t>(std::clamp(

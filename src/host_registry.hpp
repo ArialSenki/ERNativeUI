@@ -43,6 +43,10 @@ public:
     // availability once registration has opened.
     [[nodiscard]] bool enable_title_screen_text_backend() noexcept;
     [[nodiscard]] bool title_screen_text_backend_available() const noexcept;
+    // Runtime row updates are published only on exact game builds whose
+    // native label/help presentation paths have been live validated.
+    [[nodiscard]] bool enable_updates_backend() noexcept;
+    [[nodiscard]] bool updates_backend_available() const noexcept;
     void open_registration() noexcept;
     void set_host_locale(erui::MenuLocalization pagination);
     void set_tab_configuration(erui::detail::TabConfiguration configuration);
@@ -250,6 +254,9 @@ public:
     ERUI_Result enqueue_alert(
         ERUI_ProviderHandle provider,
         const ERUI_AlertDesc* description) noexcept;
+    ERUI_Result commit_updates(
+        ERUI_ProviderHandle provider,
+        const ERUI_UpdateBatchDesc* description) noexcept;
 
     void apply_pending_values() noexcept;
 
@@ -428,6 +435,7 @@ private:
     mutable std::mutex mutex_{};
     bool custom_tabs_backend_available_{};
     bool title_screen_text_backend_available_{};
+    bool updates_backend_available_{};
     bool open_{};
     bool frozen_{};
     std::uint64_t generation_{};

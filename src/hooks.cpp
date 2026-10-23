@@ -6,6 +6,7 @@
 #include "native_menu.hpp"
 #include "native_popup_choice.hpp"
 #include "native_slider_presentation.hpp"
+#include "native_row_presentation.hpp"
 #include "native_text_input.hpp"
 #include "native_text_result.hpp"
 #include "native_title_bridge.hpp"
@@ -13,6 +14,7 @@
 #include "runtime_log.hpp"
 #include "runtime_requirements.hpp"
 #include "runtime_state.hpp"
+#include "row_presentation_state.hpp"
 #include "root_button_text_override.hpp"
 #include "submenu_navigation.hpp"
 #include "submenu_runtime.hpp"
@@ -531,6 +533,7 @@ bool cached_identity_is_globally_unique(
 
 void clear_retired_page_references(void* panel) noexcept {
     if (!panel) return;
+    retire_native_row_presentation_page(panel);
     void* expected = panel;
     const bool dialog_cleared = g_dialog_input_page.compare_exchange_strong(
         expected, nullptr, std::memory_order_acq_rel,
@@ -1956,6 +1959,8 @@ void __fastcall page_frame_gate_detour(
     // frame boundary, including while a native alert owns page input.
     synchronize_pending_text_inputs();
     synchronize_color_picker_previews(page);
+    erui::detail::synchronize_pending_row_presentations();
+    apply_native_row_presentations(page, g_addresses);
 
     PageFrameFn original = g_original_page_frame.load(std::memory_order_acquire);
     if (!original) return;
@@ -2648,6 +2653,7 @@ void reset_hooks() noexcept {
     }
 #endif
     remove_native_slider_presentation();
+    reset_native_row_presentations();
     set_color_picker_widget_path_bridge_available(false);
     {
         std::scoped_lock lock{g_scaleform_path_bridge_mutex};
@@ -3237,16 +3243,27 @@ HookInstallStatus install_native_menu_hooks(
     // game's page-frame boundary. This frame hook is required independently
     // of the optional native-alert transport, which merely shares it as an
     // input gate when available.
-    if (enable_text_inputs && !install_page_frame_gate(addresses)) {
+    const bool require_row_presentations =
+        erui::detail::editable_row_presentation_count() != 0;
+    bool require_page_frame = enable_text_inputs || require_row_presentations;
+    if (require_row_presentations &&
+        !addresses.row_presentation_complete()) {
         erui::detail::logf(
             erui::LogLevel::error,
-            "TextInput rows require the page-frame UI pump");
+            "API 1.4 row updates require the validated OptionSetting and Scaleform text interfaces");
+        reset_hooks();
+        return HookInstallStatus::hook_failed;
+    }
+    if (require_page_frame && !install_page_frame_gate(addresses)) {
+        erui::detail::logf(
+            erui::LogLevel::error,
+            "TextInput/API 1.4 row updates require the page-frame UI pump");
         reset_hooks();
         return HookInstallStatus::hook_failed;
     }
 
     const bool dialog_input_ready = enable_text &&
-        install_dialog_input_gates(addresses, enable_text_inputs);
+        install_dialog_input_gates(addresses, require_page_frame);
     if (!enable_text) {
         erui::detail::logf(
             erui::LogLevel::warning,
@@ -3260,14 +3277,14 @@ HookInstallStatus install_native_menu_hooks(
         erui::detail::logf(
             erui::LogLevel::warning,
             "Native alert transport unavailable: main executable could not be parsed");
-        reset_dialog_input_gates(enable_text_inputs);
+        reset_dialog_input_gates(require_page_frame);
     } else if (!install_native_dialog_transport(game)) {
         // Alerts are an optional native route. A game update may invalidate
         // their semantic signatures without disabling registered menu rows.
         erui::detail::logf(
             erui::LogLevel::warning,
             "Native alert transport was not installed; menu rows remain active");
-        reset_dialog_input_gates(enable_text_inputs);
+        reset_dialog_input_gates(require_page_frame);
     }
 
     bool color_picker_installed = false;

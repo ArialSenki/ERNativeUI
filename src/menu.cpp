@@ -57,6 +57,24 @@ void Page::ensure_mutable() const {
     }
 }
 
+Page& Page::identify_last_row(
+    ERUI_ProviderHandle provider,
+    ERUI_RowHandle row) {
+    ensure_mutable();
+    if (rows_.empty() || provider == ERUI_INVALID_PROVIDER ||
+        row == ERUI_INVALID_ROW) {
+        throw std::invalid_argument("runtime row identity is invalid");
+    }
+    RowDefinition& latest = rows_.back();
+    if (latest.provider != ERUI_INVALID_PROVIDER ||
+        latest.row != ERUI_INVALID_ROW) {
+        throw std::logic_error("runtime row identity is already assigned");
+    }
+    latest.provider = provider;
+    latest.row = row;
+    return *this;
+}
+
 Page& Page::add_toggle(
     std::wstring label,
     std::wstring help,

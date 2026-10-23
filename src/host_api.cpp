@@ -63,6 +63,14 @@ ERUI_Result ERUI_CALL register_provider_v1_3_entry(
         ERUI_API_VERSION_1_3, description, out_provider, out_root_page);
 }
 
+ERUI_Result ERUI_CALL register_provider_v1_4_entry(
+    const ERUI_ProviderDesc* description,
+    ERUI_ProviderHandle* out_provider,
+    ERUI_PageHandle* out_root_page) {
+    return register_provider_for_version(
+        ERUI_API_VERSION_1_4, description, out_provider, out_root_page);
+}
+
 ERUI_Result ERUI_CALL add_tab_entry(
     ERUI_ProviderHandle provider,
     const ERUI_TabDesc* description,
@@ -512,6 +520,15 @@ ERUI_Result ERUI_CALL enqueue_alert_entry(
     return erui::host::registry().enqueue_alert(provider, description);
 }
 
+ERUI_Result ERUI_CALL commit_updates_entry(
+    ERUI_ProviderHandle provider,
+    const ERUI_UpdateBatchDesc* description) {
+    if (const ERUI_Result state = callable_state(); state != ERUI_OK) {
+        return state;
+    }
+    return erui::host::registry().commit_updates(provider, description);
+}
+
 ERUI_Result ERUI_CALL get_game_language_entry(
     ERUI_GameLanguageInfo* out_language) {
     if (const ERUI_Result state = callable_state(); state != ERUI_OK) return state;
@@ -545,6 +562,9 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERUI_GetApi(
         break;
     case ERUI_API_VERSION_1_3:
         selected_size = ERUI_API_V1_3_SIZE;
+        break;
+    case ERUI_API_VERSION_1_4:
+        selected_size = ERUI_API_V1_4_SIZE;
         break;
     default:
         return ERUI_UNSUPPORTED_VERSION;
@@ -584,13 +604,23 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERUI_GetApi(
         ERUI_CAP_PAGE_PRESENTATION | ERUI_CAP_ALERT |
         ERUI_CAP_INLINE_CHOICE | ERUI_CAP_POPUP_CHOICE |
         ERUI_CAP_GAME_LANGUAGE;
-    table.register_provider = requested_version == ERUI_API_VERSION_1_0
-        ? &register_provider_v1_0_entry
-        : requested_version == ERUI_API_VERSION_1_1
-            ? &register_provider_v1_1_entry
-            : requested_version == ERUI_API_VERSION_1_2
-                ? &register_provider_v1_2_entry
-                : &register_provider_v1_3_entry;
+    switch (requested_version) {
+    case ERUI_API_VERSION_1_0:
+        table.register_provider = &register_provider_v1_0_entry;
+        break;
+    case ERUI_API_VERSION_1_1:
+        table.register_provider = &register_provider_v1_1_entry;
+        break;
+    case ERUI_API_VERSION_1_2:
+        table.register_provider = &register_provider_v1_2_entry;
+        break;
+    case ERUI_API_VERSION_1_3:
+        table.register_provider = &register_provider_v1_3_entry;
+        break;
+    case ERUI_API_VERSION_1_4:
+        table.register_provider = &register_provider_v1_4_entry;
+        break;
+    }
     table.add_button = &add_button_entry;
     table.add_toggle = &add_toggle_entry;
     table.add_slider = &add_slider_entry;
@@ -659,6 +689,12 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERUI_GetApi(
         }
         if (erui::host::registry().custom_tabs_backend_available()) {
             table.capabilities |= ERUI_CAP_CUSTOM_TABS;
+        }
+    }
+    if (requested_version >= ERUI_API_VERSION_1_4) {
+        table.commit_updates = &commit_updates_entry;
+        if (erui::host::registry().updates_backend_available()) {
+            table.capabilities |= ERUI_CAP_UPDATES;
         }
     }
 

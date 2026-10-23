@@ -98,13 +98,15 @@ int main() {
     static_assert(sizeof(ERUI_PageTitleFormatContext) == 56);
     static_assert(sizeof(ERUI_PagePresentationDesc) == 64);
     static_assert(sizeof(ERUI_AlertDesc) == 48);
-    static_assert(sizeof(ERUI_Api) == 384);
+    static_assert(sizeof(ERUI_Api) == 392);
     static_assert(ERUI_API_V1_0_SIZE == 128);
     static_assert(ERUI_API_V1_1_SIZE == 320);
     static_assert(ERUI_API_V1_2_SIZE == 368);
     static_assert(ERUI_API_V1_3_SIZE == 384);
+    static_assert(ERUI_API_V1_4_SIZE == 392);
     static_assert(offsetof(ERUI_Api, add_tab) == 368);
     static_assert(offsetof(ERUI_Api, add_title_screen_text) == 376);
+    static_assert(offsetof(ERUI_Api, commit_updates) == 384);
     static_assert(offsetof(ERUI_TabIconDesc, pixels) == 16);
     static_assert(offsetof(ERUI_TabDesc, preferred_order) == 40);
     static_assert(offsetof(ERUI_TabDesc, icon) == 48);
@@ -117,6 +119,7 @@ int main() {
     static_assert(ERUI_TITLE_SCREEN_TEXT_MAX_LINES == 16);
     static_assert(ERUI_TITLE_SCREEN_TEXT_LIMIT_REACHED == 23);
     static_assert(ERUI_CAP_TITLE_SCREEN_TEXT == (UINT64_C(1) << 19));
+    static_assert(ERUI_CAP_UPDATES == (UINT64_C(1) << 20));
     static_assert(ERUI_TITLE_SCREEN_TEXT_USE_CUSTOM_COLOR == (1u << 0));
     static_assert(ERUI_TITLE_SCREEN_CORNER_TOP_LEFT == 1u);
     static_assert(ERUI_TITLE_SCREEN_CORNER_TOP_RIGHT == 2u);

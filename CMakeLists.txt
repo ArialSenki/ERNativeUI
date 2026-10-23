@@ -460,6 +460,7 @@ if(_ernativeui_need_native_core)
         src/native_gfx_loader.cpp
         src/native_menu.cpp
         src/native_popup_choice.cpp
+        src/native_row_presentation.cpp
         src/native_slider_presentation.cpp
         src/native_text_input.cpp
         src/native_text_result.cpp
@@ -467,6 +468,7 @@ if(_ernativeui_need_native_core)
         src/runtime.cpp
         src/runtime_log.cpp
         src/runtime_state.cpp
+        src/row_presentation_state.cpp
         src/steam_dlc.cpp
         src/storage_document.cpp
         src/submenu_navigation.cpp
@@ -884,6 +886,20 @@ if(_ernativeui_enable_tests)
     target_include_directories(ERNativeUIModelTests PRIVATE src include)
     target_compile_features(ERNativeUIModelTests PRIVATE cxx_std_20)
     add_test(NAME ERNativeUI.MenuModel COMMAND ERNativeUIModelTests)
+
+    add_executable(ERNativeUIRowPresentationStateTests
+        tests/row_presentation_state_test.cpp
+        src/menu.cpp
+        src/menu_compiler.cpp
+        src/pagination.cpp
+        src/row_presentation_state.cpp
+        src/text_registry.cpp)
+    target_include_directories(ERNativeUIRowPresentationStateTests PRIVATE
+        src include)
+    target_compile_features(ERNativeUIRowPresentationStateTests PRIVATE
+        cxx_std_20)
+    add_test(NAME ERNativeUI.RowPresentationState
+        COMMAND ERNativeUIRowPresentationStateTests)
 
     add_executable(ERNativeUIRuntimeOptionsTests tests/runtime_options_test.cpp)
     target_include_directories(ERNativeUIRuntimeOptionsTests PRIVATE src include)

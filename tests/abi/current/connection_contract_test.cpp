@@ -92,6 +92,16 @@ int main(int argc, char** argv) {
     }
 
     {
+        ERUI_Api capability_gated{};
+        capability_gated.size = ERUI_API_V1_4_SIZE;
+        CHECK(host.get_api(ERUI_API_VERSION_1_4, &capability_gated) == ERUI_OK);
+        CHECK(capability_gated.commit_updates != nullptr);
+        capability_gated.capabilities &= ~ERUI_CAP_UPDATES;
+        CHECK(erui::detail::api_complete_for_version(
+            capability_gated, ERUI_API_VERSION_1_4));
+    }
+
+    {
         const auto config = configuration(0, ERUI_OK, ERUI_OK,
             ERUI_TEST_CONNECTION_DISABLE_TITLE_SCREEN_TEXT);
         CHECK(configure(&config) == ERUI_OK);
@@ -126,7 +136,7 @@ int main(int argc, char** argv) {
         auto connected = erui::connect(250ms);
         CHECK(connected.success());
         CHECK(connected.value().valid());
-        CHECK(connected.value().api_version() == ERUI_API_VERSION_1_3);
+        CHECK(connected.value().api_version() == ERUI_API_VERSION_CURRENT);
         CHECK(connected.value().supports(erui::Capability::numeric_slider));
         CHECK(connected.value().supports(erui::Capability::custom_slider));
         CHECK(connected.value().supports(erui::Capability::text_input));
@@ -136,6 +146,7 @@ int main(int argc, char** argv) {
         CHECK(connected.value().supports(erui::Capability::storage));
         CHECK(connected.value().supports(
             erui::Capability::title_screen_text));
+        CHECK(connected.value().supports(erui::Capability::updates));
 
         auto observed = snapshot(get_snapshot);
         CHECK(observed.get_api_calls == 3);
@@ -174,6 +185,7 @@ int main(int argc, char** argv) {
         ERUI_InputActionHandle raw_binding = ERUI_INVALID_INPUT_ACTION;
         ERUI_InputActionHandle static_binding = ERUI_INVALID_INPUT_ACTION;
         ERUI_InputActionHandle stateful_binding = ERUI_INVALID_INPUT_ACTION;
+        erui::ToggleRow mutable_row{};
         erui::ProviderOptions provider{};
         provider.provider_id = "tests.explicit-connection";
         provider.display_name = L"Explicit Connection";
@@ -182,6 +194,8 @@ int main(int argc, char** argv) {
             provider,
             [&](erui::Menu& menu) noexcept {
                 builder_called = true;
+                mutable_row = menu.root().add_toggle(
+                    L"Mutable row", L"Before update", 1u);
                 builtin_page_valid = menu.page(erui::BuiltinPage::sound).valid();
                 auto section = menu.input_bindings().add_section(
                     L"ERNativeUI tests");
@@ -211,6 +225,10 @@ int main(int argc, char** argv) {
         CHECK(raw_binding != static_binding);
         CHECK(raw_binding != stateful_binding);
         CHECK(static_binding != stateful_binding);
+        CHECK(mutable_row.edit()
+            .label(L"Updated row")
+            .help(L"Updated help")
+            .commit() == ERUI_OK);
 
         observed = snapshot(get_snapshot);
         CHECK(observed.get_api_calls == 3);

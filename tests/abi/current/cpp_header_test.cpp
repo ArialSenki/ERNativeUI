@@ -136,6 +136,26 @@ constexpr bool typed_row_value_contract =
     !std::is_constructible_v<T, erui::RowHandle> &&
     sizeof(T) == sizeof(erui::RowRef);
 
+template <typename T>
+constexpr bool row_edit_value_contract =
+    !std::is_default_constructible_v<T> &&
+    !std::is_copy_constructible_v<T> &&
+    !std::is_copy_assignable_v<T> &&
+    std::is_nothrow_move_constructible_v<T> &&
+    std::is_nothrow_move_assignable_v<T> &&
+    std::is_same_v<decltype(std::declval<T&>().label(
+        std::declval<std::wstring_view>())), T&> &&
+    std::is_same_v<decltype(std::declval<T&&>().label(
+        std::declval<std::wstring_view>())), T&&> &&
+    std::is_same_v<decltype(std::declval<T&>().help(
+        std::declval<std::wstring_view>())), T&> &&
+    std::is_same_v<decltype(std::declval<T&&>().help(
+        std::declval<std::wstring_view>())), T&&> &&
+    std::is_same_v<decltype(std::declval<T&>().commit()), ERUI_Result> &&
+    noexcept(std::declval<T&>().label(std::declval<std::wstring_view>())) &&
+    noexcept(std::declval<T&>().help(std::declval<std::wstring_view>())) &&
+    noexcept(std::declval<T&>().commit());
+
 using ButtonReturn = decltype(std::declval<erui::Page&>().add_button(
     std::declval<std::wstring_view>(),
     std::declval<std::wstring_view>(),
@@ -281,15 +301,51 @@ static_assert(no_cross_row_conversions<
     erui::TextInputRow,
     erui::ColorPickerRow>::value);
 
-static_assert(!has_edit<erui::ButtonRow>::value);
-static_assert(!has_edit<erui::ToggleRow>::value);
-static_assert(!has_edit<erui::SliderRow>::value);
-static_assert(!has_edit<erui::NumericSliderRow>::value);
-static_assert(!has_edit<erui::CustomSliderRow>::value);
-static_assert(!has_edit<erui::InlineChoiceRow>::value);
-static_assert(!has_edit<erui::PopupChoiceRow>::value);
-static_assert(!has_edit<erui::TextInputRow>::value);
-static_assert(!has_edit<erui::ColorPickerRow>::value);
+static_assert(has_edit<erui::ButtonRow>::value);
+static_assert(has_edit<erui::ToggleRow>::value);
+static_assert(has_edit<erui::SliderRow>::value);
+static_assert(has_edit<erui::NumericSliderRow>::value);
+static_assert(has_edit<erui::CustomSliderRow>::value);
+static_assert(has_edit<erui::InlineChoiceRow>::value);
+static_assert(has_edit<erui::PopupChoiceRow>::value);
+static_assert(has_edit<erui::TextInputRow>::value);
+static_assert(has_edit<erui::ColorPickerRow>::value);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::ButtonRow&>().edit()),
+    erui::ButtonRowEdit>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::ToggleRow&>().edit()),
+    erui::ToggleRowEdit>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::SliderRow&>().edit()),
+    erui::SliderRowEdit>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::NumericSliderRow&>().edit()),
+    erui::NumericSliderRowEdit>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::CustomSliderRow&>().edit()),
+    erui::CustomSliderRowEdit>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::InlineChoiceRow&>().edit()),
+    erui::InlineChoiceRowEdit>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::PopupChoiceRow&>().edit()),
+    erui::PopupChoiceRowEdit>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::TextInputRow&>().edit()),
+    erui::TextInputRowEdit>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const erui::ColorPickerRow&>().edit()),
+    erui::ColorPickerRowEdit>);
+static_assert(row_edit_value_contract<erui::ButtonRowEdit>);
+static_assert(row_edit_value_contract<erui::ToggleRowEdit>);
+static_assert(row_edit_value_contract<erui::SliderRowEdit>);
+static_assert(row_edit_value_contract<erui::NumericSliderRowEdit>);
+static_assert(row_edit_value_contract<erui::CustomSliderRowEdit>);
+static_assert(row_edit_value_contract<erui::InlineChoiceRowEdit>);
+static_assert(row_edit_value_contract<erui::PopupChoiceRowEdit>);
+static_assert(row_edit_value_contract<erui::TextInputRowEdit>);
+static_assert(row_edit_value_contract<erui::ColorPickerRowEdit>);
 
 static_assert(!has_set_value<erui::ButtonRow>::value);
 static_assert(!has_get_value<erui::ButtonRow>::value);
@@ -557,6 +613,17 @@ static_assert(std::is_same<
     void>::value);
 static_assert(!has_legacy_title_screen_text_overload<erui::Menu>::value);
 #endif
+#if defined(ERUI_API_VERSION_1_4)
+static_assert(sizeof(ERUI_RowUpdateDesc) == 64);
+static_assert(sizeof(ERUI_UpdateDesc) == 24);
+static_assert(sizeof(ERUI_UpdateBatchDesc) == 32);
+static_assert(std::is_trivially_copyable_v<ERUI_RowUpdateDesc>);
+static_assert(std::is_trivially_copyable_v<ERUI_UpdateDesc>);
+static_assert(std::is_trivially_copyable_v<ERUI_UpdateBatchDesc>);
+static_assert(static_cast<ERUI_Capabilities>(erui::Capability::updates) ==
+    ERUI_CAP_UPDATES);
+static_assert(ERUI_API_V1_4_SIZE == 392u);
+#endif
 #endif
 
 } // namespace
@@ -721,6 +788,9 @@ int main() {
     title_text.color = erui::Color{216u, 167u, 103u};
     if (page.valid()) return 34;
     if (ERUI_API_V1_3_SIZE != 384u) return 35;
+#if defined(ERUI_API_VERSION_1_4)
+    if (ERUI_API_V1_4_SIZE != 392u) return 36;
+#endif
 #endif
 #endif
 #endif

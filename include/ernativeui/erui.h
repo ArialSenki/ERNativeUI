@@ -39,7 +39,8 @@ extern "C" {
 #define ERUI_API_VERSION_1_1 ERUI_VERSION_ENCODE(1u, 1u)
 #define ERUI_API_VERSION_1_2 ERUI_VERSION_ENCODE(1u, 2u)
 #define ERUI_API_VERSION_1_3 ERUI_VERSION_ENCODE(1u, 3u)
-#define ERUI_API_VERSION_CURRENT ERUI_API_VERSION_1_3
+#define ERUI_API_VERSION_1_4 ERUI_VERSION_ENCODE(1u, 4u)
+#define ERUI_API_VERSION_CURRENT ERUI_API_VERSION_1_4
 
 typedef uint32_t ERUI_Result;
 enum {
@@ -122,7 +123,8 @@ enum {
     ERUI_CAP_NUMERIC_SLIDER = UINT64_C(1) << 16,
     ERUI_CAP_CUSTOM_SLIDER = UINT64_C(1) << 17,
     ERUI_CAP_CUSTOM_TABS = UINT64_C(1) << 18,
-    ERUI_CAP_TITLE_SCREEN_TEXT = UINT64_C(1) << 19
+    ERUI_CAP_TITLE_SCREEN_TEXT = UINT64_C(1) << 19,
+    ERUI_CAP_UPDATES = UINT64_C(1) << 20
 };
 
 /*
@@ -718,6 +720,55 @@ typedef struct ERUI_Utf16View {
     uint32_t length;
     uint32_t reserved;
 } ERUI_Utf16View;
+
+/*
+ * API 1.4 update envelope. A single commit validates and copies the complete
+ * batch before publishing it as one logical UI generation. No partial update
+ * is published when validation or allocation fails.
+ *
+ * updates points to update_count records separated by update_stride bytes.
+ * API 1.4 requires update_stride == sizeof(ERUI_UpdateDesc), exact descriptor
+ * sizes, zero flags/reserved fields, and 1..ERUI_UPDATE_MAX_COUNT items.
+ */
+#define ERUI_UPDATE_MAX_COUNT 4096u
+
+typedef uint32_t ERUI_UpdateKind;
+enum {
+    ERUI_UPDATE_KIND_ROW = 1u
+};
+
+typedef uint32_t ERUI_RowUpdateFields;
+enum {
+    ERUI_ROW_UPDATE_FIELD_LABEL = 1u << 0,
+    ERUI_ROW_UPDATE_FIELD_HELP = 1u << 1
+};
+
+typedef struct ERUI_RowUpdateDesc {
+    uint32_t size;
+    uint32_t flags;
+    ERUI_RowHandle row;
+    ERUI_RowUpdateFields fields;
+    uint32_t reserved0;
+    ERUI_Utf16View label;
+    ERUI_Utf16View help;
+    uint32_t reserved[2];
+} ERUI_RowUpdateDesc;
+
+typedef struct ERUI_UpdateDesc {
+    uint32_t size;
+    ERUI_UpdateKind kind;
+    const void* payload;
+    uint32_t reserved[2];
+} ERUI_UpdateDesc;
+
+typedef struct ERUI_UpdateBatchDesc {
+    uint32_t size;
+    uint32_t flags;
+    const ERUI_UpdateDesc* updates;
+    uint32_t update_count;
+    uint32_t update_stride;
+    uint32_t reserved[2];
+} ERUI_UpdateBatchDesc;
 
 /*
  * Convenience classification for the effective language identifier. In
@@ -1642,6 +1693,21 @@ typedef struct ERUI_Api {
     ERUI_Result (ERUI_CALL* add_title_screen_text)(
         ERUI_ProviderHandle provider,
         const ERUI_TitleScreenTextDesc* description);
+
+    /*
+     * API 1.4 append-only generic update block. The host validates and copies
+     * the complete batch before returning. Row updates are provider-scoped;
+     * every row must belong to provider and a row may occur only once in a
+     * batch. A view whose field bit is absent must be the canonical zero view
+     * (NULL data, zero length, zero reserved). The call is safe from ERNativeUI
+     * callbacks: native presentation changes occur later at a safe UI boundary.
+     * This entry is present in every valid 1.4 table; test ERUI_CAP_UPDATES
+     * before calling it because an unvalidated game build may return
+     * ERUI_NOT_SUPPORTED.
+     */
+    ERUI_Result (ERUI_CALL* commit_updates)(
+        ERUI_ProviderHandle provider,
+        const ERUI_UpdateBatchDesc* description);
 } ERUI_Api;
 
 /* Complete function-table prefix required by API 1.0 clients. */
@@ -1672,7 +1738,15 @@ typedef struct ERUI_Api {
 #define ERUI_API_V1_3_SIZE ((uint32_t)( \
     offsetof(ERUI_Api, add_title_screen_text) + \
     sizeof(((ERUI_Api*)0)->add_title_screen_text)))
-#define ERUI_API_CURRENT_SIZE ERUI_API_V1_3_SIZE
+
+/*
+ * Complete function-table size required by API 1.4 clients. Every earlier
+ * published prefix and size constant remains unchanged.
+ */
+#define ERUI_API_V1_4_SIZE ((uint32_t)( \
+    offsetof(ERUI_Api, commit_updates) + \
+    sizeof(((ERUI_Api*)0)->commit_updates)))
+#define ERUI_API_CURRENT_SIZE ERUI_API_V1_4_SIZE
 
 typedef ERUI_Result (ERUI_CALL* ERUI_GetApiFn)(
     uint32_t requested_version,

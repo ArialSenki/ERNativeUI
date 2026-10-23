@@ -284,6 +284,8 @@ std::unique_ptr<CompiledMenu> MenuCompiler::compile(Menu& menu) {
             const std::size_t compiled_row_index = output.rows.size();
             CompiledRow compiled_row{};
             compiled_row.kind = row.kind;
+            compiled_row.provider = row.provider;
+            compiled_row.row = row.row;
             compiled_row.label_id = compiled->texts.add(row.label);
             compiled_row.help_id = compiled->texts.add(row.help);
             register_text_binding(

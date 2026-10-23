@@ -58,6 +58,9 @@ struct TextBinding {
 
 struct CompiledRow {
     RowKind kind{RowKind::toggle};
+    ERUI_ProviderHandle provider{ERUI_INVALID_PROVIDER};
+    ERUI_RowHandle row{ERUI_INVALID_ROW};
+    std::size_t presentation_slot{invalid_compiled_index};
     TextId label_id{};
     TextId help_id{};
     volatile std::uint8_t* byte_value{};

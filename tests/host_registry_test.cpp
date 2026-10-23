@@ -1,5 +1,6 @@
 #include "host_registry.hpp"
 #include "menu_compiler.hpp"
+#include "row_presentation_state.hpp"
 #include "steam_language.hpp"
 
 #include <Windows.h>
@@ -1462,6 +1463,182 @@ void verify_fixed_fifty_custom_tab_stress() {
     }
 }
 
+void verify_api_1_4_row_update_contract() {
+    using erui::detail::RowPresentationView;
+    erui::detail::reset_row_presentation_state();
+
+    erui::host::Registry unavailable{};
+    unavailable.open_registration();
+    ERUI_ProviderDesc unavailable_provider{};
+    unavailable_provider.size = sizeof(unavailable_provider);
+    unavailable_provider.api_version = ERUI_API_VERSION_1_4;
+    unavailable_provider.owner_module = GetModuleHandleW(nullptr);
+    unavailable_provider.provider_id = ascii("updates.unavailable");
+    unavailable_provider.display_name = utf16(L"Unavailable updates");
+    ERUI_ProviderHandle unavailable_handle{};
+    ERUI_PageHandle unavailable_root{};
+    ERUI_TEST_CHECK(unavailable.register_provider(
+        ERUI_API_VERSION_1_4,
+        &unavailable_provider,
+        &unavailable_handle,
+        &unavailable_root) == ERUI_OK);
+    ERUI_ToggleDesc unavailable_toggle{};
+    unavailable_toggle.size = sizeof(unavailable_toggle);
+    unavailable_toggle.label = utf16(L"Original");
+    unavailable_toggle.help = utf16(L"Original help");
+    unavailable_toggle.enabled = 1;
+    ERUI_RowHandle unavailable_row{};
+    ERUI_TEST_CHECK(unavailable.add_toggle(
+        unavailable_handle,
+        unavailable_root,
+        &unavailable_toggle,
+        &unavailable_row) == ERUI_OK);
+    ERUI_TEST_CHECK(unavailable.commit_provider(unavailable_handle) == ERUI_OK);
+
+    ERUI_RowUpdateDesc unavailable_row_update{};
+    unavailable_row_update.size = sizeof(unavailable_row_update);
+    unavailable_row_update.row = unavailable_row;
+    unavailable_row_update.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
+    unavailable_row_update.label = utf16(L"Rejected");
+    ERUI_UpdateDesc unavailable_update{};
+    unavailable_update.size = sizeof(unavailable_update);
+    unavailable_update.kind = ERUI_UPDATE_KIND_ROW;
+    unavailable_update.payload = &unavailable_row_update;
+    ERUI_UpdateBatchDesc unavailable_batch{};
+    unavailable_batch.size = sizeof(unavailable_batch);
+    unavailable_batch.updates = &unavailable_update;
+    unavailable_batch.update_count = 1;
+    unavailable_batch.update_stride = sizeof(unavailable_update);
+    ERUI_TEST_CHECK(unavailable.commit_updates(
+        unavailable_handle, &unavailable_batch) == ERUI_NOT_SUPPORTED);
+
+    // Negotiating API 1.4 does not by itself opt rows into the native
+    // presentation backend. When ERUI_CAP_UPDATES is unavailable, ordinary
+    // rows must compile exactly like earlier APIs and require no update hook.
+    std::unique_ptr<erui::Menu> unavailable_menu =
+        unavailable.freeze_and_build();
+    ERUI_TEST_CHECK(unavailable_menu != nullptr);
+    std::unique_ptr<erui::detail::CompiledMenu> unavailable_compiled =
+        erui::detail::MenuCompiler::compile(*unavailable_menu);
+    ERUI_TEST_CHECK(unavailable_compiled != nullptr);
+    ERUI_TEST_CHECK(unavailable_compiled->root_page().rows.size() == 1);
+    const erui::detail::CompiledRow& unavailable_compiled_row =
+        unavailable_compiled->root_page().rows.front();
+    ERUI_TEST_CHECK(
+        unavailable_compiled_row.provider == ERUI_INVALID_PROVIDER);
+    ERUI_TEST_CHECK(unavailable_compiled_row.row == ERUI_INVALID_ROW);
+    ERUI_TEST_CHECK(unavailable_compiled_row.presentation_slot ==
+        erui::detail::invalid_compiled_index);
+    ERUI_TEST_CHECK(erui::detail::configure_row_presentation_state(
+        *unavailable_compiled));
+    ERUI_TEST_CHECK(
+        erui::detail::editable_row_presentation_count() == 0);
+    erui::detail::reset_row_presentation_state();
+
+    erui::host::Registry registry{};
+    ERUI_TEST_CHECK(registry.enable_updates_backend());
+    registry.open_registration();
+    ERUI_ProviderDesc provider{};
+    provider.size = sizeof(provider);
+    provider.api_version = ERUI_API_VERSION_1_4;
+    provider.owner_module = GetModuleHandleW(nullptr);
+    provider.provider_id = ascii("updates.contract");
+    provider.display_name = utf16(L"Update contract");
+    ERUI_ProviderHandle provider_handle{};
+    ERUI_PageHandle root{};
+    ERUI_TEST_CHECK(registry.register_provider(
+        ERUI_API_VERSION_1_4,
+        &provider,
+        &provider_handle,
+        &root) == ERUI_OK);
+
+    ERUI_SliderDesc slider{};
+    slider.size = sizeof(slider);
+    slider.label = utf16(L"Original label");
+    slider.help = utf16(L"Original help");
+    slider.minimum = 0;
+    slider.maximum = 2;
+    slider.step = 1;
+    slider.enabled = 1;
+    ERUI_RowHandle row{};
+    ERUI_TEST_CHECK(registry.add_slider(
+        provider_handle, root, &slider, &row) == ERUI_OK);
+    ERUI_TEST_CHECK(registry.commit_provider(provider_handle) == ERUI_OK);
+
+    ERUI_RowUpdateDesc row_update{};
+    row_update.size = sizeof(row_update);
+    row_update.row = row;
+    row_update.fields =
+        ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP;
+    row_update.label = utf16(L"Updated label");
+    row_update.help = utf16(L"Updated help");
+    ERUI_UpdateDesc update{};
+    update.size = sizeof(update);
+    update.kind = ERUI_UPDATE_KIND_ROW;
+    update.payload = &row_update;
+    ERUI_UpdateBatchDesc batch{};
+    batch.size = sizeof(batch);
+    batch.updates = &update;
+    batch.update_count = 1;
+    batch.update_stride = sizeof(update);
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+
+    // Duplicate targets make the whole batch invalid.
+    std::array<ERUI_UpdateDesc, 2> duplicates{update, update};
+    batch.updates = duplicates.data();
+    batch.update_count = static_cast<std::uint32_t>(duplicates.size());
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+    batch.updates = &update;
+    batch.update_count = 1;
+
+    // Field bits that are absent require a canonical zero view.
+    ERUI_RowUpdateDesc noncanonical = row_update;
+    noncanonical.fields = ERUI_ROW_UPDATE_FIELD_LABEL;
+    noncanonical.help = utf16(L"Hidden payload");
+    update.payload = &noncanonical;
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_INVALID_ARGUMENT);
+    update.payload = &row_update;
+
+    std::unique_ptr<erui::Menu> menu = registry.freeze_and_build();
+    ERUI_TEST_CHECK(menu != nullptr);
+    std::unique_ptr<erui::detail::CompiledMenu> compiled =
+        erui::detail::MenuCompiler::compile(*menu);
+    ERUI_TEST_CHECK(compiled != nullptr);
+    ERUI_TEST_CHECK(compiled->root_page().rows.size() == 1);
+    const erui::detail::CompiledRow& compiled_row =
+        compiled->root_page().rows.front();
+    ERUI_TEST_CHECK(compiled_row.provider == provider_handle);
+    ERUI_TEST_CHECK(compiled_row.row == row);
+    ERUI_TEST_CHECK(erui::detail::configure_row_presentation_state(
+        *compiled));
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView initial =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    ERUI_TEST_CHECK(initial);
+    ERUI_TEST_CHECK(std::wstring(initial.label) == L"Updated label");
+    ERUI_TEST_CHECK(std::wstring(initial.help) == L"Updated help");
+
+    row_update.fields = ERUI_ROW_UPDATE_FIELD_HELP;
+    row_update.label = {};
+    row_update.help = utf16(L"Live help");
+    ERUI_TEST_CHECK(registry.commit_updates(provider_handle, &batch) ==
+        ERUI_OK);
+    const RowPresentationView before_sync =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    ERUI_TEST_CHECK(std::wstring(before_sync.help) == L"Updated help");
+    erui::detail::synchronize_pending_row_presentations();
+    const RowPresentationView after_sync =
+        erui::detail::row_presentation_view(compiled_row.presentation_slot);
+    ERUI_TEST_CHECK(std::wstring(after_sync.label) == L"Updated label");
+    ERUI_TEST_CHECK(std::wstring(after_sync.help) == L"Live help");
+    ERUI_TEST_CHECK(after_sync.revision > initial.revision);
+
+    erui::detail::reset_row_presentation_state();
+}
+
 } // namespace
 
 int main() {
@@ -1474,6 +1651,7 @@ int main() {
     verify_custom_tab_registration_contract();
     verify_custom_tab_committed_limit();
     verify_fixed_fifty_custom_tab_stress();
+    verify_api_1_4_row_update_contract();
 
     ERUI_Api early_v1{};
     early_v1.size = ERUI_API_V1_0_SIZE;

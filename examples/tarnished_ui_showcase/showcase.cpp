@@ -23,6 +23,7 @@ std::atomic<std::uint8_t> g_popup_extended{3};
 std::array<std::uint32_t, 32> g_action_numbers{};
 erui::Registration g_registration{};
 erui::ToggleRow g_enabled_row{};
+erui::SliderRow g_intensity_row{};
 
 struct ShowcaseActionState {
     explicit ShowcaseActionState(const wchar_t* name) noexcept
@@ -139,6 +140,33 @@ void record_binding_activation(
 void ERUI_CALL value_changed(void* context, std::uint8_t value) noexcept {
     static_cast<std::atomic<std::uint8_t>*>(context)->store(
         value, std::memory_order_release);
+}
+
+void ERUI_CALL intensity_changed(void* context, std::uint8_t value) noexcept {
+    value_changed(context, value);
+    if (!g_registration.supports(erui::Capability::updates)) return;
+
+    wchar_t label[96]{};
+    wchar_t help[160]{};
+    _snwprintf_s(
+        label,
+        std::size(label),
+        _TRUNCATE,
+        L"Intensity (%u%%)",
+        static_cast<unsigned>(value));
+    _snwprintf_s(
+        help,
+        std::size(help),
+        _TRUNCATE,
+        L"API 1.4 updated this label and help text at runtime. Current intensity: %u%%.",
+        static_cast<unsigned>(value));
+    const ERUI_Result result = g_intensity_row.edit()
+        .label(label)
+        .help(help)
+        .commit();
+    if (result != ERUI_OK) {
+        debug(L"Could not commit the API 1.4 intensity row edit.");
+    }
 }
 
 void numeric_slider_changed(
@@ -515,11 +543,11 @@ DWORD WINAPI initialize(void*) noexcept {
         slider.maximum = 100;
         slider.step = 5;
         slider.initial_value = g_intensity.load(std::memory_order_acquire);
-        root.add_slider(
+        g_intensity_row = root.add_slider(
             g_text->intensity,
             g_text->row_help,
             slider,
-            &value_changed,
+            &intensity_changed,
             &g_intensity);
 
         if (menu.supports(erui::Capability::numeric_slider) ||

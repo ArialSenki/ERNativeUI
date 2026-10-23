@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
 
     auto connected = erui::connect();
     CHECK(connected.success());
-    CHECK(connected.value().api_version() == ERUI_API_VERSION_1_3);
+    CHECK(connected.value().api_version() == ERUI_API_VERSION_1_4);
 
     Rows rows{};
     CallbackCounts callbacks{};
@@ -105,6 +105,7 @@ int main(int argc, char** argv) {
     bool pending_rows_were_inactive{};
     ERUI_Result pending_set_result{ERUI_INTERNAL_ERROR};
     ERUI_Result pending_get_result{ERUI_INTERNAL_ERROR};
+    ERUI_Result pending_edit_result{ERUI_INTERNAL_ERROR};
     bool pending_get_output{true};
 
     {
@@ -219,6 +220,9 @@ int main(int argc, char** argv) {
                 pending_set_result = rows.toggle.set_value(false);
                 pending_get_result =
                     rows.toggle.get_value(pending_get_output);
+                pending_edit_result = rows.toggle.edit()
+                    .label(L"Not published")
+                    .commit();
             });
 
         CHECK(result.success());
@@ -230,6 +234,7 @@ int main(int argc, char** argv) {
     CHECK(pending_rows_were_inactive);
     CHECK(pending_set_result == ERUI_INVALID_HANDLE);
     CHECK(pending_get_result == ERUI_INVALID_HANDLE);
+    CHECK(pending_edit_result == ERUI_INVALID_HANDLE);
     CHECK(pending_get_output);
     CHECK(registration.valid());
     CHECK(rows.button.valid());
@@ -241,6 +246,45 @@ int main(int argc, char** argv) {
     CHECK(rows.popup_choice.valid());
     CHECK(rows.text.valid());
     CHECK(rows.color.valid());
+
+    CHECK(rows.button.edit()
+        .label(L"Button updated")
+        .commit() == ERUI_OK);
+    CHECK(rows.toggle.edit()
+        .help(L"Updated toggle help")
+        .commit() == ERUI_OK);
+    CHECK(rows.slider.edit()
+        .label(L"Slider updated")
+        .help(L"Updated slider help")
+        .commit() == ERUI_OK);
+    CHECK(rows.numeric.edit()
+        .label(L"Numeric updated")
+        .help(L"Updated numeric help")
+        .commit() == ERUI_OK);
+    CHECK(rows.custom.edit()
+        .label(L"Custom updated")
+        .help(L"Updated custom help")
+        .commit() == ERUI_OK);
+    CHECK(rows.inline_choice.edit()
+        .label(L"Inline updated")
+        .help(L"Updated inline help")
+        .commit() == ERUI_OK);
+    CHECK(rows.popup_choice.edit()
+        .label(L"Popup updated")
+        .help(L"Updated popup help")
+        .commit() == ERUI_OK);
+    CHECK(rows.text.edit()
+        .label(L"Text updated")
+        .help(L"Updated text help")
+        .commit() == ERUI_OK);
+    CHECK(rows.color.edit()
+        .label(L"Color updated")
+        .help(L"Updated color help")
+        .commit() == ERUI_OK);
+
+    auto empty_edit = rows.toggle.edit();
+    CHECK(empty_edit.commit() == ERUI_INVALID_ARGUMENT);
+    CHECK(empty_edit.commit() == ERUI_ALREADY_COMMITTED);
 
     CHECK(rows.button != ERUI_INVALID_ROW);
     CHECK(ERUI_INVALID_ROW != rows.toggle);
@@ -376,6 +420,8 @@ int main(int argc, char** argv) {
     CHECK(aborted_row.handle() != ERUI_INVALID_ROW);
     CHECK(!aborted_row.valid());
     CHECK(aborted_row.set_value(false) == ERUI_INVALID_HANDLE);
+    CHECK(aborted_row.edit().label(L"Rejected").commit() ==
+        ERUI_INVALID_HANDLE);
     bool unchanged{true};
     CHECK(aborted_row.get_value(unchanged) == ERUI_INVALID_HANDLE);
     CHECK(unchanged);

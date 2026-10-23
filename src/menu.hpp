@@ -282,6 +282,14 @@ public:
 
     Page& set_presentation(PagePresentationSpec presentation);
 
+    // Internal host bridge: associate the row most recently appended through
+    // an add_* call with its stable public ABI identity. Direct Core users do
+    // not set this, so their rows remain intentionally non-editable at
+    // runtime.
+    Page& identify_last_row(
+        ERUI_ProviderHandle provider,
+        ERUI_RowHandle row);
+
     [[nodiscard]] PageKind kind() const noexcept { return kind_; }
     [[nodiscard]] std::wstring_view title() const noexcept { return title_; }
     [[nodiscard]] std::wstring_view help() const noexcept { return help_; }
@@ -299,6 +307,8 @@ private:
 
     struct RowDefinition {
         RowKind kind{RowKind::toggle};
+        ERUI_ProviderHandle provider{ERUI_INVALID_PROVIDER};
+        ERUI_RowHandle row{ERUI_INVALID_ROW};
         std::wstring label{};
         std::wstring help{};
         volatile std::uint8_t* byte_value{};

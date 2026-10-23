@@ -7,6 +7,7 @@
 #include "runtime_log.hpp"
 #include "runtime_requirements.hpp"
 #include "runtime_state.hpp"
+#include "row_presentation_state.hpp"
 #include "native_input_bindings.hpp"
 #include "native_tab_catalogue.hpp"
 #include "native_tabs.hpp"
@@ -54,6 +55,7 @@ InstallResult fail_install(InstallError error) noexcept {
     erui::native::remove_native_input_bindings();
     erui::native::remove_native_menu_hooks();
     erui::native::reset_native_text_inputs();
+    detail::reset_row_presentation_state();
     detail::runtime_state().tab_catalogue.reset();
     detail::runtime_state().menu.reset();
     detail::runtime_state().installed.store(false, std::memory_order_release);
@@ -263,6 +265,13 @@ InstallResult install_impl(
         return fail_install(InstallError::menu_compile_failed);
     }
 
+    if (!detail::configure_row_presentation_state(*runtime.menu)) {
+        detail::logf(
+            LogLevel::error,
+            "Runtime row-presentation state could not index the compiled menu");
+        return fail_install(InstallError::menu_compile_failed);
+    }
+
     if (tab_configuration) {
         detail::NativeTabCatalogueBuildResult catalogue =
             detail::build_native_tab_catalogue(
@@ -389,6 +398,8 @@ InstallResult install_impl(
         custom_tab_capacity_pagination;
     const bool require_text_inputs = options.enable_row_injection &&
         runtime.menu->modeled_text_input_count != 0;
+    const bool require_row_presentations = options.enable_row_injection &&
+        detail::editable_row_presentation_count() != 0;
     const bool require_input_bindings =
         runtime.menu->modeled_input_binding_count != 0;
     const bool require_formatted_sliders =
@@ -430,6 +441,7 @@ InstallResult install_impl(
                 require_submenus,
                 runtime.menu->modeled_popup_choice_count != 0,
                 require_text_inputs,
+                require_row_presentations,
                 options.enable_custom_text) ||
             (require_native_back && !addresses.native_back)) {
             detail::logf(
@@ -450,6 +462,7 @@ InstallResult install_impl(
                 require_native_back,
                 runtime.menu->modeled_popup_choice_count != 0,
                 require_text_inputs,
+                require_row_presentations,
                 options.enable_custom_text,
                 preserved_shared_addresses)) {
             return fail_install(InstallError::address_resolution_failed);
@@ -580,6 +593,7 @@ void uninstall() noexcept {
     erui::native::remove_native_input_bindings();
     erui::native::remove_native_menu_hooks();
     erui::native::reset_native_text_inputs();
+    detail::reset_row_presentation_state();
     runtime.button_action_hits.store(0, std::memory_order_release);
     runtime.diagnostic_button_action_logs.store(0, std::memory_order_release);
     runtime.button_action_faults.store(0, std::memory_order_release);

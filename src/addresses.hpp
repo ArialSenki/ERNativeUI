@@ -214,12 +214,23 @@ struct GameAddresses {
             scaleform_result_destructor;
     }
 
+    // API 1.4 row presentation updates reuse only the validated physical
+    // OptionSetting row identity, the common caption-controller identity,
+    // the page-frame boundary, and the narrow Scaleform title bridge. They
+    // deliberately do not depend on the software-keyboard/TextInput path.
+    [[nodiscard]] bool row_presentation_complete() const noexcept {
+        return page_frame && option_setting_dialog_vtable &&
+            edit_property_vtable && text_input_controller_vtable &&
+            title_bridge_complete();
+    }
+
     [[nodiscard]] bool complete(
         bool require_rows,
         bool require_buttons,
         bool require_submenus,
         bool require_popup_choices,
         bool require_text_inputs,
+        bool require_row_presentations,
         bool require_custom_text) const noexcept;
 };
 
@@ -319,6 +330,12 @@ enum class PreservedSharedMenuEntry : std::uint8_t {
     const PreservedSharedMenuAddresses& preserved,
     PreservedSharedMenuEntry entry) noexcept;
 
+// Validates the complete narrow native/Scaleform seam required before the
+// host advertises ERUI_CAP_UPDATES. Runtime resolution repeats these checks
+// immediately before hook installation so later mutation still fails closed.
+[[nodiscard]] bool preflight_row_presentation_addresses(
+    const ModuleView& game) noexcept;
+
 bool resolve_game_addresses(
     const ModuleView& game,
     GameAddresses& output,
@@ -328,6 +345,7 @@ bool resolve_game_addresses(
     bool require_native_back,
     bool require_popup_choices,
     bool require_text_inputs,
+    bool require_row_presentations,
     bool require_custom_text,
     const PreservedSharedMenuAddresses* preserved_shared = nullptr) noexcept;
 

@@ -4,12 +4,14 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <new>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -33,7 +35,7 @@ constexpr ERUI_Capabilities kCapabilities =
     ERUI_CAP_COLOR_PICKER | ERUI_CAP_BUILTIN_PAGES |
     ERUI_CAP_INPUT_BINDINGS | ERUI_CAP_STORAGE |
     ERUI_CAP_NUMERIC_SLIDER | ERUI_CAP_CUSTOM_SLIDER |
-    ERUI_CAP_CUSTOM_TABS | ERUI_CAP_TITLE_SCREEN_TEXT;
+    ERUI_CAP_CUSTOM_TABS | ERUI_CAP_TITLE_SCREEN_TEXT | ERUI_CAP_UPDATES;
 
 struct ActionState {
     ERUI_ProviderHandle provider{};
@@ -152,7 +154,8 @@ ERUI_Result ERUI_CALL register_provider(
     g_register_calls.fetch_add(1, std::memory_order_relaxed);
     if (!description || !out_provider || !out_root_page ||
         description->size < sizeof(ERUI_ProviderDesc) ||
-        description->api_version != ERUI_API_VERSION_1_3 ||
+        (description->api_version != ERUI_API_VERSION_1_3 &&
+            description->api_version != ERUI_API_VERSION_1_4) ||
         !valid_machine_identifier(description->provider_id)) {
         return ERUI_INVALID_ARGUMENT;
     }
@@ -875,10 +878,91 @@ ERUI_Result ERUI_CALL storage_get_info(
     return ERUI_OK;
 }
 
-ERUI_Api make_api() noexcept {
+ERUI_Result ERUI_CALL commit_updates(
+    ERUI_ProviderHandle provider,
+    const ERUI_UpdateBatchDesc* description) {
+    if (!description || description->size != sizeof(*description) ||
+        description->flags != 0 || !description->updates ||
+        description->update_count == 0 ||
+        description->update_count > ERUI_UPDATE_MAX_COUNT ||
+        description->update_stride != sizeof(ERUI_UpdateDesc) ||
+        description->reserved[0] != 0 ||
+        description->reserved[1] != 0) {
+        return ERUI_INVALID_ARGUMENT;
+    }
+
+    {
+        std::lock_guard lock(g_state_mutex);
+        const auto found = g_providers.find(provider);
+        if (found == g_providers.end() || !found->second.committed) {
+            return ERUI_INVALID_HANDLE;
+        }
+    }
+
+    const auto canonical_zero_view = [](ERUI_Utf16View view) noexcept {
+        return view.data == nullptr && view.length == 0 &&
+            view.reserved == 0;
+    };
+    const auto valid_view = [](ERUI_Utf16View view) noexcept {
+        return view.reserved == 0 &&
+            (view.length == 0 || view.data != nullptr);
+    };
+    constexpr ERUI_RowUpdateFields kKnownFields =
+        ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP;
+    std::unordered_set<ERUI_RowHandle> rows{};
+    try {
+        rows.reserve(description->update_count);
+    } catch (...) {
+        return ERUI_OUT_OF_MEMORY;
+    }
+    const auto* const bytes = reinterpret_cast<const std::byte*>(
+        description->updates);
+    for (std::uint32_t index = 0;
+         index < description->update_count;
+         ++index) {
+        ERUI_UpdateDesc update{};
+        std::memcpy(&update,
+            bytes + static_cast<std::size_t>(index) *
+                description->update_stride,
+            sizeof(update));
+        if (update.size != sizeof(update) ||
+            update.kind != ERUI_UPDATE_KIND_ROW || !update.payload ||
+            update.reserved[0] != 0 || update.reserved[1] != 0) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+
+        ERUI_RowUpdateDesc row{};
+        std::memcpy(&row, update.payload, sizeof(row));
+        if (row.size != sizeof(row) || row.flags != 0 ||
+            row.row == ERUI_INVALID_ROW || row.fields == 0 ||
+            (row.fields & ~kKnownFields) != 0 || row.reserved0 != 0 ||
+            row.reserved[0] != 0 || row.reserved[1] != 0) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        try {
+            if (!rows.insert(row.row).second) return ERUI_INVALID_ARGUMENT;
+        } catch (...) {
+            return ERUI_OUT_OF_MEMORY;
+        }
+        const bool label =
+            (row.fields & ERUI_ROW_UPDATE_FIELD_LABEL) != 0;
+        const bool help = (row.fields & ERUI_ROW_UPDATE_FIELD_HELP) != 0;
+        if ((!label && !canonical_zero_view(row.label)) ||
+            (!help && !canonical_zero_view(row.help)) ||
+            (label && (row.label.length == 0 || !valid_view(row.label))) ||
+            (help && !valid_view(row.help))) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+    }
+    return ERUI_OK;
+}
+
+ERUI_Api make_api(std::uint32_t version) noexcept {
     ERUI_Api api{};
-    api.size = ERUI_API_V1_3_SIZE;
-    api.api_version = ERUI_API_VERSION_1_3;
+    api.size = version == ERUI_API_VERSION_1_4
+        ? ERUI_API_V1_4_SIZE
+        : ERUI_API_V1_3_SIZE;
+    api.api_version = version;
     api.capabilities = kCapabilities;
     api.register_provider = &register_provider;
     api.add_button = &add_button;
@@ -927,6 +1011,11 @@ ERUI_Api make_api() noexcept {
     api.get_custom_slider_index = &get_custom_slider_index;
     api.add_tab = &add_tab;
     api.add_title_screen_text = &add_title_screen_text;
+    if (version >= ERUI_API_VERSION_1_4) {
+        api.commit_updates = &commit_updates;
+    } else {
+        api.capabilities &= ~ERUI_CAP_UPDATES;
+    }
     if ((g_disabled_features.load(std::memory_order_relaxed) &
             ERUI_TEST_CONNECTION_DISABLE_TITLE_SCREEN_TEXT) != 0) {
         api.capabilities &= ~ERUI_CAP_TITLE_SCREEN_TEXT;
@@ -1104,12 +1193,17 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERUI_GetApi(
     const ERUI_Result terminal =
         g_terminal_result.load(std::memory_order_relaxed);
     if (terminal != ERUI_OK) return terminal;
-    if (requested_version != ERUI_API_VERSION_1_3) {
+    if (requested_version != ERUI_API_VERSION_1_3 &&
+        requested_version != ERUI_API_VERSION_1_4) {
         return ERUI_UNSUPPORTED_VERSION;
     }
-    if (out_api->size < ERUI_API_V1_3_SIZE) return ERUI_INVALID_ARGUMENT;
-    const ERUI_Api api = make_api();
-    std::memcpy(out_api, &api, ERUI_API_V1_3_SIZE);
+    const std::uint32_t selected_size = requested_version ==
+            ERUI_API_VERSION_1_4
+        ? ERUI_API_V1_4_SIZE
+        : ERUI_API_V1_3_SIZE;
+    if (out_api->size < selected_size) return ERUI_INVALID_ARGUMENT;
+    const ERUI_Api api = make_api(requested_version);
+    std::memcpy(out_api, &api, selected_size);
     return ERUI_OK;
 }
 

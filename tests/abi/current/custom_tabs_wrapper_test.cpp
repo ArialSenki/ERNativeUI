@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
 
     auto connected = erui::connect();
     CHECK(connected.success());
-    CHECK(connected.value().api_version() == ERUI_API_VERSION_1_3);
+    CHECK(connected.value().api_version() == ERUI_API_VERSION_CURRENT);
     CHECK(connected.value().supports(erui::Capability::custom_tabs));
     CHECK(connected.value().supports(erui::Capability::title_screen_text));
     const auto get_title_observation =

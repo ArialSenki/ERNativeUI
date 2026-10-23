@@ -2,8 +2,10 @@
 
 #include "native_dialog.hpp"
 #include "native_slider_presentation.hpp"
+#include "native_row_presentation.hpp"
 #include "runtime_log.hpp"
 #include "runtime_state.hpp"
+#include "row_presentation_state.hpp"
 #include "root_button_text_override.hpp"
 #include "submenu_runtime.hpp"
 #include "native_text_input.hpp"
@@ -871,6 +873,10 @@ bool inject_logical_row(
     bool constructor_succeeded = false;
     ++outcome.attempted;
 
+    const RowPresentationMaterializationTicket presentation_ticket =
+        begin_native_row_presentation_materialization(
+            page, addresses, row);
+
     switch (row.kind) {
     case erui::RowKind::toggle:
         constructor_succeeded = row.byte_value &&
@@ -929,6 +935,12 @@ bool inject_logical_row(
     if (constructor_succeeded) {
         ++outcome.added;
     }
+    complete_native_row_presentation_materialization(
+        page,
+        addresses,
+        row,
+        presentation_ticket,
+        constructor_succeeded);
     if (faulted) {
         ++outcome.faulted;
     }
@@ -1125,6 +1137,13 @@ RowInjectionOutcome inject_page_route(
         return outcome;
     }
     const erui::detail::PageSlice* const slice = &resolved_slice;
+
+    // Publish queued model generations before the page starts constructing
+    // rows, then retire any prior binding epoch for this physical address.
+    // This ensures edits accepted while System was closed are visible on the
+    // first rendered frame without retaining stale native pointers.
+    erui::detail::synchronize_pending_row_presentations();
+    begin_native_row_presentation_page(page, addresses);
 
     reset_color_picker_page_widgets(
         page,

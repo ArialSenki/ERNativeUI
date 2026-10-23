@@ -69,7 +69,10 @@ _Static_assert(offsetof(ERUI_Api, get_game_language) == 120u,
     "v1.0 final function moved");
 
 #if defined(ERUI_API_VERSION_1_1)
-#if defined(ERUI_API_VERSION_1_3)
+#if defined(ERUI_API_VERSION_1_4)
+_Static_assert(ERUI_API_VERSION_CURRENT == ERUI_API_VERSION_1_4,
+    "unexpected current API version");
+#elif defined(ERUI_API_VERSION_1_3)
 _Static_assert(ERUI_API_VERSION_CURRENT == ERUI_API_VERSION_1_3,
     "unexpected current API version");
 #elif defined(ERUI_API_VERSION_1_2)
@@ -418,10 +421,59 @@ _Static_assert(ERUI_TITLE_SCREEN_CORNER_BOTTOM_RIGHT == 4u,
     "bottom-right title-screen corner drift");
 _Static_assert(ERUI_API_V1_3_SIZE == 384u,
     "API 1.3 prefix size drift");
+#if defined(ERUI_API_VERSION_1_4)
+_Static_assert(ERUI_CAP_UPDATES == (UINT64_C(1) << 20),
+    "updates capability bit drift");
+_Static_assert(ERUI_UPDATE_KIND_ROW == 1u,
+    "row update kind drift");
+_Static_assert(ERUI_ROW_UPDATE_FIELD_LABEL == (1u << 0),
+    "row-label field bit drift");
+_Static_assert(ERUI_ROW_UPDATE_FIELD_HELP == (1u << 1),
+    "row-help field bit drift");
+_Static_assert(ERUI_UPDATE_MAX_COUNT == 4096u,
+    "update batch limit drift");
+_Static_assert(sizeof(ERUI_RowUpdateDesc) == 64u,
+    "row-update descriptor size drift");
+_Static_assert(offsetof(ERUI_RowUpdateDesc, row) == 8u,
+    "row-update handle offset drift");
+_Static_assert(offsetof(ERUI_RowUpdateDesc, fields) == 16u,
+    "row-update fields offset drift");
+_Static_assert(offsetof(ERUI_RowUpdateDesc, label) == 24u,
+    "row-update label offset drift");
+_Static_assert(offsetof(ERUI_RowUpdateDesc, help) == 40u,
+    "row-update help offset drift");
+_Static_assert(offsetof(ERUI_RowUpdateDesc, reserved) == 56u,
+    "row-update reserved offset drift");
+_Static_assert(sizeof(ERUI_UpdateDesc) == 24u,
+    "update-envelope descriptor size drift");
+_Static_assert(offsetof(ERUI_UpdateDesc, payload) == 8u,
+    "update payload offset drift");
+_Static_assert(offsetof(ERUI_UpdateDesc, reserved) == 16u,
+    "update reserved offset drift");
+_Static_assert(sizeof(ERUI_UpdateBatchDesc) == 32u,
+    "update-batch descriptor size drift");
+_Static_assert(offsetof(ERUI_UpdateBatchDesc, updates) == 8u,
+    "update array offset drift");
+_Static_assert(offsetof(ERUI_UpdateBatchDesc, update_count) == 16u,
+    "update count offset drift");
+_Static_assert(offsetof(ERUI_UpdateBatchDesc, update_stride) == 20u,
+    "update stride offset drift");
+_Static_assert(offsetof(ERUI_UpdateBatchDesc, reserved) == 24u,
+    "update-batch reserved offset drift");
+_Static_assert(offsetof(ERUI_Api, commit_updates) == 384u,
+    "API 1.4 update function is not append-only");
+_Static_assert(ERUI_API_V1_4_SIZE == 392u,
+    "API 1.4 prefix size drift");
+_Static_assert(ERUI_API_CURRENT_SIZE == ERUI_API_V1_4_SIZE,
+    "current API size does not select API 1.4");
+_Static_assert(sizeof(ERUI_Api) == ERUI_API_V1_4_SIZE,
+    "current API structure has an unexpected tail");
+#else
 _Static_assert(ERUI_API_CURRENT_SIZE == ERUI_API_V1_3_SIZE,
     "current API size does not select API 1.3");
 _Static_assert(sizeof(ERUI_Api) == ERUI_API_V1_3_SIZE,
     "current API structure has an unexpected tail");
+#endif
 #endif
 #else
 _Static_assert(sizeof(ERUI_Api) == 128u,

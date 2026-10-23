@@ -482,6 +482,50 @@ void** resolve_callable_vtable(
     return nullptr;
 }
 
+const void* resolve_profile_vtable(
+    const ModuleView& game,
+    const char* name,
+    std::uintptr_t profile_rva,
+    std::size_t required_last_slot = 0) noexcept {
+    auto* const address = game.at_rva(profile_rva);
+    const std::size_t required_size =
+        (required_last_slot + 1u) * sizeof(void*);
+    if (!address || !game.contains(address, required_size)) {
+        erui::detail::logf(
+            erui::LogLevel::error,
+            "Address %-22s profile RVA 0x%" PRIXPTR " is outside the selected game image",
+            name,
+            profile_rva);
+        return nullptr;
+    }
+
+    void* first_entry{};
+    void* required_entry{};
+    std::memcpy(&first_entry, address, sizeof(first_entry));
+    std::memcpy(
+        &required_entry,
+        address + required_last_slot * sizeof(void*),
+        sizeof(required_entry));
+    if (!game.is_executable(first_entry) ||
+        !game.is_executable(required_entry)) {
+        erui::detail::logf(
+            erui::LogLevel::error,
+            "Address %-22s profile RVA 0x%" PRIXPTR " failed vtable validation (slot=%zu)",
+            name,
+            profile_rva,
+            required_last_slot);
+        return nullptr;
+    }
+
+    erui::detail::logf(
+        erui::LogLevel::verbose,
+        "Address %-22s = %p (validated profile vtable RVA 0x%" PRIXPTR ")",
+        name,
+        static_cast<void*>(address),
+        profile_rva);
+    return address;
+}
+
 [[nodiscard]] bool preserved_entry_matches_profile(
     const ModuleView& game,
     const void* address,
@@ -708,6 +752,7 @@ bool GameAddresses::complete(
     bool require_submenus,
     bool require_popup_choices,
     bool require_text_inputs,
+    bool require_row_presentations,
     bool require_custom_text) const noexcept {
     const bool rows_ready = !require_rows || (
         game_options_handler && on_off_list && menu_context && text_ref_help &&
@@ -727,8 +772,11 @@ bool GameAddresses::complete(
     const bool text_ready = !require_custom_text || text_resolver;
     const bool text_input_ready =
         !require_text_inputs || text_input_complete();
+    const bool row_presentation_ready = !require_row_presentations ||
+        row_presentation_complete();
     return rows_ready && buttons_ready && submenus_ready &&
-        popup_choices_ready && text_input_ready && text_ready;
+        popup_choices_ready && text_input_ready &&
+        row_presentation_ready && text_ready;
 }
 
 bool capture_preserved_shared_menu_addresses_at_attach(
@@ -913,6 +961,79 @@ bool revalidate_preserved_shared_menu_entry(
         entry);
 }
 
+bool preflight_row_presentation_addresses(
+    const ModuleView& game) noexcept {
+    const EldenRingBuild game_build = identify_elden_ring_build(
+        game.timestamp(), game.image_size());
+    if (game_build != EldenRingBuild::v2_7_1_0 &&
+        game_build != EldenRingBuild::v2_7_2_0) {
+        return false;
+    }
+
+    const CoreUiAddressProfile* const core_ui_profile =
+        find_core_ui_address_profile(game_build);
+    const MenuRuntimeAddressProfile* const menu_runtime_profile =
+        find_menu_runtime_address_profile(game_build);
+    const TextInputAddressProfile* const text_input_profile =
+        find_text_input_address_profile(game_build);
+    if (!core_ui_profile || !menu_runtime_profile || !text_input_profile) {
+        return false;
+    }
+
+    GameAddresses addresses{};
+    addresses.game_image_base = game.base();
+    addresses.game_image_size = game.image_size();
+    addresses.scaleform_path_resolver =
+        reinterpret_cast<ScaleformPathResolverFn>(resolve_optional_direct(
+            game,
+            "Scaleform path",
+            kScaleformPathResolverPattern,
+            menu_runtime_profile->scaleform_path_resolver_rva,
+            kScaleformPathResolverPattern));
+    addresses.scaleform_text_setter =
+        reinterpret_cast<ScaleformTextSetterFn>(resolve_optional_direct(
+            game,
+            "Scaleform text setter",
+            kScaleformTextSetterPattern,
+            menu_runtime_profile->scaleform_text_setter_rva,
+            kScaleformTextSetterPattern));
+    addresses.scaleform_result_destructor =
+        reinterpret_cast<ScaleformResultDestructorFn>(resolve_optional_direct(
+            game,
+            "Scaleform result dtor",
+            kScaleformResultDestructorPattern,
+            core_ui_profile->scaleform_result_destructor_rva,
+            kScaleformResultDestructorPattern));
+    addresses.option_setting_dialog_vtable = resolve_profile_vtable(
+        game,
+        "OptionSetting vtable",
+        text_input_profile->option_setting_dialog_vtable_rva);
+    addresses.edit_property_vtable = resolve_profile_vtable(
+        game,
+        "EditProperty vtable",
+        text_input_profile->edit_property_vtable_rva);
+    addresses.text_input_controller_vtable = resolve_profile_vtable(
+        game,
+        "row controller vtable",
+        text_input_profile->text_input_controller_vtable_rva,
+        6);
+    addresses.page_frame = reinterpret_cast<PageFrameFn>(
+        resolve_optional_direct(
+            game,
+            "page frame",
+            kPageFramePattern,
+            menu_runtime_profile->page_frame_rva,
+            kPageFramePattern));
+
+    if (!addresses.row_presentation_complete()) {
+        erui::detail::logf(
+            erui::LogLevel::warning,
+            "Runtime row-presentation preflight rejected one or more required native interfaces");
+        return false;
+    }
+    return true;
+}
+
 bool resolve_game_addresses(
     const ModuleView& game,
     GameAddresses& output,
@@ -922,6 +1043,7 @@ bool resolve_game_addresses(
     bool require_native_back,
     bool require_popup_choices,
     bool require_text_inputs,
+    bool require_row_presentations,
     bool require_custom_text,
     const PreservedSharedMenuAddresses* preserved_shared) noexcept {
     output = {};
@@ -1363,10 +1485,10 @@ bool resolve_game_addresses(
     const TextInputAddressProfile* const text_input_profile =
         find_text_input_address_profile(game_build);
     if (!text_input_profile) {
-        if (require_text_inputs) {
+        if (require_text_inputs || require_row_presentations) {
             erui::detail::logf(
                 erui::LogLevel::error,
-                "TextInput unavailable: unsupported game image timestamp=0x%08X size=0x%zX",
+                "TextInput/row-presentation interfaces unavailable: unsupported game image timestamp=0x%08X size=0x%zX",
                 static_cast<unsigned>(game.timestamp()),
                 game.image_size());
         } else {
@@ -1379,63 +1501,87 @@ bool resolve_game_addresses(
             elden_ring_build_name(game_build);
         erui::detail::logf(
             erui::LogLevel::verbose,
-            "TextInput address profile selected: Elden Ring %.*s",
+            "TextInput/row-presentation address profile selected: Elden Ring %.*s",
             static_cast<int>(build_name.size()),
             build_name.data());
-        output.text_input_row_producer =
-            reinterpret_cast<TextInputRowProducerFn>(resolve_optional_direct(
-                game, "text input producer", kTextInputRowProducerPattern,
-                text_input_profile->row_producer_rva,
-                kTextInputRowProducerPattern));
-        output.native_menu_string_constructor =
-            reinterpret_cast<NativeMenuStringConstructorFn>(
-                resolve_optional_direct(
-                    game, "menu string ctor",
-                    kNativeMenuStringConstructorPattern,
-                    text_input_profile->menu_string_constructor_rva,
-                    kNativeMenuStringConstructorPattern));
-        output.native_menu_string_borrowed_constructor =
-            reinterpret_cast<NativeMenuStringBorrowedConstructorFn>(
-                resolve_optional_direct(
-                    game, "menu string literal ctor",
-                    kNativeMenuStringBorrowedConstructorPattern,
-                    text_input_profile->menu_string_borrowed_constructor_rva,
-                    kNativeMenuStringBorrowedConstructorPattern));
-        output.native_menu_string_destructor =
-            reinterpret_cast<NativeMenuStringDestructorFn>(
-                resolve_optional_direct(
-                    game, "menu string dtor",
-                    kNativeMenuStringDestructorPattern,
-                    text_input_profile->menu_string_destructor_rva,
-                    kNativeMenuStringDestructorPattern));
-        output.text_input_editor_factory_builder =
-            reinterpret_cast<TextInputEditorFactoryBuilderFn>(
-                resolve_optional_direct(
-                    game, "text editor builder",
-                    kTextInputEditorFactoryBuilderPattern,
-                    text_input_profile->editor_factory_builder_rva,
-                    kTextInputEditorFactoryBuilderPattern));
-        output.text_input_editor_factory =
-            reinterpret_cast<TextInputEditorFactoryFn>(
-                resolve_optional_direct(
-                    game, "text editor factory",
-                    kTextInputEditorFactoryPattern,
-                    text_input_profile->editor_factory_rva,
-                    kTextInputEditorFactoryPattern));
-        output.option_setting_dialog_vtable =
-            game.at_rva(text_input_profile->option_setting_dialog_vtable_rva);
-        output.pad_setting_dialog_vtable =
-            game.at_rva(text_input_profile->pad_setting_dialog_vtable_rva);
-        output.edit_property_vtable =
-            game.at_rva(text_input_profile->edit_property_vtable_rva);
-        output.text_input_controller_vtable =
-            game.at_rva(text_input_profile->text_input_controller_vtable_rva);
-        output.software_keyboard_job_vtable =
-            game.at_rva(text_input_profile->software_keyboard_job_vtable_rva);
+        if (require_text_inputs) {
+            output.text_input_row_producer =
+                reinterpret_cast<TextInputRowProducerFn>(resolve_optional_direct(
+                    game, "text input producer", kTextInputRowProducerPattern,
+                    text_input_profile->row_producer_rva,
+                    kTextInputRowProducerPattern));
+            output.native_menu_string_constructor =
+                reinterpret_cast<NativeMenuStringConstructorFn>(
+                    resolve_optional_direct(
+                        game, "menu string ctor",
+                        kNativeMenuStringConstructorPattern,
+                        text_input_profile->menu_string_constructor_rva,
+                        kNativeMenuStringConstructorPattern));
+            output.native_menu_string_borrowed_constructor =
+                reinterpret_cast<NativeMenuStringBorrowedConstructorFn>(
+                    resolve_optional_direct(
+                        game, "menu string literal ctor",
+                        kNativeMenuStringBorrowedConstructorPattern,
+                        text_input_profile->menu_string_borrowed_constructor_rva,
+                        kNativeMenuStringBorrowedConstructorPattern));
+            output.native_menu_string_destructor =
+                reinterpret_cast<NativeMenuStringDestructorFn>(
+                    resolve_optional_direct(
+                        game, "menu string dtor",
+                        kNativeMenuStringDestructorPattern,
+                        text_input_profile->menu_string_destructor_rva,
+                        kNativeMenuStringDestructorPattern));
+            output.text_input_editor_factory_builder =
+                reinterpret_cast<TextInputEditorFactoryBuilderFn>(
+                    resolve_optional_direct(
+                        game, "text editor builder",
+                        kTextInputEditorFactoryBuilderPattern,
+                        text_input_profile->editor_factory_builder_rva,
+                        kTextInputEditorFactoryBuilderPattern));
+            output.text_input_editor_factory =
+                reinterpret_cast<TextInputEditorFactoryFn>(
+                    resolve_optional_direct(
+                        game, "text editor factory",
+                        kTextInputEditorFactoryPattern,
+                        text_input_profile->editor_factory_rva,
+                        kTextInputEditorFactoryPattern));
+        }
+
+        output.option_setting_dialog_vtable = resolve_profile_vtable(
+            game,
+            "OptionSetting vtable",
+            text_input_profile->option_setting_dialog_vtable_rva);
+        output.edit_property_vtable = resolve_profile_vtable(
+            game,
+            "EditProperty vtable",
+            text_input_profile->edit_property_vtable_rva);
+        output.text_input_controller_vtable = resolve_profile_vtable(
+            game,
+            "row controller vtable",
+            text_input_profile->text_input_controller_vtable_rva,
+            6);
+        if (require_text_inputs) {
+            output.pad_setting_dialog_vtable = resolve_profile_vtable(
+                game,
+                "PadSetting vtable",
+                text_input_profile->pad_setting_dialog_vtable_rva);
+            output.software_keyboard_job_vtable = resolve_profile_vtable(
+                game,
+                "software keyboard vtable",
+                text_input_profile->software_keyboard_job_vtable_rva);
+        }
         if (require_text_inputs && !output.text_input_complete()) {
             erui::detail::logf(
                 erui::LogLevel::error,
                 "TextInput unavailable: one or more native interfaces were unresolved");
+        }
+        if (require_row_presentations &&
+            (!output.option_setting_dialog_vtable ||
+             !output.edit_property_vtable ||
+             !output.text_input_controller_vtable)) {
+            erui::detail::logf(
+                erui::LogLevel::error,
+                "Runtime row presentation unavailable: one or more exact-profile vtables failed validation");
         }
     }
 
@@ -1461,7 +1607,8 @@ bool resolve_game_addresses(
                 kNativeBackPattern));
     }
 
-    if (require_custom_text || require_text_inputs) {
+    if (require_custom_text || require_text_inputs ||
+        require_row_presentations) {
         output.page_frame = reinterpret_cast<PageFrameFn>(
             resolve_optional_direct(
                 game, "page frame", kPageFramePattern,
@@ -1477,6 +1624,7 @@ bool resolve_game_addresses(
             require_submenus,
             require_popup_choices,
             require_text_inputs,
+            require_row_presentations,
             require_custom_text)) {
         erui::detail::logf(
             erui::LogLevel::error,

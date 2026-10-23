@@ -87,6 +87,7 @@ enum class Capability : ERUI_Capabilities {
     custom_slider = ERUI_CAP_CUSTOM_SLIDER,
     custom_tabs = ERUI_CAP_CUSTOM_TABS,
     title_screen_text = ERUI_CAP_TITLE_SCREEN_TEXT,
+    updates = ERUI_CAP_UPDATES,
 };
 
 enum class TabIconFormat : ERUI_TabIconFormat {
@@ -1225,7 +1226,8 @@ inline bool api_complete_for_version(
                     ERUI_CAP_NUMERIC_SLIDER |
                     ERUI_CAP_CUSTOM_SLIDER |
                     ERUI_CAP_CUSTOM_TABS |
-                    ERUI_CAP_TITLE_SCREEN_TEXT)) == 0;
+                    ERUI_CAP_TITLE_SCREEN_TEXT |
+                    ERUI_CAP_UPDATES)) == 0;
     }
     if (version == ERUI_API_VERSION_1_1) {
         return api.size == ERUI_API_V1_1_SIZE && api.add_text_input &&
@@ -1248,7 +1250,8 @@ inline bool api_complete_for_version(
             (api.capabilities &
                 (ERUI_CAP_NUMERIC_SLIDER | ERUI_CAP_CUSTOM_SLIDER |
                     ERUI_CAP_CUSTOM_TABS |
-                    ERUI_CAP_TITLE_SCREEN_TEXT)) == 0;
+                    ERUI_CAP_TITLE_SCREEN_TEXT |
+                    ERUI_CAP_UPDATES)) == 0;
     }
     if (version == ERUI_API_VERSION_1_2) {
         return api.size == ERUI_API_V1_2_SIZE && api.add_text_input &&
@@ -1274,7 +1277,8 @@ inline bool api_complete_for_version(
             (api.capabilities & ERUI_CAP_NUMERIC_SLIDER) != 0 &&
             (api.capabilities & ERUI_CAP_CUSTOM_SLIDER) != 0 &&
             (api.capabilities & ERUI_CAP_CUSTOM_TABS) == 0 &&
-            (api.capabilities & ERUI_CAP_TITLE_SCREEN_TEXT) == 0;
+            (api.capabilities & ERUI_CAP_TITLE_SCREEN_TEXT) == 0 &&
+            (api.capabilities & ERUI_CAP_UPDATES) == 0;
     }
     if (version == ERUI_API_VERSION_1_3) {
         return api.size == ERUI_API_V1_3_SIZE && api.add_text_input &&
@@ -1293,6 +1297,32 @@ inline bool api_complete_for_version(
             api.get_numeric_slider_value && api.add_custom_slider &&
             api.set_custom_slider_index && api.get_custom_slider_index &&
             api.add_tab && api.add_title_screen_text &&
+            (api.capabilities & ERUI_CAP_TEXT_INPUT) != 0 &&
+            (api.capabilities & ERUI_CAP_COLOR_PICKER) != 0 &&
+            (api.capabilities & ERUI_CAP_BUILTIN_PAGES) != 0 &&
+            (api.capabilities & ERUI_CAP_INPUT_BINDINGS) != 0 &&
+            (api.capabilities & ERUI_CAP_STORAGE) != 0 &&
+            (api.capabilities & ERUI_CAP_NUMERIC_SLIDER) != 0 &&
+            (api.capabilities & ERUI_CAP_CUSTOM_SLIDER) != 0 &&
+            (api.capabilities & ERUI_CAP_UPDATES) == 0;
+    }
+    if (version == ERUI_API_VERSION_1_4) {
+        return api.size == ERUI_API_V1_4_SIZE && api.add_text_input &&
+            api.set_text_input_value && api.get_text_input_value &&
+            api.add_color_picker && api.set_color_picker_value &&
+            api.get_color_picker_value && api.get_builtin_page &&
+            api.add_input_section && api.add_input_action &&
+            api.set_assignments_changed_handler && api.set_action_inputs &&
+            api.get_action_inputs && api.get_action_default_inputs &&
+            api.reset_action_inputs && api.open_storage &&
+            api.storage_load && api.storage_save && api.storage_get_utf8 &&
+            api.storage_set_utf8 && api.storage_erase &&
+            api.storage_get_action_inputs && api.storage_set_action_inputs &&
+            api.storage_apply_assignment_changes && api.storage_get_info &&
+            api.add_numeric_slider && api.set_numeric_slider_value &&
+            api.get_numeric_slider_value && api.add_custom_slider &&
+            api.set_custom_slider_index && api.get_custom_slider_index &&
+            api.add_tab && api.add_title_screen_text && api.commit_updates &&
             (api.capabilities & ERUI_CAP_TEXT_INPUT) != 0 &&
             (api.capabilities & ERUI_CAP_COLOR_PICKER) != 0 &&
             (api.capabilities & ERUI_CAP_BUILTIN_PAGES) != 0 &&
@@ -1334,15 +1364,15 @@ inline ApiConnectionResult connect_api(std::chrono::milliseconds timeout) {
             std::memcpy(&get_api, &symbol, sizeof(get_api));
             ERUI_Result status = request_api(
                 get_api,
-                ERUI_API_VERSION_1_3,
-                ERUI_API_V1_3_SIZE,
+                ERUI_API_VERSION_1_4,
+                ERUI_API_V1_4_SIZE,
                 result.api);
             if (status == ERUI_OK) {
                 if (!api_complete_for_version(
-                        result.api, ERUI_API_VERSION_1_3)) {
+                        result.api, ERUI_API_VERSION_1_4)) {
                     result.error = Error(ErrorCode::incompatible_api,
                         ERUI_UNSUPPORTED_VERSION,
-                        L"ERNativeUI returned an incomplete or incompatible API 1.3 table.");
+                        L"ERNativeUI returned an incomplete or incompatible API 1.4 table.");
                     return result;
                 }
                 result.connected = true;
@@ -1356,8 +1386,8 @@ inline ApiConnectionResult connect_api(std::chrono::milliseconds timeout) {
             if (status != ERUI_HOST_NOT_READY) {
                 result.error = Error(ErrorCode::incompatible_api, status,
                     status == ERUI_UNSUPPORTED_VERSION
-                        ? L"ERNativeUI API 1.3 is required; update ERNativeUI.dll."
-                        : std::wstring(L"ERNativeUI API 1.3 negotiation failed: ") +
+                        ? L"ERNativeUI API 1.4 is required; update ERNativeUI.dll."
+                        : std::wstring(L"ERNativeUI API 1.4 negotiation failed: ") +
                             result_name(status));
                 return result;
             }
@@ -1536,8 +1566,8 @@ class ConnectionResult;
 class Connection {
 public:
     [[nodiscard]] bool valid() const noexcept {
-        return api_.api_version == ERUI_API_VERSION_1_3 &&
-            api_.size == ERUI_API_V1_3_SIZE;
+        return api_.api_version == ERUI_API_VERSION_1_4 &&
+            api_.size == ERUI_API_V1_4_SIZE;
     }
     explicit operator bool() const noexcept { return valid(); }
     [[nodiscard]] bool supports(Capability capability) const noexcept {
@@ -1611,6 +1641,16 @@ inline ConnectionResult connect(std::chrono::milliseconds timeout) noexcept {
 inline ConnectionResult connect() noexcept {
     return connect(std::chrono::milliseconds{30000});
 }
+
+class ButtonRowEdit;
+class ToggleRowEdit;
+class SliderRowEdit;
+class NumericSliderRowEdit;
+class CustomSliderRowEdit;
+class InlineChoiceRowEdit;
+class PopupChoiceRowEdit;
+class TextInputRowEdit;
+class ColorPickerRowEdit;
 
 class RowRef {
 public:
@@ -1827,6 +1867,13 @@ protected:
         return ERUI_OK;
     }
 
+    [[nodiscard]] std::shared_ptr<detail::RowContext> edit_context()
+        const noexcept {
+        return context_;
+    }
+
+    [[nodiscard]] RowHandle edit_handle() const noexcept { return row_; }
+
 private:
     [[nodiscard]] const detail::RowContext* active_context() const noexcept {
         return row_ != ERUI_INVALID_ROW && context_ && context_->active() &&
@@ -1839,9 +1886,285 @@ private:
     RowHandle row_{ERUI_INVALID_ROW};
 };
 
+namespace detail {
+
+/*
+ * Shared implementation for the nine public, type-specific edit drafts.
+ * Drafts own their strings, do nothing when destroyed, and may be committed
+ * exactly once. The host copies the complete one-item batch synchronously.
+ */
+template <typename Derived>
+class RowEditDraft {
+public:
+    RowEditDraft(const RowEditDraft&) = delete;
+    RowEditDraft& operator=(const RowEditDraft&) = delete;
+    RowEditDraft(RowEditDraft&&) noexcept = default;
+    RowEditDraft& operator=(RowEditDraft&&) noexcept = default;
+    ~RowEditDraft() = default;
+
+    Derived& label(std::wstring_view value) & noexcept {
+        set_text(value, label_, ERUI_ROW_UPDATE_FIELD_LABEL);
+        return derived();
+    }
+
+    Derived&& label(std::wstring_view value) && noexcept {
+        set_text(value, label_, ERUI_ROW_UPDATE_FIELD_LABEL);
+        return std::move(derived());
+    }
+
+    Derived& help(std::wstring_view value) & noexcept {
+        set_text(value, help_, ERUI_ROW_UPDATE_FIELD_HELP);
+        return derived();
+    }
+
+    Derived&& help(std::wstring_view value) && noexcept {
+        set_text(value, help_, ERUI_ROW_UPDATE_FIELD_HELP);
+        return std::move(derived());
+    }
+
+    [[nodiscard]] ERUI_Result commit() noexcept {
+        if (committed_) return ERUI_ALREADY_COMMITTED;
+        committed_ = true;
+        if (error_ != ERUI_OK) return error_;
+        if (fields_ == 0) return ERUI_INVALID_ARGUMENT;
+        if (row_ == ERUI_INVALID_ROW || !context_ ||
+            !context_->committed() ||
+            context_->provider == ERUI_INVALID_PROVIDER) {
+            return ERUI_INVALID_HANDLE;
+        }
+        if ((context_->api.capabilities & ERUI_CAP_UPDATES) == 0 ||
+            !context_->api.commit_updates) {
+            return ERUI_NOT_SUPPORTED;
+        }
+
+        ERUI_RowUpdateDesc row_update{};
+        row_update.size = sizeof(row_update);
+        row_update.row = row_;
+        row_update.fields = fields_;
+        if ((fields_ & ERUI_ROW_UPDATE_FIELD_LABEL) != 0) {
+            row_update.label = utf16_view(label_);
+        }
+        if ((fields_ & ERUI_ROW_UPDATE_FIELD_HELP) != 0) {
+            row_update.help = utf16_view(help_);
+        }
+
+        ERUI_UpdateDesc update{};
+        update.size = sizeof(update);
+        update.kind = ERUI_UPDATE_KIND_ROW;
+        update.payload = &row_update;
+
+        ERUI_UpdateBatchDesc batch{};
+        batch.size = sizeof(batch);
+        batch.updates = &update;
+        batch.update_count = 1u;
+        batch.update_stride = sizeof(update);
+        return context_->api.commit_updates(context_->provider, &batch);
+    }
+
+protected:
+    RowEditDraft(
+        std::shared_ptr<RowContext> context,
+        RowHandle row) noexcept
+        : context_(std::move(context)), row_(row) {}
+
+private:
+    [[nodiscard]] Derived& derived() noexcept {
+        return static_cast<Derived&>(*this);
+    }
+
+    void set_text(
+        std::wstring_view value,
+        std::wstring& destination,
+        ERUI_RowUpdateFields field) noexcept {
+        if (committed_ || error_ != ERUI_OK) return;
+        if (!view_size_fits(value.size()) ||
+            (field == ERUI_ROW_UPDATE_FIELD_LABEL && value.empty())) {
+            error_ = ERUI_INVALID_ARGUMENT;
+            return;
+        }
+        try {
+            if (value.empty()) destination.clear();
+            else destination.assign(value.data(), value.size());
+            fields_ |= field;
+        } catch (...) {
+            error_ = ERUI_OUT_OF_MEMORY;
+        }
+    }
+
+    std::shared_ptr<RowContext> context_{};
+    RowHandle row_{ERUI_INVALID_ROW};
+    ERUI_RowUpdateFields fields_{};
+    ERUI_Result error_{ERUI_OK};
+    bool committed_{};
+    std::wstring label_{};
+    std::wstring help_{};
+};
+
+} // namespace detail
+
+class ButtonRow;
+class ToggleRow;
+class SliderRow;
+class NumericSliderRow;
+class CustomSliderRow;
+class InlineChoiceRow;
+class PopupChoiceRow;
+class TextInputRow;
+class ColorPickerRow;
+
+class ButtonRowEdit final : public detail::RowEditDraft<ButtonRowEdit> {
+public:
+    ButtonRowEdit(const ButtonRowEdit&) = delete;
+    ButtonRowEdit& operator=(const ButtonRowEdit&) = delete;
+    ButtonRowEdit(ButtonRowEdit&&) noexcept = default;
+    ButtonRowEdit& operator=(ButtonRowEdit&&) noexcept = default;
+    ~ButtonRowEdit() = default;
+private:
+    friend class ButtonRow;
+    ButtonRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<ButtonRowEdit>(std::move(context), row) {}
+};
+
+class ToggleRowEdit final : public detail::RowEditDraft<ToggleRowEdit> {
+public:
+    ToggleRowEdit(const ToggleRowEdit&) = delete;
+    ToggleRowEdit& operator=(const ToggleRowEdit&) = delete;
+    ToggleRowEdit(ToggleRowEdit&&) noexcept = default;
+    ToggleRowEdit& operator=(ToggleRowEdit&&) noexcept = default;
+    ~ToggleRowEdit() = default;
+private:
+    friend class ToggleRow;
+    ToggleRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<ToggleRowEdit>(std::move(context), row) {}
+};
+
+class SliderRowEdit final : public detail::RowEditDraft<SliderRowEdit> {
+public:
+    SliderRowEdit(const SliderRowEdit&) = delete;
+    SliderRowEdit& operator=(const SliderRowEdit&) = delete;
+    SliderRowEdit(SliderRowEdit&&) noexcept = default;
+    SliderRowEdit& operator=(SliderRowEdit&&) noexcept = default;
+    ~SliderRowEdit() = default;
+private:
+    friend class SliderRow;
+    SliderRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<SliderRowEdit>(std::move(context), row) {}
+};
+
+class NumericSliderRowEdit final
+    : public detail::RowEditDraft<NumericSliderRowEdit> {
+public:
+    NumericSliderRowEdit(const NumericSliderRowEdit&) = delete;
+    NumericSliderRowEdit& operator=(const NumericSliderRowEdit&) = delete;
+    NumericSliderRowEdit(NumericSliderRowEdit&&) noexcept = default;
+    NumericSliderRowEdit& operator=(NumericSliderRowEdit&&) noexcept = default;
+    ~NumericSliderRowEdit() = default;
+private:
+    friend class NumericSliderRow;
+    NumericSliderRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<NumericSliderRowEdit>(
+            std::move(context), row) {}
+};
+
+class CustomSliderRowEdit final
+    : public detail::RowEditDraft<CustomSliderRowEdit> {
+public:
+    CustomSliderRowEdit(const CustomSliderRowEdit&) = delete;
+    CustomSliderRowEdit& operator=(const CustomSliderRowEdit&) = delete;
+    CustomSliderRowEdit(CustomSliderRowEdit&&) noexcept = default;
+    CustomSliderRowEdit& operator=(CustomSliderRowEdit&&) noexcept = default;
+    ~CustomSliderRowEdit() = default;
+private:
+    friend class CustomSliderRow;
+    CustomSliderRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<CustomSliderRowEdit>(
+            std::move(context), row) {}
+};
+
+class InlineChoiceRowEdit final
+    : public detail::RowEditDraft<InlineChoiceRowEdit> {
+public:
+    InlineChoiceRowEdit(const InlineChoiceRowEdit&) = delete;
+    InlineChoiceRowEdit& operator=(const InlineChoiceRowEdit&) = delete;
+    InlineChoiceRowEdit(InlineChoiceRowEdit&&) noexcept = default;
+    InlineChoiceRowEdit& operator=(InlineChoiceRowEdit&&) noexcept = default;
+    ~InlineChoiceRowEdit() = default;
+private:
+    friend class InlineChoiceRow;
+    InlineChoiceRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<InlineChoiceRowEdit>(
+            std::move(context), row) {}
+};
+
+class PopupChoiceRowEdit final
+    : public detail::RowEditDraft<PopupChoiceRowEdit> {
+public:
+    PopupChoiceRowEdit(const PopupChoiceRowEdit&) = delete;
+    PopupChoiceRowEdit& operator=(const PopupChoiceRowEdit&) = delete;
+    PopupChoiceRowEdit(PopupChoiceRowEdit&&) noexcept = default;
+    PopupChoiceRowEdit& operator=(PopupChoiceRowEdit&&) noexcept = default;
+    ~PopupChoiceRowEdit() = default;
+private:
+    friend class PopupChoiceRow;
+    PopupChoiceRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<PopupChoiceRowEdit>(
+            std::move(context), row) {}
+};
+
+class TextInputRowEdit final
+    : public detail::RowEditDraft<TextInputRowEdit> {
+public:
+    TextInputRowEdit(const TextInputRowEdit&) = delete;
+    TextInputRowEdit& operator=(const TextInputRowEdit&) = delete;
+    TextInputRowEdit(TextInputRowEdit&&) noexcept = default;
+    TextInputRowEdit& operator=(TextInputRowEdit&&) noexcept = default;
+    ~TextInputRowEdit() = default;
+private:
+    friend class TextInputRow;
+    TextInputRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<TextInputRowEdit>(
+            std::move(context), row) {}
+};
+
+class ColorPickerRowEdit final
+    : public detail::RowEditDraft<ColorPickerRowEdit> {
+public:
+    ColorPickerRowEdit(const ColorPickerRowEdit&) = delete;
+    ColorPickerRowEdit& operator=(const ColorPickerRowEdit&) = delete;
+    ColorPickerRowEdit(ColorPickerRowEdit&&) noexcept = default;
+    ColorPickerRowEdit& operator=(ColorPickerRowEdit&&) noexcept = default;
+    ~ColorPickerRowEdit() = default;
+private:
+    friend class ColorPickerRow;
+    ColorPickerRowEdit(
+        std::shared_ptr<detail::RowContext> context,
+        RowHandle row) noexcept
+        : detail::RowEditDraft<ColorPickerRowEdit>(
+            std::move(context), row) {}
+};
+
 class ButtonRow final : public RowRef {
 public:
     ButtonRow() noexcept = default;
+    [[nodiscard]] ButtonRowEdit edit() const noexcept {
+        return ButtonRowEdit(edit_context(), edit_handle());
+    }
 
 private:
     friend class Page;
@@ -1854,6 +2177,9 @@ private:
 class ToggleRow final : public RowRef {
 public:
     ToggleRow() noexcept = default;
+    [[nodiscard]] ToggleRowEdit edit() const noexcept {
+        return ToggleRowEdit(edit_context(), edit_handle());
+    }
 
     ERUI_Result set_value(bool value) const noexcept {
         return set_byte_value(value ? 1u : 0u);
@@ -1876,6 +2202,9 @@ private:
 class SliderRow final : public RowRef {
 public:
     SliderRow() noexcept = default;
+    [[nodiscard]] SliderRowEdit edit() const noexcept {
+        return SliderRowEdit(edit_context(), edit_handle());
+    }
 
     ERUI_Result set_value(std::uint8_t value) const noexcept {
         return set_byte_value(value);
@@ -1895,6 +2224,9 @@ private:
 class NumericSliderRow final : public RowRef {
 public:
     NumericSliderRow() noexcept = default;
+    [[nodiscard]] NumericSliderRowEdit edit() const noexcept {
+        return NumericSliderRowEdit(edit_context(), edit_handle());
+    }
 
     ERUI_Result set_value(double value) const noexcept {
         return set_numeric_value(value);
@@ -1914,6 +2246,9 @@ private:
 class CustomSliderRow final : public RowRef {
 public:
     CustomSliderRow() noexcept = default;
+    [[nodiscard]] CustomSliderRowEdit edit() const noexcept {
+        return CustomSliderRowEdit(edit_context(), edit_handle());
+    }
 
     ERUI_Result set_index(std::uint32_t index) const noexcept {
         return set_custom_index(index);
@@ -1933,6 +2268,9 @@ private:
 class InlineChoiceRow final : public RowRef {
 public:
     InlineChoiceRow() noexcept = default;
+    [[nodiscard]] InlineChoiceRowEdit edit() const noexcept {
+        return InlineChoiceRowEdit(edit_context(), edit_handle());
+    }
 
     ERUI_Result set_index(std::uint8_t index) const noexcept {
         return set_byte_value(index);
@@ -1952,6 +2290,9 @@ private:
 class PopupChoiceRow final : public RowRef {
 public:
     PopupChoiceRow() noexcept = default;
+    [[nodiscard]] PopupChoiceRowEdit edit() const noexcept {
+        return PopupChoiceRowEdit(edit_context(), edit_handle());
+    }
 
     ERUI_Result set_index(std::uint8_t index) const noexcept {
         return set_byte_value(index);
@@ -1971,6 +2312,9 @@ private:
 class TextInputRow final : public RowRef {
 public:
     TextInputRow() noexcept = default;
+    [[nodiscard]] TextInputRowEdit edit() const noexcept {
+        return TextInputRowEdit(edit_context(), edit_handle());
+    }
 
     ERUI_Result set_text(std::wstring_view value) const noexcept {
         return set_text_value(value);
@@ -1990,6 +2334,9 @@ private:
 class ColorPickerRow final : public RowRef {
 public:
     ColorPickerRow() noexcept = default;
+    [[nodiscard]] ColorPickerRowEdit edit() const noexcept {
+        return ColorPickerRowEdit(edit_context(), edit_handle());
+    }
 
     ERUI_Result set_color(Color value) const noexcept {
         return set_color_value(value);
@@ -4093,10 +4440,10 @@ RegistrationResult Connection::register_menu(
     RegistrationResult output{};
     try {
         if (!detail::api_complete_for_version(
-                api_, ERUI_API_VERSION_1_3)) {
+                api_, ERUI_API_VERSION_1_4)) {
             output.error_ = Error(ErrorCode::incompatible_api,
                 ERUI_UNSUPPORTED_VERSION,
-                L"A valid ERNativeUI API 1.3 connection is required.");
+                L"A valid ERNativeUI API 1.4 connection is required.");
             return output;
         }
         if (!detail::valid_machine_identifier(options.provider_id)) {

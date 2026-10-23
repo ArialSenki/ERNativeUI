@@ -4,6 +4,7 @@
 #include "native_input_bindings.hpp"
 #include "native_dialog.hpp"
 #include "native_dialog_presentation.hpp"
+#include "row_presentation_state.hpp"
 #include "runtime_log.hpp"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace erui::host {
@@ -32,6 +34,9 @@ static_assert(ERUI_CUSTOM_TAB_TITLE_MAX_CODE_UNITS == 95u);
 static_assert(ERUI_TAB_ICON_RGBA8_BYTE_COUNT == 4096u);
 static_assert(ERUI_TITLE_SCREEN_TEXT_MAX_CODE_UNITS == 255u);
 static_assert(ERUI_TITLE_SCREEN_TEXT_MAX_LINES == 16u);
+static_assert(ERUI_UPDATE_MAX_COUNT == 4096u);
+static_assert(kMaxTextUnits ==
+    erui::detail::row_presentation_max_text_units);
 
 static_assert(ERUI_BUILTIN_PAGE_GAME_OPTIONS ==
     static_cast<ERUI_BuiltinPage>(
@@ -588,6 +593,18 @@ bool Registry::title_screen_text_backend_available() const noexcept {
     return title_screen_text_backend_available_;
 }
 
+bool Registry::enable_updates_backend() noexcept {
+    std::lock_guard lock(mutex_);
+    if (open_ || frozen_) return false;
+    updates_backend_available_ = true;
+    return true;
+}
+
+bool Registry::updates_backend_available() const noexcept {
+    std::lock_guard lock(mutex_);
+    return updates_backend_available_;
+}
+
 void Registry::open_registration() noexcept {
     std::lock_guard lock(mutex_);
     open_ = true;
@@ -715,7 +732,8 @@ ERUI_Result Registry::register_provider(
         (negotiated_api_version != ERUI_API_VERSION_1_0 &&
             negotiated_api_version != ERUI_API_VERSION_1_1 &&
             negotiated_api_version != ERUI_API_VERSION_1_2 &&
-            negotiated_api_version != ERUI_API_VERSION_1_3) ||
+            negotiated_api_version != ERUI_API_VERSION_1_3 &&
+            negotiated_api_version != ERUI_API_VERSION_1_4) ||
         description->api_version != negotiated_api_version ||
         description->flags != 0 || !description->owner_module ||
         !valid_view(description->provider_id) ||
@@ -2635,6 +2653,172 @@ ERUI_Result Registry::enqueue_alert(
     }
 }
 
+ERUI_Result Registry::commit_updates(
+    ERUI_ProviderHandle provider_handle,
+    const ERUI_UpdateBatchDesc* description) noexcept {
+    if (!description || description->size != sizeof(*description) ||
+        description->flags != 0 || !description->updates ||
+        description->update_count == 0 ||
+        description->update_count > ERUI_UPDATE_MAX_COUNT ||
+        description->update_stride != sizeof(ERUI_UpdateDesc) ||
+        description->reserved[0] != 0 ||
+        description->reserved[1] != 0) {
+        return ERUI_INVALID_ARGUMENT;
+    }
+
+    struct ParsedRowUpdate {
+        ERUI_RowHandle row{};
+        ERUI_RowUpdateFields fields{};
+        std::wstring label{};
+        std::wstring help{};
+    };
+    struct PendingRowMutation {
+        Row* row{};
+        std::wstring label{};
+        std::wstring help{};
+        bool materialized{};
+    };
+
+    try {
+        std::vector<ParsedRowUpdate> parsed{};
+        parsed.reserve(description->update_count);
+        const auto* const update_bytes = reinterpret_cast<const std::byte*>(
+            description->updates);
+        constexpr ERUI_RowUpdateFields kKnownRowFields =
+            ERUI_ROW_UPDATE_FIELD_LABEL | ERUI_ROW_UPDATE_FIELD_HELP;
+
+        for (std::uint32_t index = 0;
+             index < description->update_count;
+             ++index) {
+            ERUI_UpdateDesc update{};
+            std::memcpy(
+                &update,
+                update_bytes +
+                    static_cast<std::size_t>(index) *
+                        description->update_stride,
+                sizeof(update));
+            if (update.size != sizeof(update) ||
+                update.kind != ERUI_UPDATE_KIND_ROW || !update.payload ||
+                update.reserved[0] != 0 || update.reserved[1] != 0) {
+                return ERUI_INVALID_ARGUMENT;
+            }
+
+            ERUI_RowUpdateDesc row_update{};
+            std::memcpy(&row_update, update.payload, sizeof(row_update));
+            if (row_update.size != sizeof(row_update) ||
+                row_update.flags != 0 || row_update.row == ERUI_INVALID_ROW ||
+                row_update.fields == 0 ||
+                (row_update.fields & ~kKnownRowFields) != 0 ||
+                row_update.reserved0 != 0 ||
+                row_update.reserved[0] != 0 ||
+                row_update.reserved[1] != 0) {
+                return ERUI_INVALID_ARGUMENT;
+            }
+
+            const auto canonical_zero_view = [](ERUI_Utf16View view) {
+                return view.data == nullptr && view.length == 0 &&
+                    view.reserved == 0;
+            };
+            const bool changes_label =
+                (row_update.fields & ERUI_ROW_UPDATE_FIELD_LABEL) != 0;
+            const bool changes_help =
+                (row_update.fields & ERUI_ROW_UPDATE_FIELD_HELP) != 0;
+            if ((!changes_label && !canonical_zero_view(row_update.label)) ||
+                (!changes_help && !canonical_zero_view(row_update.help)) ||
+                (changes_label && !valid_view(row_update.label)) ||
+                (changes_help && !valid_view(row_update.help))) {
+                return ERUI_INVALID_ARGUMENT;
+            }
+
+            ParsedRowUpdate parsed_update{};
+            parsed_update.row = row_update.row;
+            parsed_update.fields = row_update.fields;
+            if (changes_label) {
+                parsed_update.label = copy_utf16(row_update.label, false);
+            }
+            if (changes_help) {
+                parsed_update.help = copy_utf16(row_update.help);
+            }
+            parsed.push_back(std::move(parsed_update));
+        }
+
+        std::lock_guard lock(mutex_);
+        if (!updates_backend_available_) return ERUI_NOT_SUPPORTED;
+        const auto provider_it = providers_.find(provider_handle);
+        if (provider_it == providers_.end()) return ERUI_INVALID_HANDLE;
+        Provider& provider = *provider_it->second;
+        if (provider.api_version < ERUI_API_VERSION_1_4) {
+            return ERUI_NOT_SUPPORTED;
+        }
+        if (!provider.committed) return ERUI_INVALID_HANDLE;
+
+        std::unordered_set<ERUI_RowHandle> unique_rows{};
+        unique_rows.reserve(parsed.size());
+        std::vector<PendingRowMutation> mutations{};
+        mutations.reserve(parsed.size());
+        for (ParsedRowUpdate& update : parsed) {
+            if (!unique_rows.insert(update.row).second) {
+                return ERUI_INVALID_ARGUMENT;
+            }
+            const auto row_it = provider.row_lookup.find(update.row);
+            if (row_it == provider.row_lookup.end()) {
+                return ERUI_INVALID_HANDLE;
+            }
+            Row& row = *row_it->second;
+            PendingRowMutation mutation{};
+            mutation.row = &row;
+            mutation.label =
+                (update.fields & ERUI_ROW_UPDATE_FIELD_LABEL) != 0
+                ? std::move(update.label)
+                : row.label;
+            mutation.help =
+                (update.fields & ERUI_ROW_UPDATE_FIELD_HELP) != 0
+                ? std::move(update.help)
+                : row.help;
+            // These action-row families have no native disabled state and
+            // are deliberately omitted by MenuCompiler while disabled.
+            mutation.materialized = row.enabled ||
+                (row.kind != RowKind::button &&
+                 row.kind != RowKind::color_picker &&
+                 row.kind != RowKind::submenu);
+            mutations.push_back(std::move(mutation));
+        }
+
+        std::vector<erui::detail::RowPresentationUpdate> snapshots{};
+        snapshots.reserve(mutations.size());
+        for (const PendingRowMutation& mutation : mutations) {
+            if (!mutation.materialized) continue;
+            snapshots.push_back({
+                .provider = provider_handle,
+                .row = mutation.row->handle,
+                .label = mutation.label,
+                .help = mutation.help,
+            });
+        }
+        if (!snapshots.empty()) {
+            const ERUI_Result published =
+                erui::detail::submit_row_presentation_updates(
+                    std::move(snapshots));
+            if (published != ERUI_OK) return published;
+        }
+
+        // Publication above is all-or-nothing. The remaining moves are
+        // noexcept, so the registry model and the native desired generation
+        // cannot diverge through partial mutation.
+        for (PendingRowMutation& mutation : mutations) {
+            mutation.row->label = std::move(mutation.label);
+            mutation.row->help = std::move(mutation.help);
+        }
+        ++generation_;
+        if (open_) note_activity_locked();
+        return ERUI_OK;
+    } catch (const std::bad_alloc&) {
+        return ERUI_OUT_OF_MEMORY;
+    } catch (...) {
+        return ERUI_INVALID_ARGUMENT;
+    }
+}
+
 void Registry::apply_pending_values() noexcept {
     std::lock_guard lock(mutex_);
     for (const auto& provider_item : providers_) {
@@ -3015,6 +3199,10 @@ void Registry::append_page_locked(
             append_page_locked(provider, *child->second, target);
             break;
         }
+        }
+        if (provider.api_version >= ERUI_API_VERSION_1_4 &&
+            updates_backend_available_) {
+            destination.identify_last_row(provider.handle, row->handle);
         }
     }
 }
