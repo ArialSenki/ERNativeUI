@@ -158,9 +158,11 @@ constexpr AnchorRule kRules[] = {
     // Here AdditionalProperties only holds TopItem_0 above the list (x 619).
     {"02_020_inventory.gfx", nullptr, "AdditionalProperties", Horizontal::left, Vertical::top},
 
-    // Item command list: a small pop-up beside the inventory list.
-    {"02_030_inventory_commandlist.gfx", nullptr, "ItemList", Horizontal::left, Vertical::top},     // 245,125
-    {"02_030_inventory_commandlist.gfx", nullptr, "StatusBar", Horizontal::left, Vertical::top},
+    // 02_030_inventory_commandlist (the item pop-up) is not moved: the game
+    // places it beside the selected item, which already moves with the list
+    // (its ItemList at 245 reaches -48 on the stage, off screen even at
+    // 16:9). Moving it as well put it twice as far left, off the screen edge
+    // (r135 report at 21:9).
 
     {"02_070_status.gfx", "BG", "BG_L", Horizontal::stretch, Vertical::middle},
     {"02_070_status.gfx", "BG", "BG_S", Horizontal::stretch, Vertical::middle},   // centred here
@@ -364,7 +366,6 @@ constexpr LayoutMovie kMovies[] = {
     {"02_010_equiptop.gfx", LayoutGroup::menu},
     {"02_011_equip.gfx", LayoutGroup::menu},
     {"02_020_inventory.gfx", LayoutGroup::menu},
-    {"02_030_inventory_commandlist.gfx", LayoutGroup::menu},
     {"02_040_optionsetting.gfx", LayoutGroup::menu},
     {"02_042_pc_graphicsetting.gfx", LayoutGroup::menu},
     {"02_070_status.gfx", LayoutGroup::menu},

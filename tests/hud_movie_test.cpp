@@ -95,7 +95,6 @@ void test_movie(const std::filesystem::path& folder, erui::gfx::HudMovie movie, 
             : file == "02_011_equip.gfx" ? 9u
             : file == "02_020_inventory.gfx" ? 10u
             : file == "02_070_status.gfx" ? 7u
-            : file == "02_030_inventory_commandlist.gfx" ? 2u
             : file == "02_040_optionsetting.gfx" || file == "02_042_pc_graphicsetting.gfx" ? 3u
             : file == "01_001_fe_soul.gfx" || file == "01_002_fe_saveicon.gfx" ? 1u
             : file == "03_020_spell.gfx" ? 11u : file == "02_903_nowloading2.gfx" ? 4u : 0u;
