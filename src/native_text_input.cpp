@@ -200,6 +200,12 @@ bool destroy_native_value(NativeBinding* binding) noexcept {
 }
 
 bool synchronize_binding(NativeBinding& binding, bool force) noexcept {
+    // Runs every page frame: an unchanged value leaves without the lock and
+    // the string copy of snapshot().
+    if (!force && binding.native_value_constructed &&
+        binding.applied_revision == binding.state->revision()) {
+        return true;
+    }
     try {
         const erui::detail::TextInputState::Snapshot snapshot =
             binding.state->snapshot();

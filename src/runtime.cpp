@@ -6,6 +6,7 @@
 #include "module.hpp"
 #include "runtime_log.hpp"
 #include "runtime_requirements.hpp"
+#include "running_build.hpp"
 #include "runtime_state.hpp"
 #include "native_input_bindings.hpp"
 #include "native_tab_catalogue.hpp"
@@ -330,10 +331,20 @@ InstallResult install_impl(
             "Selected exact native profile: Elden Ring %.*s",
             static_cast<int>(identity->product_version.size()),
             identity->product_version.data());
+    } else if (const erui::native::EldenRingBuildIdentity* const equivalent =
+                   erui::native::adopt_layout_equivalent_image(game.base())) {
+        detail::logf(
+            LogLevel::warning,
+            "Unlisted game image (PE timestamp=0x%08X) has the section layout of Elden Ring %.*s; using its profiles, each address is still verified before use",
+            static_cast<unsigned>(game.timestamp()),
+            static_cast<int>(equivalent->product_version.size()),
+            equivalent->product_version.data());
     } else {
         detail::logf(
             LogLevel::warning,
-            "No exact native profile for this game image; build-locked features will remain unavailable");
+            "No exact native profile for this game image (layout fingerprint=0x%016llX); build-locked features will remain unavailable",
+            static_cast<unsigned long long>(
+                erui::native::image_layout_fingerprint(game.base())));
     }
 
     const bool active_pagination = options.enable_row_injection &&

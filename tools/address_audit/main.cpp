@@ -7,8 +7,10 @@
 
 #include "addresses.hpp"
 #include "module.hpp"
+#include "native_input_bindings.hpp"
 #include "runtime_gfx_locate.hpp"
 #include "runtime_log.hpp"
+#include "running_build.hpp"
 
 #include <Windows.h>
 
@@ -40,14 +42,30 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
     std::wprintf(L"Auditing %ls\n", path);
+    // Trace and verbose lines stay off (diagnostic logging is off by default).
     erui::detail::set_log_sink(&sink);
-    erui::detail::set_log_filter(true, false);
 
     erui::native::ModuleView game{};
     if (!game.initialize(image)) {
         std::printf("ERROR could not read the PE image\n");
         return 2;
     }
+    const std::uint64_t layout = erui::native::image_layout_fingerprint(image);
+    if (const erui::native::EldenRingBuildIdentity* const exact =
+            erui::native::find_elden_ring_build(game.timestamp(), game.image_size())) {
+        std::printf("      Build: Elden Ring %.*s (exact identity)\n",
+            static_cast<int>(exact->product_version.size()), exact->product_version.data());
+    } else if (const erui::native::EldenRingBuildIdentity* const equivalent =
+                   erui::native::adopt_layout_equivalent_image(image)) {
+        std::printf("WARN  Build: unlisted (PE timestamp 0x%08X), same layout as Elden Ring %.*s; auditing with its profiles\n",
+            static_cast<unsigned>(game.timestamp()),
+            static_cast<int>(equivalent->product_version.size()), equivalent->product_version.data());
+    } else {
+        std::printf("WARN  Build: unknown (PE timestamp 0x%08X, image size 0x%zX, layout 0x%016llX)\n",
+            static_cast<unsigned>(game.timestamp()), game.image_size(),
+            static_cast<unsigned long long>(layout));
+    }
+
     erui::native::GameAddresses addresses{};
     const bool complete = erui::native::resolve_game_addresses(
         game, addresses, true, true, true, true, true, true, true);
@@ -63,8 +81,18 @@ int wmain(int argc, wchar_t** argv) {
         std::printf("ERROR Runtime GFX: %s\n", gfx.failure ? gfx.failure : "lookup failed");
     }
 
-    std::printf("\nSummary: required addresses %s, %d error(s), %d fallback RVA(s), runtime GFX %s\n",
-        complete ? "complete" : "INCOMPLETE", g_errors, g_fallbacks, gfx_ok ? "ok" : "unavailable");
+    // Input bindings (hotkeys) resolve on their own path; a broken one used
+    // to abort the whole install only for players with bindings (r132).
+    const bool input_ok = erui::native::audit_native_input_bindings(image);
+    if (input_ok) {
+        std::printf("      Input bindings: every interface validated\n");
+    } else {
+        std::printf("ERROR Input bindings: interfaces did not validate (see the lines above)\n");
+    }
+
+    std::printf("\nSummary: required addresses %s, %d error(s), %d fallback RVA(s), runtime GFX %s, input bindings %s\n",
+        complete ? "complete" : "INCOMPLETE", g_errors, g_fallbacks, gfx_ok ? "ok" : "unavailable",
+        input_ok ? "ok" : "FAILED");
     FreeLibrary(image);
-    return complete && gfx_ok && g_errors == 0 ? 0 : 1;
+    return complete && gfx_ok && input_ok && g_errors == 0 ? 0 : 1;
 }

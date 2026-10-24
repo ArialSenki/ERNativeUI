@@ -406,6 +406,81 @@ void verify_mod_settings_lists_hub_first() {
     runtime.menu.reset();
 }
 
+// Fork: with the custom-tab backend and [Tabs] ModSettingsTab, the Mod
+// Settings rows (NativeTweaks first, other providers nested) go to a host tab
+// with its own icon, the native category-4 page is not built, and the live
+// host language retitles the tab.
+void verify_mod_settings_custom_tab() {
+    erui::host::Registry registry{};
+    ERUI_TEST_CHECK(registry.enable_custom_tabs_backend());
+    ERUI_TEST_CHECK(registry.set_mod_settings_as_tab(true));
+    registry.open_registration();
+    ERUI_TEST_CHECK(!registry.set_mod_settings_as_tab(false));
+    unsigned presses = 0;
+    const auto add = [&](const char* id, const wchar_t* label, std::int32_t priority) {
+        ERUI_ProviderDesc desc{};
+        desc.size = sizeof(desc);
+        desc.api_version = ERUI_API_VERSION_CURRENT;
+        desc.owner_module = GetModuleHandleW(nullptr);
+        desc.provider_id = ascii(id);
+        desc.display_name = utf16(label);
+        desc.root_priority = priority;
+        ERUI_ProviderHandle handle{};
+        ERUI_PageHandle root{};
+        ERUI_TEST_CHECK(registry.register_provider(
+            ERUI_API_VERSION_CURRENT, &desc, &handle, &root) == ERUI_OK);
+        ERUI_ButtonDesc button{};
+        button.size = sizeof(button);
+        button.label = utf16(label);
+        button.help = utf16(L"help");
+        button.enabled = 1;
+        button.callback = &pressed;
+        button.user_data = &presses;
+        ERUI_PageHandle builtin{};
+        ERUI_TEST_CHECK(registry.get_builtin_page(
+            handle, ERUI_BUILTIN_PAGE_MOD_SETTINGS, &builtin) == ERUI_OK);
+        ERUI_TEST_CHECK(registry.add_button(handle, builtin, &button, nullptr) == ERUI_OK);
+        const std::wstring root_label = std::wstring(label) + L" root";
+        button.label = utf16(root_label);
+        ERUI_TEST_CHECK(registry.add_button(handle, root, &button, nullptr) == ERUI_OK);
+        ERUI_TEST_CHECK(registry.commit_provider(handle) == ERUI_OK);
+    };
+    add("spirit-multiplier", L"Other mod", 100);
+    add("er-mod-settings-hub", L"Hub", 1000);
+
+    auto menu = registry.freeze_and_build();
+    ERUI_TEST_CHECK(menu != nullptr);
+    auto compiled = erui::detail::MenuCompiler::compile(*menu);
+    ERUI_TEST_CHECK(compiled != nullptr);
+    ERUI_TEST_CHECK(compiled->builtin_page(erui::detail::builtin_native_category_ids[
+        static_cast<std::size_t>(erui::detail::BuiltinPage::mod_settings)]) == nullptr);
+    ERUI_TEST_CHECK(compiled->tabs.size() == 1);
+    const erui::detail::CompiledTab& tab = compiled->tabs.front();
+    ERUI_TEST_CHECK(tab.metadata && tab.metadata->provider_id == "ernativeui-host" &&
+        tab.metadata->tab_id == "mod-settings" &&
+        tab.metadata->icon.source == erui::TabIconSource::rgba8 &&
+        tab.metadata->icon.rgba8_pixels.size() == ERUI_TAB_ICON_RGBA8_BYTE_COUNT);
+    ERUI_TEST_CHECK(tab.page_index < compiled->pages.size());
+    std::vector<std::wstring> labels;
+    for (const auto& row : compiled->pages[tab.page_index].rows) {
+        labels.emplace_back(compiled->texts.lookup(row.label_id));
+    }
+    ERUI_TEST_CHECK((labels ==
+        std::vector<std::wstring>{L"Hub", L"Other mod", L"Other mod root"}));
+
+    auto& runtime = erui::detail::runtime_state();
+    const erui::TextId tab_title = compiled->pages[tab.page_index].title_id;
+    runtime.menu = std::move(compiled);
+    runtime.menu_published.store(true, std::memory_order_release);
+    erui::MenuLocalization spanish{};
+    spanish.menu_title = L"Ajustes de mods";
+    ERUI_TEST_CHECK(registry.set_client_host_locale(spanish) == ERUI_OK);
+    ERUI_TEST_CHECK(std::wstring_view(runtime.menu->texts.lookup(tab_title)) ==
+        L"Ajustes de mods");
+    runtime.menu_published.store(false, std::memory_order_release);
+    runtime.menu.reset();
+}
+
 erui::MenuLocalization spanish_host_locale() {
     erui::MenuLocalization locale{};
     locale.menu_title = L"Ajustes de mods";
@@ -1635,6 +1710,7 @@ int main() {
     verify_text_input_length_contract();
     verify_programmatic_value_writes_are_silent();
     verify_mod_settings_lists_hub_first();
+    verify_mod_settings_custom_tab();
     verify_client_host_locale_before_freeze();
 
     ERUI_Api short_table{};

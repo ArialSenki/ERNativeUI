@@ -78,8 +78,10 @@ constexpr std::string_view kGetPlayerInputPattern =
     "33 C0 48 83 C4 28 C3 48 8D 41 48 48 89 5C 24 20 "
     "48 F7 D8 4E 8D 1C CD 00 00 00 00 83 E0 07 "
     "48 8D 1D ?? ?? ?? ??";
+// Fork: the byte after the thunk's jmp is inter-function padding (0x90 in
+// 2.7.1.0, 0xCC in the 2.7.1.1 rebuild), so it is a wildcard.
 constexpr std::string_view kQueryInputStatesPattern =
-    "48 8B 49 10 E9 ?? ?? ?? ?? 90 ?? ?? ?? ?? ?? ?? "
+    "48 8B 49 10 E9 ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? "
     "40 53 48 81 EC 80 00 00 00 8B 84 24 B0 00 00 00 "
     "48 8B 59 38";
 constexpr std::string_view kInputManagerUpdatePattern =
@@ -680,12 +682,15 @@ void log_failed_data_validation(
         address && game.contains(address, sizeof(void*)) ? 1 : 0);
 }
 
+// image: the game executable; null = this process's own executable. The
+// offline address audit passes an eldenring.exe mapped as an image.
 bool resolve_native_addresses(
     NativeInputBindingAddresses& output,
-    bool log_failure) noexcept {
+    bool log_failure,
+    HMODULE image = nullptr) noexcept {
     output = {};
     ModuleView game{};
-    if (!game.initialize(GetModuleHandleW(nullptr))) {
+    if (!game.initialize(image ? image : GetModuleHandleW(nullptr))) {
         if (log_failure) {
             erui::detail::logf(
                 erui::LogLevel::warning,
@@ -2764,6 +2769,12 @@ ERUI_Result validate_live_action(
 }
 
 } // namespace
+
+bool audit_native_input_bindings(void* game_image) noexcept {
+    NativeInputBindingAddresses addresses{};
+    return game_image &&
+        resolve_native_addresses(addresses, true, static_cast<HMODULE>(game_image));
+}
 
 bool capture_native_input_bindings_at_process_attach(
     void* game_image_base) noexcept {

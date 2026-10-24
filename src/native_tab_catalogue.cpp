@@ -91,7 +91,16 @@ struct ValidationFailure final {
          ++category) {
         const std::size_t page_index = menu.builtin_page_index(category);
         if (!is_stock_category(category)) {
-            if (page_index != invalid_compiled_index) {
+            // Fork: with [Tabs] ModSettingsTab = 0 the Mod Settings page is
+            // the native category-4 tab revived by the fork, not a custom tab.
+            const bool fork_mod_settings_page =
+                page_index < menu.pages.size() &&
+                menu.pages[page_index].kind == PageKind::root &&
+                menu.pages[page_index].builtin_page ==
+                    BuiltinPage::mod_settings &&
+                native_category_id(BuiltinPage::mod_settings) == category;
+            if (page_index != invalid_compiled_index &&
+                !fork_mod_settings_page) {
                 return fail(NativeTabCatalogueError::invalid_builtin_page);
             }
             continue;

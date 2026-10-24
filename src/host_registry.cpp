@@ -20,6 +20,12 @@
 namespace erui::host {
 namespace {
 
+#include "mod_settings_tab_icon_rgba.inc"
+
+// Fork: identity of the host-owned Mod Settings custom tab.
+constexpr const char* kHostModSettingsTabProvider = "ernativeui-host";
+constexpr const char* kHostModSettingsTabId = "mod-settings";
+
 constexpr std::size_t kMaxProviders = 256;
 constexpr std::size_t kMaxPagesPerProvider = 4096;
 constexpr std::size_t kMaxRowsPerProvider = 4096;
@@ -581,6 +587,13 @@ bool Registry::enable_custom_tabs_backend() noexcept {
 bool Registry::custom_tabs_backend_available() const noexcept {
     std::lock_guard lock(mutex_);
     return custom_tabs_backend_available_;
+}
+
+bool Registry::set_mod_settings_as_tab(bool enabled) noexcept {
+    std::lock_guard lock(mutex_);
+    if (open_ || frozen_) return false;
+    mod_settings_as_tab_ = enabled;
+    return true;
 }
 
 bool Registry::enable_title_screen_text_backend() noexcept {
@@ -2693,8 +2706,21 @@ void relabel_host_texts(erui::detail::CompiledMenu& menu, const erui::MenuLocali
     menu.texts.replace(menu.next_page_help_id, locale.next_help);
     // Built-in pages are root pages titled with the host title; only
     // their continuation slices show it, as "Title (n/m)".
+    // The host's Mod Settings custom tab (API 1.3 backend) carries the same
+    // host title as the built-in pages it replaces.
+    const auto host_tab = [&](const erui::detail::CompiledPage& page) {
+        for (const erui::detail::CompiledTab& tab : menu.tabs) {
+            if (tab.page_index < menu.pages.size() &&
+                &menu.pages[tab.page_index] == &page && tab.metadata &&
+                tab.metadata->provider_id == kHostModSettingsTabProvider &&
+                tab.metadata->tab_id == kHostModSettingsTabId) {
+                return true;
+            }
+        }
+        return false;
+    };
     for (auto& page : menu.pages) {
-        if (page.kind != erui::PageKind::root) continue;
+        if (page.kind != erui::PageKind::root && !host_tab(page)) continue;
         menu.texts.replace(page.title_id, locale.menu_title);
         menu.texts.replace(page.help_id, locale.menu_help);
         const auto retitle = [&](const std::vector<erui::TextId>& ids) {
@@ -3418,6 +3444,27 @@ std::unique_ptr<erui::Menu> Registry::freeze_and_build_locked() {
         const auto builtin_page =
             static_cast<erui::detail::BuiltinPage>(destination_index);
         if (builtin_page == erui::detail::BuiltinPage::mod_settings) {
+            // Fork: with the API 1.3 tab backend the Mod Settings page is a
+            // host-owned custom tab, first after the stock tabs, instead of
+            // the native category 4. Clients still fill BuiltinPage::mod_settings.
+            const bool requested = std::any_of(
+                mod_settings_order.begin(), mod_settings_order.end(),
+                [](const Provider* provider) {
+                    return provider->builtin_pages[static_cast<std::size_t>(
+                        erui::detail::BuiltinPage::mod_settings)] != ERUI_INVALID_PAGE;
+                });
+            if (requested && mod_settings_as_tab_ && custom_tabs_backend_available_) {
+                erui::TabMetadata metadata{};
+                metadata.provider_id = kHostModSettingsTabProvider;
+                metadata.tab_id = kHostModSettingsTabId;
+                metadata.preferred_order = (std::numeric_limits<std::int32_t>::min)();
+                metadata.effective_order = metadata.preferred_order;
+                metadata.icon.source = erui::TabIconSource::rgba8;
+                metadata.icon.rgba8_pixels.assign(
+                    std::begin(kModSettingsTabIconRgba), std::end(kModSettingsTabIconRgba));
+                destination = &menu->add_tab(
+                    std::move(metadata), pagination_locale_.menu_title);
+            }
             for (const Provider* provider : mod_settings_order) {
                 append_builtin(*provider, builtin_page, destination, builtin_page);
                 if (hub_present && provider->id != hub_id) {

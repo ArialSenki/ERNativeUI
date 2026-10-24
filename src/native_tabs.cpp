@@ -9,6 +9,7 @@
 
 #if defined(ER_NATIVE_UI_PRODUCTION_TABS)
 #include "addresses.hpp"
+#include "game_build.hpp"
 #include "hooks.hpp"
 #include "native_tab_catalogue.hpp"
 #include "native_tabs.hpp"
@@ -33,6 +34,7 @@
 #include <memory>
 #include <new>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -246,6 +248,18 @@ const NativeTabsBuildProfile* g_native_tabs_build_profile{};
         if (profile.timestamp == timestamp &&
             profile.image_size == image_size) {
             return &profile;
+        }
+    }
+    // Fork: an adopted layout-equivalent image uses its build's profile.
+    if (const erui::native::EldenRingBuildIdentity* const equivalent =
+            erui::native::adopted_layout_equivalent_build(
+                timestamp, image_size)) {
+        for (const NativeTabsBuildProfile& profile :
+             kNativeTabsBuildProfiles) {
+            if (std::string_view{profile.version} ==
+                equivalent->product_version) {
+                return &profile;
+            }
         }
     }
     return nullptr;
@@ -9009,8 +9023,17 @@ void append_graphics_records_at_construction_seam(
         context.discovered_capacity, active_logical_tab_count());
     context.live_cells_symmetric = symmetric;
 
+#if defined(ER_NATIVE_UI_PRODUCTION_TABS)
+    // Fork: upstream steps aside whenever NativeTweaks.dll is loaded. In this
+    // fork the competing constructor path is its own category-4 tab, which is
+    // installed only when Mod Settings is not a custom tab; stepping aside
+    // otherwise left nine logical tabs on eight physical slots (r135 test).
+    const bool competing_native_tweaks =
+        erui::native::mod_settings_category_append_installed();
+#else
     const bool competing_native_tweaks =
         GetModuleHandleW(L"NativeTweaks.dll") != nullptr;
+#endif
     context.early_proof_exact = !competing_native_tweaks &&
         g_category_append && register_frame_exact && movie_exact &&
         identities_exact && count_exact && active_readable && stock_exact &&

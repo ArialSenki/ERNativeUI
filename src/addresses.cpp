@@ -81,6 +81,17 @@ constexpr std::string_view kModSettingsCategoryBuilderUniquePattern =
 constexpr std::string_view kModSettingsCategoryDestructorUniquePattern =
     "48 89 4C 24 08 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 50 "
     "48 8B F9 48 8D 05 ?? ?? ?? ?? 48 89 01 48 8D 41 08";
+// Tab-selection callback (2.7.0.0 to 2.7.2.0): reads the selected category
+// record and calls the composite panel switch 0x2A bytes in.
+constexpr std::string_view kConfigurationSelectionCallbackPattern =
+    "40 53 48 83 EC 20 8B 12 48 8B D9 48 8B 49 08 48 81 C1 00 12 00 00 "
+    "48 8B 01 FF 50 28 48 8B 4B 08 48 81 C1 68 17 00 00 8B 50 40 "
+    "E8 ?? ?? ?? ?? 48 8B 4B 08 48 83 C4 20 5B E9";
+constexpr std::size_t kConfigurationPanelSwitchCallOffset = 0x2A;
+// Panel switch prologue: previous panel at +0xB8, panel cache at +0x68.
+constexpr std::string_view kConfigurationPanelSwitchPrologue =
+    "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 99 B8 00 00 00 "
+    "48 8B F1 48 63 C2 48 8B 44 C1 68";
 constexpr std::string_view kConfigurationCategoryAppendUniquePattern =
     "40 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 48 48 8B FA "
     "48 8B D9 48 8B 81 58 05 00 00";
@@ -889,6 +900,10 @@ void fill_missing_addresses(
         source.mod_settings_panel_route_site);
     fill(target.mod_settings_panel_route_return_site,
         source.mod_settings_panel_route_return_site);
+    fill(target.configuration_panel_switch_site,
+        source.configuration_panel_switch_site);
+    fill(target.configuration_panel_switch,
+        source.configuration_panel_switch);
     fill(target.sub_handler, source.sub_handler);
     fill(target.open_sub_page, source.open_sub_page);
     fill(target.native_back, source.native_back);
@@ -1350,6 +1365,28 @@ bool resolve_game_addresses(
                 kModSettingsPanelRouteReturnSitePattern,
                 kModSettingsPanelRouteReturnSiteRva,
                 kModSettingsPanelRouteReturnSitePattern);
+        }
+        if (std::uint8_t* const switch_site = unique_at(
+                game,
+                kConfigurationSelectionCallbackPattern,
+                kConfigurationPanelSwitchCallOffset)) {
+            std::uint8_t* const panel_switch = call_target_at(
+                game, switch_site, kConfigurationPanelSwitchPrologue);
+            if (panel_switch) {
+                output.configuration_panel_switch_site = report_resilient(
+                    game, "Configuration panel switch site", switch_site,
+                    "unique AOB");
+                output.configuration_panel_switch =
+                    reinterpret_cast<ConfigurationPanelSwitchFn>(
+                        report_resilient(
+                            game, "Configuration panel switch", panel_switch,
+                            "call target"));
+            }
+        }
+        if (!output.configuration_panel_switch_site) {
+            erui::detail::logf(
+                erui::LogLevel::warning,
+                "Optional address Configuration panel switch unavailable; a menu opened directly on Mod Settings is built without a previous panel");
         }
         output.scaleform_visibility_setter = resolve_optional_direct(
             game,

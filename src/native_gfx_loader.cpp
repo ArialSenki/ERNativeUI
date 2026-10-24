@@ -48,10 +48,23 @@ constexpr std::array<std::uint8_t, 24> kFileOpenerEntry{
     0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41,
     0x56, 0x41, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xD9,
     0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00, 0x48};
-constexpr std::array<NativeGfxAddressProfile, 2>
+constexpr std::array<NativeGfxAddressProfile, 3>
     kNativeGfxAddressProfiles{{
         {
             erui::native::EldenRingBuild::v2_7_1_0,
+            0xD6D280,
+            0x2BBE498,
+            0x2BA7D70,
+            {
+                0xCE9730, 0xCE9960, 0xCE9B30, 0xCE9B40,
+                0xCE9C50, 0xCE9B80, 0xCE9970, 0xCE9B50,
+                0xCE9950, 0xCE9C60, 0xCE9B90, 0xCE9C20,
+            },
+        },
+        // Fork: 2.7.1.1 is a rebuild of 2.7.1.0 with the same layout; the
+        // interface check still validates every entry at run time.
+        {
+            erui::native::EldenRingBuild::v2_7_1_1,
             0xD6D280,
             0x2BBE498,
             0x2BA7D70,

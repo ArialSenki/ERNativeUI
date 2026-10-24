@@ -69,4 +69,8 @@ void set_pending_menu_warning(std::wstring message) noexcept;
 void set_hook_perf_enabled(bool enabled) noexcept;
 void log_hook_perf(std::uint64_t interval_ms) noexcept;
 
+// Fork: true while the fork's own category-4 Mod Settings tab hooks the
+// Configuration category append (only when Mod Settings is not a custom tab).
+[[nodiscard]] bool mod_settings_category_append_installed() noexcept;
+
 } // namespace erui::native

@@ -578,5 +578,86 @@ int main() {
         }
     }
 
+    // Fork: layout-equivalent rebuilds (same image size and fingerprint,
+    // another timestamp). 2.7.1.1 JP shares 2.7.1.0's fingerprint.
+    {
+        using erui::native::find_layout_equivalent_build;
+        constexpr std::uint64_t layout_271 = 0xB6F3EBAD13CB47C7;
+        constexpr std::uint64_t layout_272 = 0x662F34083CB8FE85;
+        static_assert(erui::native::kSupportedEldenRingBuilds[1]
+                          .layout_fingerprint == layout_271);
+        static_assert(erui::native::kSupportedEldenRingBuilds[2]
+                          .layout_fingerprint == layout_271);
+
+        // Exact identities never take the layout path.
+        ERUI_TEST_CHECK(
+            find_layout_equivalent_build(0x6AABF7E7, 0x5DFD600, layout_272) ==
+            nullptr);
+        // A rebuild of 2.7.2.0 maps to 2.7.2.0; one of 2.7.1.x to 2.7.1.0.
+        const auto* const rebuilt_272 =
+            find_layout_equivalent_build(0x6AAC0000, 0x5DFD600, layout_272);
+        ERUI_TEST_CHECK(
+            rebuilt_272 && rebuilt_272->build == EldenRingBuild::v2_7_2_0);
+        const auto* const rebuilt_271 =
+            find_layout_equivalent_build(0x6A96C000, 0x5E0DA00, layout_271);
+        ERUI_TEST_CHECK(
+            rebuilt_271 && rebuilt_271->build == EldenRingBuild::v2_7_1_0);
+        // Size and fingerprint must both match.
+        ERUI_TEST_CHECK(
+            find_layout_equivalent_build(0x6AAC0000, 0x5E0DA00, layout_272) ==
+            nullptr);
+        ERUI_TEST_CHECK(
+            find_layout_equivalent_build(0x6AAC0000, 0x5DFD600, layout_271) ==
+            nullptr);
+        ERUI_TEST_CHECK(
+            find_layout_equivalent_build(0x6AAC0000, 0x5DFD600, 0) == nullptr);
+
+        // Nothing adopted yet: the rebuild stays unsupported.
+        ERUI_TEST_CHECK(
+            erui::native::identify_elden_ring_build(0x6AAC0000, 0x5DFD600) ==
+            EldenRingBuild::unsupported);
+        ERUI_TEST_CHECK(
+            erui::native::adopt_layout_equivalent_build(
+                0x6AAC0000, 0x5DFD600, layout_271) == nullptr);
+        ERUI_TEST_CHECK(
+            erui::native::identify_elden_ring_build(0x6AAC0000, 0x5DFD600) ==
+            EldenRingBuild::unsupported);
+
+        ERUI_TEST_CHECK(
+            erui::native::adopt_layout_equivalent_build(
+                0x6AAC0000, 0x5DFD600, layout_272) == rebuilt_272);
+        ERUI_TEST_CHECK(
+            erui::native::identify_elden_ring_build(0x6AAC0000, 0x5DFD600) ==
+            EldenRingBuild::v2_7_2_0);
+        // Only that image: another timestamp or size is still unsupported,
+        // and exact identities are unchanged.
+        ERUI_TEST_CHECK(
+            erui::native::identify_elden_ring_build(0x6AAC0001, 0x5DFD600) ==
+            EldenRingBuild::unsupported);
+        ERUI_TEST_CHECK(
+            erui::native::identify_elden_ring_build(0x6AAC0000, 0x5E0DA00) ==
+            EldenRingBuild::unsupported);
+        ERUI_TEST_CHECK(
+            erui::native::identify_elden_ring_build(0x6A96BA95, 0x5E0DA00) ==
+            EldenRingBuild::v2_7_1_1);
+        ERUI_TEST_CHECK(
+            erui::native::find_menu_object_address_profile(
+                erui::native::identify_elden_ring_build(
+                    0x6AAC0000, 0x5DFD600)) ==
+            erui::native::find_menu_object_address_profile(
+                EldenRingBuild::v2_7_2_0));
+
+        // FNV-1a reference values.
+        constexpr auto fnv = [](const char* text) {
+            erui::native::LayoutFingerprint fingerprint{};
+            for (; *text; ++text) {
+                fingerprint.add_byte(static_cast<std::uint8_t>(*text));
+            }
+            return fingerprint.value();
+        };
+        static_assert(fnv("") == 0xCBF29CE484222325ULL);
+        static_assert(fnv("a") == 0xAF63DC4C8601EC8CULL);
+    }
+
     return 0;
 }

@@ -13,6 +13,7 @@
 #include "native_tabs.hpp"
 #include "color_picker.hpp"
 #include "runtime_log.hpp"
+#include "running_build.hpp"
 #include "steam_dlc.hpp"
 #include "steam_language.hpp"
 #include "tab_configuration.hpp"
@@ -948,7 +949,7 @@ DWORD run_host() noexcept {
             logging_ready ? &runtime_log_sink : nullptr);
         log::write("============================================================");
         log::write("ERNativeUI host v%s starting", ER_NATIVE_UI_BUILD_VERSION);
-        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.3.0) build=r134");
+        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.3.0) build=r135");
         log::write("Offline / EAC-disabled use only; hot unloading is unsupported");
 
         std::string tab_configuration_bytes{};
@@ -1003,6 +1004,52 @@ DWORD run_host() noexcept {
             tab_configuration.order_overrides.size(),
             tab_warning_count,
             tab_error_count);
+        // Read-only; decided before the GFX hooks because it sets how many
+        // tab cells the settings movie needs.
+        const erui::native::NativeTabsPreflightStatus tab_preflight =
+            erui::native::preflight_native_tabs();
+        if (tab_preflight ==
+                erui::native::NativeTabsPreflightStatus::available) {
+            if (!registry().enable_custom_tabs_backend()) {
+                log::write(
+                    erui::LogLevel::fatal,
+                    "Native custom-tab backend passed preflight but could not be published before registration opened");
+                set_api_state(ApiState::failed);
+                return 1;
+            }
+            log::write(
+                "Native custom-tab backend preflight passed; API 1.3 custom tabs are available");
+        } else if (tab_preflight ==
+                erui::native::NativeTabsPreflightStatus::unsupported_game) {
+            log::write(
+                erui::LogLevel::warning,
+                "Native custom-tab backend is unavailable for this game executable; API 1.3 remains negotiable without ERUI_CAP_CUSTOM_TABS");
+        } else {
+            log::write(
+                erui::LogLevel::warning,
+                "Native custom-tab backend interface validation failed; API 1.3 remains negotiable without ERUI_CAP_CUSTOM_TABS");
+        }
+
+        // Fork: [Tabs] ModSettingsTab = 1 shows Mod Settings as a custom tab
+        // drawn by the upstream backend (with its own icon and room for nine
+        // tabs) where that backend is available; elsewhere, or with 0, it
+        // stays the native category-4 tab revived by the fork. Off by default
+        // since the r135 test: in game the backend leaves no active slot for
+        // Quit Game, which the game appends after the custom tab.
+        const bool mod_settings_custom_tab = runtime_gfx_patching_enabled &&
+            tab_preflight == erui::native::NativeTabsPreflightStatus::available &&
+            read_ini(ini, L"Tabs", L"ModSettingsTab", 0) != 0;
+        if (mod_settings_custom_tab) {
+            (void)registry().set_mod_settings_as_tab(true);
+            if (tab_configuration.settings.minimum_tab_slots < 9U) {
+                tab_configuration.settings.minimum_tab_slots = 9U;
+            }
+        }
+        set_mod_settings_tab_cell(!mod_settings_custom_tab);
+        log::write("Mod Settings tab: %s (minimum tab slots %u)",
+            mod_settings_custom_tab ? "ERUI custom tab" : "native category 4",
+            static_cast<unsigned>(tab_configuration.settings.minimum_tab_slots));
+
         // Registry ordering and the installed native catalogue must consume
         // the same immutable settings. Keep this local copy for the runtime
         // handoff after registration freezes.
@@ -1029,13 +1076,20 @@ DWORD run_host() noexcept {
         // the grace covers bounded DLC retries, synchronous catalogue
         // conversion, and scheduling.
         const std::uint32_t title_catalogue_wait_ms =
-            static_cast<std::uint32_t>((std::min)(
+            static_cast<std::uint32_t>((std::min)({
                 steam_language_wait_ms + max_wait_ms +
                     kSolidUncapperModuleDiscoveryGraceMs +
                     kSolidUncapperCompatibilityWaitBudgetMs +
                     kTitleCataloguePublicationGraceMs,
                 static_cast<std::uint64_t>(erui::native::
-                    kNativeTitleCatalogueWaitMaximumMilliseconds)));
+                    kNativeTitleCatalogueWaitMaximumMilliseconds),
+                // Fork: the title text is cosmetic. Waiting for every
+                // provider (NativeTweaks scans other mods first) could hold
+                // the title movie for many seconds, so the wait is capped;
+                // past it the title opens without provider text this run.
+                static_cast<std::uint64_t>(std::clamp(read_ini(
+                    ini, L"Runtime", L"TitleTextWaitMs", 3000), 0, 68000))}));
+        log::write("Title-screen text wait: %u ms", static_cast<unsigned>(title_catalogue_wait_ms));
 
         bool title_text_backend_ready = false;
         TitleCataloguePublicationGuard title_catalogue_guard{};
@@ -1148,30 +1202,6 @@ DWORD run_host() noexcept {
                     erui::LogLevel::warning,
                     "Fork runtime GFX unavailable; the Mod Settings tab needs the patched GFX files installed");
             }
-        }
-
-        const erui::native::NativeTabsPreflightStatus tab_preflight =
-            erui::native::preflight_native_tabs();
-        if (tab_preflight ==
-                erui::native::NativeTabsPreflightStatus::available) {
-            if (!registry().enable_custom_tabs_backend()) {
-                log::write(
-                    erui::LogLevel::fatal,
-                    "Native custom-tab backend passed preflight but could not be published before registration opened");
-                set_api_state(ApiState::failed);
-                return 1;
-            }
-            log::write(
-                "Native custom-tab backend preflight passed; API 1.3 custom tabs are available");
-        } else if (tab_preflight ==
-                erui::native::NativeTabsPreflightStatus::unsupported_game) {
-            log::write(
-                erui::LogLevel::warning,
-                "Native custom-tab backend is unavailable for this game executable; API 1.3 remains negotiable without ERUI_CAP_CUSTOM_TABS");
-        } else {
-            log::write(
-                erui::LogLevel::warning,
-                "Native custom-tab backend interface validation failed; API 1.3 remains negotiable without ERUI_CAP_CUSTOM_TABS");
         }
 
         const auto cooldown = static_cast<std::uint32_t>(std::clamp(
@@ -1643,6 +1673,9 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
         // ERNativeUI is listed before another menu hook. These narrow helpers
         // are loader-lock-safe: bounded PE/RVA reads and fixed copies only.
         HMODULE const game_module = GetModuleHandleW(nullptr);
+        // Fork: a rebuild of a known executable (same layout, other
+        // timestamp) is adopted before any profile lookup.
+        (void)erui::native::adopt_layout_equivalent_image(game_module);
         erui::host::g_attach_shared_menu_snapshot_ready =
             erui::native::capture_preserved_shared_menu_addresses_at_attach(
                 game_module,

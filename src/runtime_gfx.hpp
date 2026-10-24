@@ -20,6 +20,11 @@ bool install_runtime_gfx(
 
 [[nodiscard]] bool runtime_gfx_installed() noexcept;
 
+// Whether 02_040 gets the fork's own Mod Settings tab cell (default on). Off
+// when the host shows Mod Settings as an ERUI 1.3 custom tab. Set it before
+// the movie opens.
+void set_mod_settings_tab_cell(bool enabled) noexcept;
+
 // HUD layout applied to the HUD movies (01_000_fe, 01_001_fe_soul,
 // 01_002_fe_saveicon) when Scaleform opens them: screen_edges moves the
 // edge-anchored blocks out of the 16:9 frame on wider screens, scale_percent

@@ -13,6 +13,10 @@ namespace erui::native {
 // supplied value is the already-known base of the mapped game executable.
 // This narrow path performs bounded PE/RVA reads and fixed-size copies only:
 // it must not allocate, log, scan, or call into the Windows loader.
+// Fork: resolves and validates every input-binding interface against a game
+// executable mapped as an image, logging each failure (ERNativeUIAudit).
+[[nodiscard]] bool audit_native_input_bindings(void* game_image) noexcept;
+
 [[nodiscard]] bool capture_native_input_bindings_at_process_attach(
     void* game_image_base) noexcept;
 

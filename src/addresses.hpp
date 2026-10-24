@@ -25,6 +25,11 @@ using BuiltinPanelMaterializerFn = void(__fastcall*)(
     void* menu_option_data);
 using BuiltinCategoryBuilderFn = void*(__fastcall*)(void* destination);
 using BuiltinCategoryDestructorFn = void*(__fastcall*)(void* value);
+// Configuration composite panel switch: build/cache one category panel, copy
+// the previous panel's state into it and show only that panel.
+using ConfigurationPanelSwitchFn = void(__fastcall*)(
+    void* composite,
+    std::int32_t category);
 using SubHandlerFn = void(__fastcall*)(
     void* page,
     std::uintptr_t argument2,
@@ -174,6 +179,9 @@ struct GameAddresses {
     void* configuration_category_append{};
     void* mod_settings_panel_route_site{};
     void* mod_settings_panel_route_return_site{};
+    // The tab-selection callback's call into the panel switch, and the switch.
+    void* configuration_panel_switch_site{};
+    ConfigurationPanelSwitchFn configuration_panel_switch{};
     SubHandlerFn sub_handler{};
     OpenSubPageFn open_sub_page{};
     NativeBackFn native_back{};

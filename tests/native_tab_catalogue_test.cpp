@@ -228,6 +228,23 @@ void test_public_custom_tab_limit() {
         NativeTabCatalogueError::custom_tab_limit_exceeded);
 }
 
+// Fork: [Tabs] ModSettingsTab = 0 keeps the Mod Settings page on native
+// category 4; the catalogue must accept it (r135 test: install failed).
+void test_fork_category_four_mod_settings_page() {
+    erui::Menu menu(L"Catalogue host", L"Catalogue help");
+    menu.builtin_page(erui::detail::BuiltinPage::mod_settings)
+        .add_button(L"Hub row", L"Hub help", {.callback = &pressed});
+    auto compiled = erui::detail::MenuCompiler::compile(menu);
+    ERUI_TEST_CHECK(compiled != nullptr);
+    if (!compiled) return;
+    ERUI_TEST_CHECK(
+        compiled->builtin_page_index(4) !=
+        erui::detail::invalid_compiled_index);
+    const auto result = erui::detail::build_native_tab_catalogue(
+        *compiled, default_configuration());
+    ERUI_TEST_CHECK(result.error == NativeTabCatalogueError::none);
+}
+
 std::unique_ptr<erui::detail::CompiledMenu> one_tab_menu() {
     return compile_menu({
         {"provider.valid", "main", L"Valid", 10, {}, 10, false},
@@ -437,6 +454,7 @@ int main() {
     test_custom_order_identity_title_and_owned_icon();
     test_public_custom_tab_limit();
     test_structural_rejections();
+    test_fork_category_four_mod_settings_page();
     test_metadata_rejections();
     test_order_and_configuration_rejections();
     return 0;

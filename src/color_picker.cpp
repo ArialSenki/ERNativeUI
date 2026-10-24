@@ -284,6 +284,8 @@ std::mutex g_mutex{};
 std::weak_ptr<Session> g_active{};
 std::shared_ptr<Session> g_completed{};
 std::vector<PreviewBinding> g_preview_bindings{};
+// Fork: lets the per-frame preview pass skip the lock when nothing is bound.
+std::atomic<std::size_t> g_preview_binding_count{};
 SafetyHookInline g_action_widget_producer_hook{};
 std::atomic<GameOptionsActionWidgetProducerFn>
     g_original_action_widget_producer{};
@@ -434,6 +436,8 @@ bool bind_preview(
             return true;
         }
         g_preview_bindings.push_back({state, location});
+        g_preview_binding_count.store(
+            g_preview_bindings.size(), std::memory_order_release);
         return true;
     } catch (...) {
         return false;
@@ -1213,18 +1217,24 @@ void reset_color_picker_page_widgets(
 }
 
 void synchronize_color_picker_previews(void* current_page) noexcept {
-    if (!current_page) return;
+    if (!current_page ||
+        g_preview_binding_count.load(std::memory_order_acquire) == 0) {
+        return;
+    }
 
     struct PendingPreview {
         detail::ColorPickerState* state{};
         PreviewLocation location{};
     };
 
-    std::vector<PendingPreview> pending{};
+    // Runs every page frame: a fixed array instead of a heap allocation.
+    // Refreshes past its size stay pending for the next frame.
+    std::array<PendingPreview, 32> pending{};
+    std::size_t pending_count = 0;
     try {
         std::lock_guard lock(g_mutex);
-        pending.reserve(g_preview_bindings.size());
         for (const PreviewBinding& binding : g_preview_bindings) {
+            if (pending_count == pending.size()) break;
             // A logical binding can outlive one physical page instance. Only
             // dereference the page that the game's frame pump has proven is
             // current; leave closed-page updates pending until that row is
@@ -1232,14 +1242,15 @@ void synchronize_color_picker_previews(void* current_page) noexcept {
             if (binding.state &&
                 binding.location.valid_for(current_page) &&
                 binding.state->consume_preview_refresh()) {
-                pending.push_back({binding.state, binding.location});
+                pending[pending_count++] = {binding.state, binding.location};
             }
         }
     } catch (...) {
         return;
     }
 
-    for (const PendingPreview& update : pending) {
+    for (std::size_t index = 0; index < pending_count; ++index) {
+        const PendingPreview& update = pending[index];
         if (!update.location.page) continue;
         if (!refresh_color_preview(
                 update.location, update.state->native_value())) {
@@ -1497,6 +1508,7 @@ void remove_color_picker() noexcept {
     }
     g_active.reset();
     g_preview_bindings.clear();
+    g_preview_binding_count.store(0, std::memory_order_release);
     g_native = {};
 }
 

@@ -61,6 +61,9 @@ std::atomic<bool> g_installed{false};
 // The upstream OpenFile completion runs first (settings rows, TextInput,
 // ColorPicker, title text); this stage only adds the fork's own changes.
 std::atomic<bool> g_after_upstream{false};
+// The fork's own Mod Settings tab cell in 02_040; off when the tab is an
+// ERUI 1.3 custom tab drawn by the upstream tab backend.
+std::atomic<bool> g_mod_settings_tab_cell{true};
 std::atomic<bool> g_ready{false};
 std::atomic<bool> g_spanish{false};
 std::atomic<bool> g_trace_urls{false};
@@ -170,6 +173,8 @@ const std::vector<std::uint8_t>* patched_bytes(
         if (const MovieCache::Lookup cached = g_cache.find(hash, size, 0); cached.found) return cached.output;
 
         erui::gfx::SettingsMovieOptions options{};
+        options.mod_settings_top_level_tab =
+            g_mod_settings_tab_cell.load(std::memory_order_acquire);
         if (g_after_upstream.load(std::memory_order_acquire)) {
             // The upstream completion already ran on these bytes and owns
             // the TextInput/ColorPicker presentation; add only the fork's own
@@ -584,6 +589,10 @@ bool install_runtime_gfx(bool trace_urls, unsigned menu_background_alpha_percent
         log::write("WARN: Runtime GFX: installation exception");
         return false;
     }
+}
+
+void set_mod_settings_tab_cell(bool enabled) noexcept {
+    g_mod_settings_tab_cell.store(enabled, std::memory_order_release);
 }
 
 bool runtime_gfx_installed() noexcept {

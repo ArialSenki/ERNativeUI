@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -41,6 +42,12 @@ public:
     }
 
     [[nodiscard]] Snapshot snapshot() const;
+    // Fork: lock-free copy of the current revision, so the per-frame
+    // synchronization can skip snapshot() (a lock and a string copy) when
+    // nothing changed.
+    [[nodiscard]] std::uint64_t revision() const noexcept {
+        return published_revision_.load(std::memory_order_acquire);
+    }
     [[nodiscard]] bool set_programmatic(std::wstring_view value);
 
     // Called only after the native editor has committed to native_value. A
@@ -60,6 +67,7 @@ private:
     const std::wstring placeholder_{};
     const std::uint32_t maximum_length_{};
     std::uint64_t revision_{1};
+    std::atomic<std::uint64_t> published_revision_{1};
     std::deque<std::wstring> committed_changes_{};
 };
 

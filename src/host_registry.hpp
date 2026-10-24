@@ -39,6 +39,10 @@ public:
     // stable contract for the lifetime of that registration epoch.
     [[nodiscard]] bool enable_custom_tabs_backend() noexcept;
     [[nodiscard]] bool custom_tabs_backend_available() const noexcept;
+    // Fork: builds the Mod Settings page as a host-owned custom tab when the
+    // custom-tab backend is available ([Tabs] ModSettingsTab = 1). Like the
+    // backend flag, it is fixed before registration opens.
+    [[nodiscard]] bool set_mod_settings_as_tab(bool enabled) noexcept;
     // Title-screen text follows the same publication rule: advertise it only
     // after the validated GFX transform/open seam is ready, and never change
     // availability once registration has opened.
@@ -472,6 +476,7 @@ private:
 
     mutable std::mutex mutex_{};
     bool custom_tabs_backend_available_{};
+    bool mod_settings_as_tab_{};
     bool title_screen_text_backend_available_{};
     bool open_{};
     bool frozen_{};

@@ -30,6 +30,7 @@ bool TextInputState::set_programmatic(std::wstring_view value) {
     if (value_ == value) return true;
     value_.assign(value);
     ++revision_;
+    published_revision_.store(revision_, std::memory_order_release);
     return true;
 }
 
@@ -44,6 +45,7 @@ bool TextInputState::commit_native(std::wstring_view value) {
     committed_changes_.push_back(committed);
     value_.swap(committed);
     ++revision_;
+    published_revision_.store(revision_, std::memory_order_release);
     return true;
 }
 

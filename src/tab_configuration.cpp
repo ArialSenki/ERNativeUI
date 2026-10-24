@@ -185,6 +185,8 @@ void assign_setting(
     std::string_view key,
     std::string_view value,
     std::size_t line) {
+    // Fork: [Tabs] ModSettingsTab is read by host_dllmain.cpp.
+    if (key == "ModSettingsTab") return;
     const bool known = key == "NavigationMargin" ||
         key == "MinimumTabSlots" ||
         key == "MouseDwellEnabled" ||

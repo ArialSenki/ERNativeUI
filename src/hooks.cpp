@@ -2,6 +2,7 @@
 
 #include "dialog_input_gate.hpp"
 #include "game_build.hpp"
+#include "mod_settings_direct_open.hpp"
 #include "native_dialog.hpp"
 #include "native_menu.hpp"
 #include "native_popup_choice.hpp"
@@ -276,6 +277,7 @@ SafetyHookInline g_configuration_category_append_hook{};
 SafetyHookMid g_option_setting_tab_frame_hook{};
 SafetyHookMid g_mod_settings_panel_route_hook{};
 SafetyHookMid g_mod_settings_panel_route_return_hook{};
+SafetyHookMid g_mod_settings_direct_open_hook{};
 SafetyHookMid g_add_toggle_diagnostic_hook{};
 SafetyHookMid g_add_slider_diagnostic_hook{};
 SafetyHookMid g_add_choice_diagnostic_hook{};
@@ -312,6 +314,7 @@ std::atomic<std::uint32_t> g_last_tab_context{};
 std::atomic<std::uint64_t> g_last_tab_selection_tick{};
 std::atomic_bool g_configuration_category_append_hook_installed{};
 std::atomic<std::uint32_t> g_mod_settings_route_scopes{};
+std::atomic<std::uint32_t> g_mod_settings_direct_opens{};
 std::atomic<std::uint32_t> g_mod_settings_route_calls{};
 std::atomic<std::uint32_t> g_mod_settings_route_returns{};
 thread_local std::uint32_t t_mod_settings_route_depth{};
@@ -1129,7 +1132,7 @@ constexpr std::array<TabCarrierBuildProfile, 2>
         },
     }};
 
-[[nodiscard]] constexpr const TabCarrierBuildProfile*
+[[nodiscard]] inline const TabCarrierBuildProfile*
 find_tab_carrier_build_profile(
     std::uint32_t timestamp,
     std::size_t image_size) noexcept {
@@ -1138,6 +1141,14 @@ find_tab_carrier_build_profile(
         if (profile.timestamp == timestamp &&
             profile.image_size == image_size) {
             return &profile;
+        }
+    }
+    // Fork: an adopted layout-equivalent image uses its build's profile.
+    if (const EldenRingBuildIdentity* const equivalent =
+            adopted_layout_equivalent_build(timestamp, image_size)) {
+        for (const TabCarrierBuildProfile& profile :
+             kTabCarrierBuildProfiles) {
+            if (profile.build == equivalent->build) return &profile;
         }
     }
     return nullptr;
@@ -3370,6 +3381,86 @@ void observe_scaleform_text(safetyhook::Context& context) noexcept {
         caller_read ? 1u : 0u);
 }
 
+// Panel cache indexed by category, as read by the panel switch prologue.
+constexpr std::size_t kCompositePanelCacheOffset = 0x68;
+
+bool read_composite_panel(
+    const std::byte* composite,
+    std::size_t offset,
+    void*& panel) noexcept {
+    panel = nullptr;
+#if defined(_MSC_VER)
+    __try {
+#endif
+        panel = *reinterpret_cast<void* const*>(composite + offset);
+        return true;
+#if defined(_MSC_VER)
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        panel = nullptr;
+        return false;
+    }
+#endif
+}
+
+// Runs at the tab-selection callback's call into the native panel switch.
+// Reopening the menu on Mod Settings switches a fresh composite straight to
+// category 4: the Hub is then built with no previous panel, and its unused
+// rows and inactive row widgets all stay drawn. Switching to Game Options
+// first makes the following native switch identical to a tab change.
+void build_game_options_before_direct_mod_settings(
+    safetyhook::Context& context) noexcept {
+    if (!g_mod_settings_tab_hooks_ready.load(std::memory_order_acquire)) {
+        return;
+    }
+    const ConfigurationPanelSwitchFn panel_switch =
+        g_addresses.configuration_panel_switch;
+    const auto* const composite =
+        reinterpret_cast<const std::byte*>(context.rcx);
+    const std::int32_t category =
+        static_cast<std::int32_t>(context.rdx & 0xFFFFFFFFu);
+    if (!panel_switch || !composite ||
+        category != erui::detail::kModSettingsPanelCategory) {
+        return;
+    }
+    void* current{};
+    void* mod_settings{};
+    void* game_options{};
+    if (!read_composite_panel(
+            composite, kCompositeCurrentPanelOffset, current) ||
+        !read_composite_panel(
+            composite,
+            kCompositePanelCacheOffset +
+                erui::detail::kModSettingsPanelCategory * sizeof(void*),
+            mod_settings) ||
+        !read_composite_panel(
+            composite,
+            kCompositePanelCacheOffset +
+                erui::detail::kGameOptionsPanelCategory * sizeof(void*),
+            game_options)) {
+        return;
+    }
+    if (!erui::detail::should_build_game_options_before_mod_settings(
+            category,
+            current != nullptr,
+            mod_settings != nullptr,
+            game_options != nullptr)) {
+        return;
+    }
+    panel_switch(
+        reinterpret_cast<void*>(context.rcx),
+        erui::detail::kGameOptionsPanelCategory);
+    void* previous{};
+    read_composite_panel(
+        composite, kCompositeCurrentPanelOffset, previous);
+    const std::uint32_t opens = g_mod_settings_direct_opens.fetch_add(
+        1, std::memory_order_relaxed) + 1;
+    erui::detail::logf(
+        erui::LogLevel::info,
+        "Menu opened on Mod Settings (open %u): Game Options panel %p built first so the Hub is switched to like a tab change",
+        static_cast<unsigned>(opens),
+        previous);
+}
+
 void finish_mod_settings_panel_route(safetyhook::Context&) noexcept {
     if (t_mod_settings_route_depth == 0) return;
     --t_mod_settings_route_depth;
@@ -5278,6 +5369,7 @@ bool install_mod_settings_tab_hooks(
             nullptr, std::memory_order_release);
         g_mod_settings_panel_route_hook.reset();
         g_mod_settings_panel_route_return_hook.reset();
+        g_mod_settings_direct_open_hook.reset();
         t_mod_settings_route_depth = 0;
     };
 
@@ -5319,6 +5411,21 @@ bool install_mod_settings_tab_hooks(
     }
     g_mod_settings_panel_route_return_hook =
         std::move(*route_return_result);
+
+    if (addresses.configuration_panel_switch_site &&
+        addresses.configuration_panel_switch) {
+        auto direct_open_result = SafetyHookMid::create(
+            addresses.configuration_panel_switch_site,
+            &build_game_options_before_direct_mod_settings);
+        if (direct_open_result) {
+            g_mod_settings_direct_open_hook = std::move(*direct_open_result);
+        } else {
+            erui::detail::logf(
+                erui::LogLevel::warning,
+                "Mod Settings direct-open hook could not be created (SafetyHook error type %u); a menu reopened on Mod Settings may draw unused rows",
+                static_cast<unsigned>(direct_open_result.error().type));
+        }
+    }
 
     auto append_result = SafetyHookInline::create(
         addresses.configuration_category_append,
@@ -5575,6 +5682,8 @@ void reset_hooks() noexcept {
     reset_diagnostic_scaleform_paths();
     g_mod_settings_panel_route_hook.reset();
     g_mod_settings_panel_route_return_hook.reset();
+    g_mod_settings_direct_open_hook.reset();
+    g_mod_settings_direct_opens.store(0, std::memory_order_release);
     g_mod_settings_category_insertions.store(0, std::memory_order_release);
     g_configuration_category_append_calls.store(0, std::memory_order_release);
     g_mod_settings_route_scopes.store(0, std::memory_order_release);
@@ -6496,6 +6605,11 @@ void remove_native_menu_hooks() noexcept {
     remove_color_picker();
     remove_native_dialog_transport();
     reset_hooks();
+}
+
+bool mod_settings_category_append_installed() noexcept {
+    return g_configuration_category_append_hook_installed.load(
+        std::memory_order_acquire);
 }
 
 } // namespace erui::native
