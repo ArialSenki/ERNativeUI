@@ -949,7 +949,7 @@ DWORD run_host() noexcept {
             logging_ready ? &runtime_log_sink : nullptr);
         log::write("============================================================");
         log::write("ERNativeUI host v%s starting", ER_NATIVE_UI_BUILD_VERSION);
-        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.3.0) build=r135");
+        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.3.0) build=r139");
         log::write("Offline / EAC-disabled use only; hot unloading is unsupported");
 
         std::string tab_configuration_bytes{};
