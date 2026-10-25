@@ -27,4 +27,9 @@ void refresh_dirty_native_values() noexcept;
 void set_native_value_default(const volatile std::uint8_t* bound,
     std::uint8_t default_index, bool inverted = false) noexcept;
 
+// Any thread: turns the coloured labels on or off for every row (on by
+// default). Off, labels go back to the game's colour at the next page frame;
+// the defaults stay registered, so turning it on again needs nothing else.
+void set_native_value_highlight(bool enabled) noexcept;
+
 } // namespace erui::native

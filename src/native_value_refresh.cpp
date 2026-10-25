@@ -110,6 +110,7 @@ std::atomic<std::size_t> g_default_total{};
 // Bumped whenever an entry is added to g_defaults.
 std::atomic<std::uint32_t> g_default_generation{};
 std::atomic_bool g_color_ready{};
+std::atomic_bool g_highlight_enabled{true};
 std::atomic<int> g_toggle_source{-1};  // index into kToggleSourceOffsets that resolved
 std::atomic<std::uint32_t> g_color_logs{};
 
@@ -372,7 +373,7 @@ void update_label_colors() noexcept {
         // the change; toggle indices have no order and only show "changed".
         // Inverted rows (higher is worse) swap green and red.
         int tint = kTintNative;
-        if (value != fallback) {
+        if (value != fallback && g_highlight_enabled.load(std::memory_order_relaxed)) {
             tint = kind == Kind::slider ? ((value > fallback) != inverted ? kTintAbove : kTintBelow)
                                         : kTintChanged;
         }
@@ -480,6 +481,10 @@ void mark_native_value_dirty(const volatile std::uint8_t* bound) noexcept {
         if (dirty.compare_exchange_strong(expected, bound, std::memory_order_acq_rel)) break;
     }
     g_any_dirty.store(true, std::memory_order_release);
+}
+
+void set_native_value_highlight(bool enabled) noexcept {
+    g_highlight_enabled.store(enabled, std::memory_order_relaxed);
 }
 
 void set_native_value_default(const volatile std::uint8_t* bound,

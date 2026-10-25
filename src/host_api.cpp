@@ -1,6 +1,7 @@
 #include "host_registry.hpp"
 
 #include "native_dialog.hpp"
+#include "native_value_refresh.hpp"
 #include "steam_language.hpp"
 
 #include <algorithm>
@@ -696,6 +697,13 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetRowDefaultEx(
     std::uint32_t flags) {
     if (const ERUI_Result state = callable_state(); state != ERUI_OK) return state;
     return erui::host::registry().set_row_default(provider, row, value, (flags & 1u) != 0);
+}
+
+// Turns the coloured labels of rows with a default on or off, live (on by
+// default). The registered defaults are kept.
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetHighlightEnabled(std::uint32_t enabled) {
+    erui::native::set_native_value_highlight(enabled != 0);
+    return ERUI_OK;
 }
 
 extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetCustomSliderValues(
