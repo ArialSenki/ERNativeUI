@@ -20,6 +20,8 @@ std::atomic_bool g_diagnostics_enabled{};
 // virtual file system). ERROR/FATAL lines first drain the buffer and are then
 // written and flushed synchronously, as before, because they may precede a
 // crash. A full buffer drops lines and the writer reports how many.
+// Until the host reports itself ready every line is written synchronously, as
+// upstream does: a crash during startup must not leave the log empty.
 constexpr std::size_t kPendingBytes = 1U << 20;
 constexpr std::size_t kWakeBytes = 64U * 1024U;
 constexpr DWORD kWriterIntervalMs = 250;
@@ -30,6 +32,7 @@ std::size_t g_dropped_lines{};
 char g_writing[kPendingBytes];
 HANDLE g_writer_wake{};
 std::atomic_bool g_writer_running{};
+std::atomic_bool g_buffering{};
 
 // Writes whatever is pending. Callers serialize through g_lock.
 void drain_pending_locked() noexcept {
@@ -69,7 +72,8 @@ void emit(LogLevel level, const char* text, DWORD length) noexcept {
     const bool urgent = erui::detail::should_flush_log_level(level);
     if (urgent || IsDebuggerPresent()) OutputDebugStringA(text);
 
-    if (!urgent && g_writer_running.load(std::memory_order_acquire)) {
+    if (!urgent && g_buffering.load(std::memory_order_acquire) &&
+        g_writer_running.load(std::memory_order_acquire)) {
         bool wake = false;
         AcquireSRWLockExclusive(&g_pending_lock);
         if (g_pending_size + length <= kPendingBytes) {
@@ -165,6 +169,7 @@ bool initialize(const std::filesystem::path& path) noexcept {
         nullptr);
 
     const bool ok = g_file != INVALID_HANDLE_VALUE;
+    g_buffering.store(false, std::memory_order_release);
     if (ok && !g_writer_running.load(std::memory_order_acquire)) {
         if (!g_writer_wake) {
             g_writer_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -181,6 +186,10 @@ bool initialize(const std::filesystem::path& path) noexcept {
     g_enabled.store(ok, std::memory_order_release);
     ReleaseSRWLockExclusive(&g_lock);
     return ok;
+}
+
+void enable_buffering() noexcept {
+    g_buffering.store(true, std::memory_order_release);
 }
 
 void set_diagnostics_enabled(bool enabled) noexcept {

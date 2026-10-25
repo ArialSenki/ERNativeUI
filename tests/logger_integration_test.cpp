@@ -92,10 +92,38 @@ void test_diagnostic_log() {
     std::filesystem::remove(path, error);
 }
 
+// Startup lines must be on disk as soon as they are written, before the host
+// enables buffering: a crash at game launch would otherwise leave the log empty.
+void test_startup_lines_written_immediately() {
+    const auto path = test_log_path(L"startup");
+    std::error_code error{};
+    std::filesystem::remove(path, error);
+
+    ERUI_TEST_CHECK(erui::host::log::initialize(path));
+    erui::host::log::set_diagnostics_enabled(false);
+    erui::host::log::write(erui::LogLevel::info, "startup marker");
+    erui::host::log::write(erui::LogLevel::warning, "startup warning");
+    const std::string before_shutdown = read_all(path);
+    ERUI_TEST_CHECK(before_shutdown.find("[ERNativeUI/INFO] startup marker") !=
+        std::string::npos);
+    ERUI_TEST_CHECK(before_shutdown.find("[ERNativeUI/WARN] startup warning") !=
+        std::string::npos);
+
+    erui::host::log::enable_buffering();
+    erui::host::log::write(erui::LogLevel::info, "buffered marker");
+    erui::host::log::shutdown();
+    ERUI_TEST_CHECK(read_all(path).find("buffered marker") !=
+        std::string::npos);
+
+    error.clear();
+    std::filesystem::remove(path, error);
+}
+
 } // namespace
 
 int main() {
     test_default_log();
     test_diagnostic_log();
+    test_startup_lines_written_immediately();
     return 0;
 }

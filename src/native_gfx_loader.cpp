@@ -950,6 +950,12 @@ NativeGfxLoaderInstallStatus install_native_gfx_loader(
         g_original_open_file.store(
             g_open_file_hook.original<OpenFileFn>(),
             std::memory_order_release);
+        // Fork: the last line written before the code page is patched, so a
+        // crash while enabling the hook can be told apart in a user's log.
+        detail::logf(
+            LogLevel::info,
+            "Runtime GFX completion hook prepared; enabling it at RVA=0x%llX",
+            static_cast<unsigned long long>(profile->file_opener_rva));
         const auto enabled = g_open_file_hook.enable();
         if (!enabled) {
             detail::logf(

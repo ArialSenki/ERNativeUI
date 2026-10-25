@@ -1137,6 +1137,7 @@ DWORD run_host() noexcept {
                         tab_configuration.settings.minimum_tab_slots),
                     static_cast<unsigned>(gfx_minimum_tab_slots));
 #endif
+                log::write("Installing the runtime GFX completion hook");
                 const erui::native::NativeGfxLoaderInstallStatus gfx_status =
                     erui::native::install_native_gfx_loader(
                         game,
@@ -1557,6 +1558,7 @@ DWORD run_host() noexcept {
 
         set_api_state(ApiState::runtime_ready);
         log::write("ERNativeUI host ready");
+        log::enable_buffering();
         // A client language (ERNativeUIFork_SetHostLanguage) that arrived
         // while the menu was compiling goes on the published menu now.
         if (const ERUI_Result pending = registry().apply_pending_client_host_locale(); pending != ERUI_OK) {

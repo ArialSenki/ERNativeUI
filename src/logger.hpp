@@ -8,6 +8,9 @@ namespace erui::host::log {
 
 bool initialize(const std::filesystem::path& path) noexcept;
 void set_diagnostics_enabled(bool enabled) noexcept;
+// Ordinary lines go through the background writer from here on; before this
+// call they are written synchronously.
+void enable_buffering() noexcept;
 void shutdown() noexcept;
 
 #if defined(__GNUC__) || defined(__clang__)
