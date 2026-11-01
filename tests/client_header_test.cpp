@@ -2,9 +2,12 @@
 
 #include "test_assertions.hpp"
 #include <array>
+#include <chrono>
+#include <cwchar>
 #include <iterator>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace {
 void action() noexcept {}
@@ -191,6 +194,97 @@ int main() {
     static_assert(std::is_same<
         decltype(erui::connect()),
         erui::ConnectionResult>::value);
+
+    // r150: connect(const ConnectOptions&) overload. The real host is never
+    // loaded here, so only option defaults, argument validation, the
+    // module-name override and the negotiation helpers are exercised.
+    static_assert(std::is_same<
+        decltype(erui::connect(std::chrono::milliseconds{0})),
+        erui::ConnectionResult>::value);
+    static_assert(std::is_same<
+        decltype(erui::connect(std::declval<const erui::ConnectOptions&>())),
+        erui::ConnectionResult>::value);
+    static_assert(noexcept(erui::connect(
+        std::declval<const erui::ConnectOptions&>())));
+    {
+        const erui::ConnectOptions defaults_options{};
+        ERUI_TEST_CHECK(defaults_options.timeout ==
+            std::chrono::milliseconds{30000});
+        ERUI_TEST_CHECK(defaults_options.minimum_api_version ==
+            ERUI_API_VERSION_1_3);
+        ERUI_TEST_CHECK(defaults_options.module_name &&
+            std::wcscmp(defaults_options.module_name, L"ERNativeUI.dll") == 0);
+        ERUI_TEST_CHECK(defaults_options.refuse_wait_under_loader_lock);
+
+        ERUI_TEST_CHECK(erui::detail::known_api_version(ERUI_API_VERSION_1_0));
+        ERUI_TEST_CHECK(erui::detail::known_api_version(ERUI_API_VERSION_1_3));
+        ERUI_TEST_CHECK(!erui::detail::known_api_version(
+            ERUI_VERSION_ENCODE(1u, 4u)));
+        ERUI_TEST_CHECK(!erui::detail::known_api_version(0));
+        ERUI_TEST_CHECK(erui::detail::next_lower_api_version(
+            ERUI_API_VERSION_1_3) == ERUI_API_VERSION_1_2);
+        ERUI_TEST_CHECK(erui::detail::next_lower_api_version(
+            ERUI_API_VERSION_1_2) == ERUI_API_VERSION_1_1);
+        ERUI_TEST_CHECK(erui::detail::next_lower_api_version(
+            ERUI_API_VERSION_1_1) == ERUI_API_VERSION_1_0);
+        ERUI_TEST_CHECK(erui::detail::next_lower_api_version(
+            ERUI_API_VERSION_1_0) == 0);
+        ERUI_TEST_CHECK(erui::detail::api_table_size(ERUI_API_VERSION_1_2) ==
+            ERUI_API_V1_2_SIZE);
+        ERUI_TEST_CHECK(erui::detail::api_table_size(ERUI_API_VERSION_1_3) ==
+            ERUI_API_V1_3_SIZE);
+        ERUI_TEST_CHECK(erui::detail::api_table_size(0) == 0);
+
+        ERUI_Api table{};
+        ERUI_TEST_CHECK(!erui::detail::connection_table_valid(table));
+        table.api_version = ERUI_API_VERSION_1_2;
+        table.size = ERUI_API_V1_2_SIZE;
+        ERUI_TEST_CHECK(erui::detail::connection_table_valid(table));
+        table.size = ERUI_API_V1_3_SIZE;
+        ERUI_TEST_CHECK(!erui::detail::connection_table_valid(table));
+
+        // The test's main thread does not hold the loader lock.
+        ERUI_TEST_CHECK(!erui::detail::current_thread_holds_loader_lock());
+
+        erui::ConnectOptions bad_minimum{};
+        bad_minimum.timeout = std::chrono::milliseconds{0};
+        bad_minimum.minimum_api_version = ERUI_VERSION_ENCODE(1u, 4u);
+        const auto rejected = erui::connect(bad_minimum);
+        ERUI_TEST_CHECK(!rejected);
+        ERUI_TEST_CHECK(rejected.error().code() ==
+            erui::ErrorCode::incompatible_api);
+        ERUI_TEST_CHECK(rejected.error().native_result() ==
+            ERUI_INVALID_ARGUMENT);
+
+        // A missing host with timeout 0 returns after one attempt and names
+        // the overridden module in its message.
+        erui::ConnectOptions absent{};
+        absent.timeout = std::chrono::milliseconds{0};
+        absent.minimum_api_version = ERUI_API_VERSION_1_1;
+        absent.module_name = L"ERUI_r150_absent_host.dll";
+        const auto missing = erui::connect(absent);
+        ERUI_TEST_CHECK(!missing);
+        ERUI_TEST_CHECK(!missing.success());
+        ERUI_TEST_CHECK(missing.error().code() ==
+            erui::ErrorCode::host_not_loaded);
+        ERUI_TEST_CHECK(missing.error().message().find(
+            L"ERUI_r150_absent_host.dll") != std::wstring::npos);
+
+        // nullptr falls back to the default module name.
+        absent.module_name = nullptr;
+        const auto fallback = erui::detail::connect_api(absent);
+        ERUI_TEST_CHECK(!fallback.connected);
+        ERUI_TEST_CHECK(fallback.error.code() ==
+            erui::ErrorCode::host_not_loaded);
+        ERUI_TEST_CHECK(fallback.error.message().find(L"ERNativeUI.dll") !=
+            std::wstring::npos);
+
+        // The original timeout entry point still compiles and behaves the same.
+        const auto legacy = erui::connect(std::chrono::milliseconds{0});
+        ERUI_TEST_CHECK(!legacy);
+        ERUI_TEST_CHECK(legacy.error().code() ==
+            erui::ErrorCode::host_not_loaded);
+    }
 
     erui::ProviderOptions provider{};
     provider.provider_id = "compile-test";

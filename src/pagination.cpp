@@ -13,19 +13,20 @@ std::size_t count_slices(
     if (first_page_capacity == 0 || continuation_capacity < 2) return 0;
     if (logical_row_count <= first_page_capacity) return 1;
 
-    const std::size_t first_content_capacity = first_page_capacity - 1;
-    std::size_t remaining = logical_row_count -
-        std::min(logical_row_count, first_content_capacity);
-    std::size_t count = 1;
-    while (remaining != 0) {
-        const std::size_t last_content_capacity = continuation_capacity - 1;
-        if (remaining <= last_content_capacity) return count + 1;
-        const std::size_t middle_content_capacity = continuation_capacity - 2;
-        if (middle_content_capacity == 0) return 0;
-        remaining -= std::min(remaining, middle_content_capacity);
-        ++count;
-    }
-    return count;
+    // r146: closed form of the old page-by-page loop. Every page between the
+    // first and the last holds exactly continuation_capacity - 2 rows, so the
+    // middle-page count is a ceiling division. This keeps
+    // paginate_with_first_capacity linear: it resolves every slice, and each
+    // resolve recounted the slices.
+    const std::size_t remaining =
+        logical_row_count - (first_page_capacity - 1);
+    const std::size_t last_content_capacity = continuation_capacity - 1;
+    if (remaining <= last_content_capacity) return 2;
+    const std::size_t middle_content_capacity = continuation_capacity - 2;
+    if (middle_content_capacity == 0) return 0;
+    const std::size_t excess = remaining - last_content_capacity;
+    return 2 + excess / middle_content_capacity +
+        (excess % middle_content_capacity != 0 ? 1 : 0);
 }
 
 PagePlan paginate_with_first_capacity(
@@ -148,25 +149,21 @@ bool resolve_paginated_slice(
         return true;
     }
 
-    std::size_t consumed = first_page_capacity - 1;
-    for (std::size_t current = 1; current <= slice_index; ++current) {
-        const std::size_t remaining = logical_row_count - consumed;
-        const bool final_page = remaining <= continuation_capacity - 1;
-        const std::size_t content_capacity = final_page
-            ? continuation_capacity - 1
-            : continuation_capacity - 2;
-        const std::size_t content_count =
-            std::min(remaining, content_capacity);
-        if (current == slice_index) {
-            output.first_row = consumed;
-            output.row_count = content_count;
-            output.has_previous = true;
-            output.has_next = !final_page;
-            return true;
-        }
-        consumed += content_count;
-    }
-    return false;
+    // r146: slices before this one are all middle pages (a final page would
+    // make slice_index >= slice_count), each holding exactly
+    // continuation_capacity - 2 rows, so the offset is direct.
+    const std::size_t consumed = (first_page_capacity - 1) +
+        (slice_index - 1) * (continuation_capacity - 2);
+    const std::size_t remaining = logical_row_count - consumed;
+    const bool final_page = remaining <= continuation_capacity - 1;
+    const std::size_t content_capacity = final_page
+        ? continuation_capacity - 1
+        : continuation_capacity - 2;
+    output.first_row = consumed;
+    output.row_count = std::min(remaining, content_capacity);
+    output.has_previous = true;
+    output.has_next = !final_page;
+    return true;
 }
 
 } // namespace erui::detail

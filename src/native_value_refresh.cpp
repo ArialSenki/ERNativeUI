@@ -1,5 +1,6 @@
 #include "native_value_refresh.hpp"
 
+#include "foreign_hook.hpp"
 #include "running_build.hpp"
 #include "runtime_log.hpp"
 
@@ -140,6 +141,22 @@ std::atomic<ItemCtorFn> g_original_slider_ctor{};
 std::atomic_bool g_active{};
 std::atomic<std::uint32_t> g_refresh_logs{};
 
+// r152: the entries this file only calls may already carry another mod's hook:
+// the build is an exact profile, and calling through the jump chains into that
+// mod. Solid Uncapper hooks Selector::select, so comparing bytes alone turned the
+// live refresh and the coloured labels off with it (Nexus log). The constructors
+// this file hooks itself still need their original bytes.
+bool called_entry_usable(std::uintptr_t rva, const std::uint8_t* bytes, std::size_t size) noexcept {
+    const std::uint8_t* const entry = g_base + rva;
+    if (std::memcmp(entry, bytes, size) == 0) return true;
+    const ForeignHookOwner owner = find_foreign_hook_owner(entry);
+    if (!owner.hooked) return false;
+    erui::detail::logf(erui::LogLevel::info,
+        "Live value refresh: entry RVA 0x%llX already hooked by %s; calling through it",
+        static_cast<unsigned long long>(rva), owner.name);
+    return true;
+}
+
 void remember(std::uint8_t* item, std::size_t bound_offset, Kind kind) noexcept {
     if (!item) return;
     const volatile std::uint8_t* bound{};
@@ -202,6 +219,9 @@ bool refresh_item(std::uint8_t* item, Kind kind, const volatile std::uint8_t* bo
                 return false;
             }
             const int index = reinterpret_cast<ToggleIndexOfFn>(g_base + g_toggle_index_of_rva)(item, bound);
+            // r145: a byte outside the control's options has no index (-1);
+            // leave the list as it is instead of selecting out of range.
+            if (index < 0) return true;
             std::uint8_t* const list = item + kToggleListOffset;
             (void)reinterpret_cast<ListSelectFn>(g_base + g_list_select_rva)(list, index, 0);
             reinterpret_cast<ListRepaintFn>(g_base + g_list_repaint_rva)(list);
@@ -349,7 +369,13 @@ void update_label_colors() noexcept {
         !g_default_total.load(std::memory_order_acquire)) {
         return;
     }
-    for (Slot& slot : g_slots) {
+    // r148: runs every page frame. Slots past the high-water mark were never
+    // handed out, so only those up to it are walked; once the ring has
+    // wrapped, g_next_slot exceeds kSlotCount and every slot is in use. A
+    // slot claimed after this load is picked up on the next frame.
+    const std::size_t used = std::min(g_next_slot.load(std::memory_order_acquire), kSlotCount);
+    for (std::size_t index = 0; index < used; ++index) {
+        Slot& slot = g_slots[index];
         const Kind kind = slot.kind.load(std::memory_order_acquire);
         if (kind == Kind::none) continue;
         const volatile std::uint8_t* const bound = slot.bound.load(std::memory_order_relaxed);
@@ -414,7 +440,11 @@ void install_native_value_refresh() noexcept {
     g_toggle_item_vtable_rva = menu->toggle_item_vtable_rva;
     g_slider_item_vtable_rva = menu->slider_item_vtable_rva;
     for (const Prologue& p : kPrologues) {
-        if (std::memcmp(g_base + *p.rva, p.bytes.data(), p.bytes.size()) != 0) {
+        const bool hooked_here = p.rva == &g_toggle_item_ctor_rva || p.rva == &g_slider_item_ctor_rva;
+        const bool usable = hooked_here
+            ? std::memcmp(g_base + *p.rva, p.bytes.data(), p.bytes.size()) == 0
+            : called_entry_usable(*p.rva, p.bytes.data(), p.bytes.size());
+        if (!usable) {
             erui::detail::logf(erui::LogLevel::warning,
                 "Live value refresh unavailable: entry RVA 0x%llX does not match Elden Ring %.*s",
                 static_cast<unsigned long long>(*p.rva),
@@ -449,7 +479,7 @@ void install_native_value_refresh() noexcept {
         g_color_transform_rva = color->scaleform_color_transform_setter_rva;
         g_proxy_destructor_rva = color->scene_obj_proxy_destructor_rva;
         for (const ShortPrologue& p : kColorPrologues) {
-            color_ok = color_ok && std::memcmp(g_base + *p.rva, p.bytes.data(), p.bytes.size()) == 0;
+            color_ok = color_ok && called_entry_usable(*p.rva, p.bytes.data(), p.bytes.size());
         }
     }
     g_color_ready.store(color_ok, std::memory_order_release);

@@ -14,6 +14,7 @@
 #include "native_text_input.hpp"
 
 #include <Windows.h>
+#include <intrin.h>
 
 #include <algorithm>
 #include <exception>
@@ -700,7 +701,8 @@ std::size_t poll_changes() noexcept {
                 continue;
             }
 
-            std::uint8_t current = *row.byte_value;
+            const std::uint8_t observed = *row.byte_value;
+            std::uint8_t current = observed;
             if (row.kind == RowKind::toggle) {
                 current = current == 0 ? 0 : 1;
             } else if (row.kind == RowKind::slider) {
@@ -727,7 +729,17 @@ std::size_t poll_changes() noexcept {
             } else {
                 continue;
             }
-            *row.byte_value = current;
+            // Fork: the game thread writes the same byte. Writing back only a
+            // normalised value, and only if the byte still holds what was
+            // read, keeps a change the player made meanwhile; it is picked up
+            // on the next poll.
+            if (current != observed &&
+                _InterlockedCompareExchange8(
+                    reinterpret_cast<volatile char*>(row.byte_value),
+                    static_cast<char>(current),
+                    static_cast<char>(observed)) != static_cast<char>(observed)) {
+                continue;
+            }
 
             if (current == row.last_observed_value) {
                 continue;

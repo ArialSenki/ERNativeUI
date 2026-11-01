@@ -28,6 +28,9 @@ constexpr std::size_t kMaximumQueuedAlerts = 64;
 constexpr std::size_t kMaximumMessageLength = 4096;
 constexpr std::uint64_t kRetirementGraceMs = 10000;
 constexpr std::uint64_t kRetiredCollectionPeriodMs = 1000;
+// r150: How long CSPopupMenu::update may go without running before the host
+// thread reconciles an owned alert whose popup slot no longer holds it.
+constexpr std::uint64_t kPopupStallMs = 1000;
 
 using LowerFrontendUpdateFn = void(__fastcall*)(void*, float, std::uint8_t*);
 using TitleTopUpdateFn = void(__fastcall*)(void*, float, std::uint8_t*);
@@ -53,7 +56,9 @@ struct AlertRequest {
     std::wstring message{};
     ERUI_AlertCallback callback{};
     void* user_data{};
-    void* native_job{};
+    // r150: Atomic because the host thread may retire a published request
+    // (stalled-popup fallback) while the game thread inspects g_active.
+    std::atomic<void*> native_job{};
     bool owns_native_job{};
     NativeDialogPresentation presentation{};
     std::uint64_t lower_gate_baseline{};
@@ -106,6 +111,8 @@ std::atomic_flag g_scheduling = ATOMIC_FLAG_INIT;
 std::atomic<std::uint64_t> g_next_collection_tick{};
 std::atomic<std::uint64_t> g_lower_gate_frames{};
 std::atomic<std::uint64_t> g_title_gate_frames{};
+// r150: GetTickCount64() of the latest popup_update_detour entry.
+std::atomic<std::uint64_t> g_popup_update_tick{};
 thread_local bool g_dispatching_popup_input{};
 
 void release_job(void* job) noexcept {
@@ -141,16 +148,21 @@ void retire_request(
     ERUI_Result result,
     std::uint64_t now) noexcept {
     if (!request) return;
+    // A published request never owns its job (the +0x298 install consumed
+    // it), so a retirement from the host thread never touches the game's job.
     if (request->owns_native_job) {
-        release_job(request->native_job);
+        release_job(request->native_job.load(std::memory_order_relaxed));
     }
-    request->native_job = nullptr;
     request->owns_native_job = false;
 
     bool callback_queued = !request->callback;
     bool text_retired = false;
     {
         std::lock_guard lock(g_mutex);
+        // r150: Clear the job and the active slot together under the lock so
+        // acquire_active() can never see this request as active but unsent
+        // and submit it a second time.
+        request->native_job.store(nullptr, std::memory_order_relaxed);
         if (g_active == request) g_active.reset();
         if (request->callback) {
             try {
@@ -287,7 +299,7 @@ ScheduleResult invoke_schedule_job(
             return ScheduleResult::failed;
         }
 
-        request->native_job = submitted_job;
+        request->native_job.store(submitted_job, std::memory_order_relaxed);
         request->owns_native_job = true;
 
         // 0x7AA2E0 is the intrusive assignment used by Elden Ring's own
@@ -304,7 +316,7 @@ ScheduleResult invoke_schedule_job(
         installed_reference = install_result[0];
         if (consumable_job != nullptr) {
             release_job(consumable_job);
-            request->native_job = nullptr;
+            request->native_job.store(nullptr, std::memory_order_relaxed);
             request->owns_native_job = false;
             if (installed_reference) {
                 release_job(installed_reference);
@@ -336,7 +348,7 @@ ScheduleResult invoke_schedule_job(
         if (!submit_started && consumable_job) {
             release_job(consumable_job);
         }
-        request->native_job = nullptr;
+        request->native_job.store(nullptr, std::memory_order_relaxed);
         request->owns_native_job = false;
         if (installed_reference) {
             release_job(installed_reference);
@@ -351,6 +363,13 @@ std::shared_ptr<AlertRequest> acquire_active() noexcept {
     if (!g_active && !g_pending.empty()) {
         g_active = std::move(g_pending.front());
         g_pending.pop_front();
+    }
+    // r150: A request whose job is already submitted is not returned. This
+    // check sits under the same lock retire_request() uses to clear the job
+    // and g_active, so a host-thread retirement cannot make the game thread
+    // submit a finished request again.
+    if (g_active && g_active->native_job.load(std::memory_order_relaxed)) {
+        return nullptr;
     }
     return g_active;
 }
@@ -382,16 +401,13 @@ void schedule_service() noexcept {
     // having it overwritten by a later store(false).
     if (!g_queue_work.exchange(false, std::memory_order_acq_rel)) return;
 
+    // A producer may enqueue another alert while the current dialog is open.
+    // That marks the queue as ready, but the active native job must never be
+    // submitted a second time: acquire_active() returns null while it is
+    // submitted. Its completion will wake the FIFO so the next request can be
+    // scheduled.
     const std::shared_ptr<AlertRequest> request = acquire_active();
     if (!request) return;
-
-    if (request->native_job) {
-        // A producer may enqueue another alert while the current dialog is
-        // open. That marks the queue as ready, but the active native job must
-        // never be submitted a second time. Its completion will wake the FIFO
-        // so the next request can be scheduled.
-        return;
-    }
 
     if (!g_initialize || !g_set_fields || !g_set_fixed_option ||
         !g_set_global_option || !g_build || !g_install_blocking_job) {
@@ -422,12 +438,15 @@ void schedule_service() noexcept {
         "Native alert scheduled in blocking slot: sequence=%llu messageId=0x%X job=%p",
         static_cast<unsigned long long>(request->sequence),
         static_cast<unsigned>(request->message_id),
-        request->native_job);
+        request->native_job.load(std::memory_order_relaxed));
 }
 
 std::shared_ptr<AlertRequest> active_request_for_job(void* job) noexcept {
     std::lock_guard lock(g_mutex);
-    return g_active && g_active->native_job == job ? g_active : nullptr;
+    return g_active &&
+            g_active->native_job.load(std::memory_order_relaxed) == job
+        ? g_active
+        : nullptr;
 }
 
 bool read_popup_blocking_job(void* popup, void*& slot_job) noexcept {
@@ -452,22 +471,38 @@ bool owns_current_popup_job(void* popup) noexcept {
         g_modal_state.owns(popup, slot_job);
 }
 
-void observe_composite_completion(void* popup) noexcept {
-    void* slot_job = nullptr;
-    if (!read_popup_blocking_job(popup, slot_job)) return;
-
-    // Reconcile through the instance that is actually updating. Reading a
-    // remembered owner after the frontend replaces its popup singleton could
-    // otherwise inspect stale storage and leave modal ownership latched.
-    const DialogModalReconcileResult completion =
-        g_modal_state.reconcile(popup, slot_job);
-    if (!completion.job) return;
+// r150: Completes the request for a task that DialogModalState::reconcile
+// handed out. The exchange there succeeds once, so whichever path (popup
+// update, lower frontend, host thread) wins retires the request; the others
+// get an empty result. `observed` is true only inside CSPopupMenu's update.
+void finish_reconciled(
+    const DialogModalReconcileResult& reconciled,
+    bool observed,
+    const char* source) noexcept {
+    if (!reconciled.job) return;
 
     const std::shared_ptr<AlertRequest> request =
-        active_request_for_job(completion.job);
+        active_request_for_job(reconciled.job);
     if (!request) return;
 
-    const bool dismissed = completion.loss == DialogModalLoss::dismissed;
+    DialogModalLoss loss = reconciled.loss;
+    if (!observed) {
+        // r150: Outside the popup update an empty slot only says the task is
+        // gone. It counts as a dismissal (ERUI_OK) only if the poll hook
+        // recorded a button; otherwise it is the same ownership loss
+        // (ERUI_INTERNAL_ERROR, response NONE) as a replaced slot.
+        loss = classify_unobserved_loss(
+            loss,
+            request->response.load(std::memory_order_acquire) !=
+                ERUI_ALERT_RESPONSE_NONE);
+        erui::detail::logf(
+            erui::LogLevel::info,
+            "Native alert reconciled outside CSPopupMenu update: source=%s sequence=%llu",
+            source,
+            static_cast<unsigned long long>(request->sequence));
+    }
+
+    const bool dismissed = loss == DialogModalLoss::dismissed;
     const std::uint64_t lower_gate_frames =
         g_lower_gate_frames.load(std::memory_order_relaxed) -
         request->lower_gate_baseline;
@@ -487,6 +522,32 @@ void observe_composite_completion(void* popup) noexcept {
         dismissed ? ERUI_OK : ERUI_INTERNAL_ERROR,
         GetTickCount64());
     g_queue_work.store(true, std::memory_order_release);
+}
+
+void observe_composite_completion(void* popup) noexcept {
+    void* slot_job = nullptr;
+    if (!read_popup_blocking_job(popup, slot_job)) return;
+
+    // Reconcile through the instance that is actually updating. Reading a
+    // remembered owner after the frontend replaces its popup singleton could
+    // otherwise inspect stale storage and leave modal ownership latched.
+    finish_reconciled(
+        g_modal_state.reconcile(popup, slot_job), true, "popup");
+}
+
+// r150: Reconciles from a point where CSPopupMenu is not updating (it was
+// skipped, torn down or replaced, or the whole frontend is stalled). The
+// owned task is sampled before the slot, so a sample taken before a newer
+// alert was published can never end that newer alert. Only the slot pointer
+// is read (SEH-guarded); the game's job object is never touched.
+void reconcile_unobserved_popup(const char* source) noexcept {
+    void* const expected = g_modal_state.submitted();
+    if (!expected) return;
+    const PopupAccess popup = popup_access();
+    finish_reconciled(
+        g_modal_state.reconcile_submitted(
+            expected, popup.manager, popup.blocking_job),
+        false, source);
 }
 
 void __fastcall lower_frontend_update_detour(
@@ -509,6 +570,11 @@ void __fastcall lower_frontend_update_detour(
         g_lower_gate_frames.fetch_add(1, std::memory_order_relaxed);
         return;
     }
+    // r150: The outer frame skips CSPopupMenu::update when CSMenuManImp+0x80
+    // is null, but still reaches this lower tree. If our alert is owned yet
+    // no longer in the live slot, reconcile it here on the game thread
+    // instead of waiting for a popup update that may not come.
+    if (g_modal_state.active()) reconcile_unobserved_popup("frontend");
     original(frontend, elapsed_seconds, input_enabled);
 }
 
@@ -544,6 +610,7 @@ void __fastcall popup_update_detour(
     const PopupUpdateFn original =
         g_original_popup_update.load(std::memory_order_acquire);
     if (!original) return;
+    g_popup_update_tick.store(GetTickCount64(), std::memory_order_release);
     const bool owned_before_update = owns_current_popup_job(popup);
     std::uint8_t popup_enabled = 1;
     void* const forwarded_enabled =
@@ -907,6 +974,7 @@ void remove_native_dialog_transport() noexcept {
     g_modal_state.reset();
     g_lower_gate_frames.store(0, std::memory_order_relaxed);
     g_title_gate_frames.store(0, std::memory_order_relaxed);
+    g_popup_update_tick.store(0, std::memory_order_release);
     g_queue_work.store(false, std::memory_order_release);
     g_scheduling.clear(std::memory_order_release);
     g_next_collection_tick.store(0, std::memory_order_release);
@@ -925,7 +993,17 @@ bool native_dialog_available() noexcept {
 }
 
 bool native_dialog_owns_menu_input() noexcept {
-    return g_modal_state.active();
+    // r146: The job pointer is reconciled only from popup_update_detour. If
+    // CSPopupMenu stops updating (quit to title, loading screen) while an
+    // alert is open, a bare active() check would stay latched and suppress
+    // every custom keybind. Require the live +0x298 slot to still hold our
+    // exact job, the same test the frontend gates use.
+    // r150: The lower frontend hook and the host thread now also reconcile
+    // such a stranded job; this live check still covers the gap until then.
+    if (!g_modal_state.active()) return false;
+    const PopupAccess popup = popup_access();
+    return popup.manager &&
+        g_modal_state.owns(popup.manager, popup.blocking_job);
 }
 
 bool native_dialog_dispatching_popup_input() noexcept {
@@ -1015,6 +1093,20 @@ void invoke_callback_safely(const Completion* completion) noexcept {
 }
 
 void dispatch_native_dialog_callbacks() noexcept {
+    // r150: Last-resort reconciliation for when CSPopupMenu::update has not
+    // run for kPopupStallMs (quit to title, loading screen) and the slot no
+    // longer holds our alert. Without it the callback and the FIFO would wait
+    // for the next popup update. A slot that still holds our job is left
+    // alone. The exchange in DialogModalState keeps this exactly-once against
+    // a popup update that resumes concurrently; the next alert is still
+    // submitted only from the game thread.
+    if (g_available.load(std::memory_order_acquire) &&
+        g_modal_state.active() &&
+        GetTickCount64() -
+                g_popup_update_tick.load(std::memory_order_acquire) >=
+            kPopupStallMs) {
+        reconcile_unobserved_popup("host");
+    }
     {
         std::lock_guard lock(g_mutex);
         g_dispatch_buffer.clear();

@@ -27,6 +27,53 @@ mouse input, and Back stack.
 > disabled. Native integration is game-version-sensitive; use a release that
 > explicitly supports the installed Elden Ring executable.
 
+## NativeTweaks fork
+
+This repository is the **NativeTweaks fork** of
+[ERNativeUI](https://github.com/Flammrock/ERNativeUI) (MIT), built on upstream
+ERNativeUI 1.3.0 and shipped with NativeTweaks. It keeps the official ERUI API
+1.0-1.3 unchanged, so upstream clients work as they are, and adds:
+
+- **Mod Settings tab:** providers appear under their own Mod Settings tab
+  (classic tab by default; `[Tabs] ModSettingsTab = 1` uses an API 1.3 custom
+  tab with its own icon). Reopening the menu on Mod Settings builds Game
+  Options first, and other providers nest under it.
+- **Live text API:** row, submenu, page and slider texts can change after
+  commit, and the host's own texts can follow the client's menu language
+  (see the [fork API](docs/fork/api.md)).
+- **Wide provider help:** long provider help is shown in the wide
+  `LineHelpWide` / `LineHelpWide2` fields (with the game's text drop shadow)
+  while the native `LineHelp` stays hidden.
+- **Runtime GFX patching:** the settings movies are patched in memory when the
+  game opens them (no edited GFX files needed), plus an optional translucent
+  settings backdrop (`[GFX] MenuBackgroundAlpha`).
+- **Ultrawide HUD and menu layout:** on screens wider than 16:9, corner HUD
+  blocks and menus move to the screen edges, backdrops stretch, and the HUD
+  can be scaled (`[GFX] HudToScreenEdges`, `HudScale`, `MenusToScreenEdges`;
+  tested with Convergence and Tarnished HUD).
+- **Live value refresh with changed-value colours:** rows written through the
+  API repaint at once, and labels of rows that differ from their registered
+  default are tinted (gold for toggles, green/red for sliders); switchable live.
+- **Solid Uncapper compatibility:** the fork's extra hooks keep upstream's
+  Solid Uncapper address snapshots and colour-picker chaining.
+- **`ERNativeUI-status.txt`:** rewritten next to the DLL on every start, even
+  with logging off: fork build, game version and executable timestamp, and
+  whether the host is ready, the game version is unsupported (runtime GFX is
+  then skipped) or startup failed, with what to do.
+- **Static CRT:** no MSVCP140/VCRUNTIME140 dependency (old Proton prefixes).
+- **Version resource:** `FileVersion` 1.3.0.NNN for fork build rNNN.
+- **Single-host guard:** a second `ERNativeUI.dll` in the same process stays
+  passive instead of hooking the same functions twice.
+- **PDB per build:** every release build ships a matching PDB for crash
+  reports; startup faults are written to `ERNativeUI.log`.
+- **Resilience:** build-independent lookups, profile-checked scans that report
+  another mod's hook on a known function, Elden Ring 2.7.1.1 and 2.7.2.0
+  profiles, and the offline `ERNativeUIAudit` address checker.
+
+Fork documentation: [fork-only C exports (`ERNativeUIFork_*`)](docs/fork/api.md)
+· [fork changelog](CHANGELOG.md#nativetweaks-fork). Everything below is the
+upstream ERNativeUI README.
+
 <p align="center">
   <img src="assets/ernativeui-separator-1.png" alt="">
 </p>

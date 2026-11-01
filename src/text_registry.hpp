@@ -41,4 +41,7 @@ private:
     bool frozen_{false};
 };
 
+// r151: strings ever stored by any TextRegistry (never freed; see replace()).
+void text_storage_stats(std::size_t& count, std::size_t& bytes) noexcept;
+
 } // namespace erui::detail

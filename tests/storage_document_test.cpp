@@ -378,6 +378,29 @@ void test_failed_save_preserves_memory_and_dirty_state() {
     }
 }
 
+// r146: load() removes temporaries a crashed writer left behind, but keeps
+// ones that belong to this process or do not match the exact name pattern.
+void test_load_removes_stale_temporaries() {
+    TemporaryDirectory temporary{};
+    const auto path = temporary.path() / L"config.ini";
+    const auto stale = temporary.path() / L"config.ini.tmp.4294967292.1.1";
+    const auto own = temporary.path() /
+        (L"config.ini.tmp." + std::to_wstring(GetCurrentProcessId()) +
+            L".1.1");
+    const auto foreign = temporary.path() / L"config.ini.tmp.backup";
+    const auto other = temporary.path() / L"other.ini.tmp.4294967292.1.1";
+    for (const auto& file : {stale, own, foreign, other}) {
+        write_bytes(file, "x");
+    }
+
+    StorageDocument document(path);
+    ERUI_TEST_CHECK(document.load() == StorageDocumentResult::ok);
+    ERUI_TEST_CHECK(!std::filesystem::exists(stale));
+    ERUI_TEST_CHECK(std::filesystem::exists(own));
+    ERUI_TEST_CHECK(std::filesystem::exists(foreign));
+    ERUI_TEST_CHECK(std::filesystem::exists(other));
+}
+
 void test_concurrent_mutations_preserve_revisions() {
     TemporaryDirectory temporary{};
     const auto path = temporary.path() / L"config.ini";
@@ -560,6 +583,7 @@ int main() {
     test_conventional_parser_whitespace_comments_and_exact_values();
     test_erase_and_reload();
     test_failed_save_preserves_memory_and_dirty_state();
+    test_load_removes_stale_temporaries();
     test_concurrent_mutations_preserve_revisions();
     test_failure_atomic_batches_and_single_revision_commit();
     test_bounds_and_empty_path();

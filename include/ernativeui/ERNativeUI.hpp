@@ -487,6 +487,10 @@ enum class ErrorCode {
     registration_failed,
     builder_exception,
     operation_failed,
+    // r150: connect() needed to wait for the host while the calling thread
+    // holds the Windows loader lock (DllMain). Appended so existing values
+    // keep their numbers.
+    loader_lock_held,
 };
 
 class Error {
@@ -509,6 +513,30 @@ private:
 
 static_assert(std::is_nothrow_move_assignable_v<Error>,
     "Error fallback assignment must remain allocation-free");
+
+// r150: options for erui::connect(const ConnectOptions&). The defaults match
+// erui::connect(): wait up to 30 s for ERNativeUI.dll and require API 1.3.
+struct ConnectOptions {
+    // Total time to wait for the host to load and become ready. Zero (or a
+    // negative value) makes exactly one attempt and never sleeps.
+    std::chrono::milliseconds timeout{30000};
+    // Oldest API version the caller accepts. connect() asks for 1.3 first
+    // and, while the host answers ERUI_UNSUPPORTED_VERSION, steps down one
+    // minor version at a time until this one (ERUI_API_VERSION_1_0..1_3).
+    // Check Connection::api_version()/supports() before using newer rows;
+    // builder methods for features the negotiated table lacks report
+    // ERUI_NOT_SUPPORTED through the draft as usual.
+    std::uint32_t minimum_api_version{ERUI_API_VERSION_1_3};
+    // NUL-terminated module name passed to GetModuleHandleW (never loaded by
+    // the client). nullptr or "" means ERNativeUI.dll. Not copied: it must
+    // outlive the connect() call.
+    const wchar_t* module_name{L"ERNativeUI.dll"};
+    // When the host is not ready yet and the calling thread holds the loader
+    // lock, fail at once with ErrorCode::loader_lock_held instead of sleeping:
+    // the host cannot finish initializing while the lock is held, so waiting
+    // would only freeze the game for the whole timeout. Leave this on.
+    bool refuse_wait_under_loader_lock{true};
+};
 
 struct ProviderOptions {
     // Stable, case-sensitive ASCII ID containing 1..255 letters, digits,
@@ -1315,35 +1343,129 @@ inline ERUI_Result request_api(
     return get_api(version, &api);
 }
 
-inline ApiConnectionResult connect_api(std::chrono::milliseconds timeout) {
+// r150: true when the calling thread owns the process loader lock, i.e. it
+// runs inside DllMain, a TLS callback or another loader notification.
+// PEB->LoaderLock has sat at the same offset since Windows XP (x64 0x110,
+// x86 0xA0) and RTL_CRITICAL_SECTION::OwningThread holds the owner's thread
+// ID; this is the comparison ntdll's RtlIsCriticalSectionOwnedByThread makes,
+// done inline so no undocumented export has to be resolved. Read-only and
+// lock-free. Other architectures report false ("not detected"), so there the
+// guard degrades to the documented rule: connect from a worker thread.
+inline bool current_thread_holds_loader_lock() noexcept {
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+#  if defined(_M_X64) || defined(__x86_64__)
+    constexpr std::size_t peb_offset = 0x60;
+    constexpr std::size_t loader_lock_offset = 0x110;
+#  else
+    constexpr std::size_t peb_offset = 0x30;
+    constexpr std::size_t loader_lock_offset = 0xA0;
+#  endif
+    const auto* teb = reinterpret_cast<const unsigned char*>(NtCurrentTeb());
+    if (!teb) return false;
+    const unsigned char* peb{};
+    std::memcpy(&peb, teb + peb_offset, sizeof(peb));
+    if (!peb) return false;
+    RTL_CRITICAL_SECTION* loader_lock{};
+    std::memcpy(&loader_lock, peb + loader_lock_offset, sizeof(loader_lock));
+    if (!loader_lock) return false;
+    const HANDLE owner =
+        static_cast<volatile RTL_CRITICAL_SECTION*>(loader_lock)->OwningThread;
+    return owner == reinterpret_cast<HANDLE>(
+        static_cast<ULONG_PTR>(GetCurrentThreadId()));
+#else
+    return false;
+#endif
+}
+
+// r150: API versions this header can drive.
+inline bool known_api_version(std::uint32_t version) noexcept {
+    return version == ERUI_API_VERSION_1_0 || version == ERUI_API_VERSION_1_1 ||
+        version == ERUI_API_VERSION_1_2 || version == ERUI_API_VERSION_1_3;
+}
+
+inline std::uint32_t api_table_size(std::uint32_t version) noexcept {
+    if (version == ERUI_API_VERSION_1_0) return ERUI_API_V1_0_SIZE;
+    if (version == ERUI_API_VERSION_1_1) return ERUI_API_V1_1_SIZE;
+    if (version == ERUI_API_VERSION_1_2) return ERUI_API_V1_2_SIZE;
+    if (version == ERUI_API_VERSION_1_3) return ERUI_API_V1_3_SIZE;
+    return 0;
+}
+
+inline std::uint32_t next_lower_api_version(std::uint32_t version) noexcept {
+    if (version == ERUI_API_VERSION_1_3) return ERUI_API_VERSION_1_2;
+    if (version == ERUI_API_VERSION_1_2) return ERUI_API_VERSION_1_1;
+    if (version == ERUI_API_VERSION_1_1) return ERUI_API_VERSION_1_0;
+    return 0;
+}
+
+inline const wchar_t* api_version_label(std::uint32_t version) noexcept {
+    if (version == ERUI_API_VERSION_1_0) return L"1.0";
+    if (version == ERUI_API_VERSION_1_1) return L"1.1";
+    if (version == ERUI_API_VERSION_1_2) return L"1.2";
+    if (version == ERUI_API_VERSION_1_3) return L"1.3";
+    return L"?";
+}
+
+// r150: a Connection is valid for any complete table this header knows.
+inline bool connection_table_valid(const ERUI_Api& api) noexcept {
+    return known_api_version(api.api_version) &&
+        api.size == api_table_size(api.api_version);
+}
+
+// r150: generalised connect_api. Module name, minimum version and the
+// loader-lock guard come from ConnectOptions; with default options every
+// result and message is identical to the original 1.3-only implementation,
+// except that waiting under the loader lock now fails fast.
+inline ApiConnectionResult connect_api(const ConnectOptions& options) {
     ApiConnectionResult result{};
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const std::uint32_t minimum = options.minimum_api_version;
+    if (!known_api_version(minimum)) {
+        result.error = Error(ErrorCode::incompatible_api, ERUI_INVALID_ARGUMENT,
+            L"ConnectOptions::minimum_api_version must be ERUI_API_VERSION_1_0 "
+            L"through ERUI_API_VERSION_1_3.");
+        return result;
+    }
+    const wchar_t* const module_name =
+        options.module_name && *options.module_name
+            ? options.module_name
+            : L"ERNativeUI.dll";
+    const std::wstring module_label(module_name);
+    const std::wstring required = minimum == ERUI_API_VERSION_1_3
+        ? std::wstring(L"1.3")
+        : std::wstring(api_version_label(minimum)) + L" or newer";
+    const auto deadline = std::chrono::steady_clock::now() + options.timeout;
     bool saw_host = false;
     do {
-        HMODULE host = GetModuleHandleW(L"ERNativeUI.dll");
+        HMODULE host = GetModuleHandleW(module_name);
         if (host) {
             saw_host = true;
             const FARPROC symbol = GetProcAddress(host, "ERUI_GetApi");
             if (!symbol) {
                 result.error = Error(ErrorCode::export_not_found, ERUI_INTERNAL_ERROR,
-                    L"ERNativeUI.dll does not export ERUI_GetApi.");
+                    module_label + L" does not export ERUI_GetApi.");
                 return result;
             }
             ERUI_GetApiFn get_api{};
             static_assert(sizeof(get_api) == sizeof(symbol),
                 "Windows function pointers must use one representation");
             std::memcpy(&get_api, &symbol, sizeof(get_api));
+            // r150: newest first; step down only on ERUI_UNSUPPORTED_VERSION
+            // and never below the caller's minimum. Each request starts from
+            // a zeroed table, so fields past an older table stay null.
+            std::uint32_t version = ERUI_API_VERSION_1_3;
             ERUI_Result status = request_api(
-                get_api,
-                ERUI_API_VERSION_1_3,
-                ERUI_API_V1_3_SIZE,
-                result.api);
+                get_api, version, api_table_size(version), result.api);
+            while (status == ERUI_UNSUPPORTED_VERSION && version != minimum) {
+                version = next_lower_api_version(version);
+                status = request_api(
+                    get_api, version, api_table_size(version), result.api);
+            }
             if (status == ERUI_OK) {
-                if (!api_complete_for_version(
-                        result.api, ERUI_API_VERSION_1_3)) {
+                if (!api_complete_for_version(result.api, version)) {
                     result.error = Error(ErrorCode::incompatible_api,
                         ERUI_UNSUPPORTED_VERSION,
-                        L"ERNativeUI returned an incomplete or incompatible API 1.3 table.");
+                        std::wstring(L"ERNativeUI returned an incomplete or incompatible API ") +
+                            api_version_label(version) + L" table.");
                     return result;
                 }
                 result.connected = true;
@@ -1357,22 +1479,46 @@ inline ApiConnectionResult connect_api(std::chrono::milliseconds timeout) {
             if (status != ERUI_HOST_NOT_READY) {
                 result.error = Error(ErrorCode::incompatible_api, status,
                     status == ERUI_UNSUPPORTED_VERSION
-                        ? L"ERNativeUI API 1.3 is required; update ERNativeUI.dll."
-                        : std::wstring(L"ERNativeUI API 1.3 negotiation failed: ") +
+                        ? L"ERNativeUI API " + required + L" is required; update " +
+                            module_label + L"."
+                        : std::wstring(L"ERNativeUI API ") +
+                            api_version_label(version) + L" negotiation failed: " +
                             result_name(status));
                 return result;
             }
         }
         if (std::chrono::steady_clock::now() >= deadline) break;
+        // r150: about to sleep. Under the loader lock the host can never
+        // become ready (its threads block on the same lock), so sleeping would
+        // only stall the game for the full timeout.
+        if (options.refuse_wait_under_loader_lock &&
+            current_thread_holds_loader_lock()) {
+            result.error = Error(ErrorCode::loader_lock_held, ERUI_HOST_NOT_READY,
+                module_label + (saw_host
+                    ? L" is not ready yet"
+                    : L" is not loaded yet") +
+                L" and erui::connect was called with a timeout while the "
+                L"loader lock is held (DllMain); connect from a worker thread "
+                L"started outside DllMain.");
+            return result;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
     } while (true);
 
     result.error = saw_host
         ? Error(ErrorCode::host_not_ready, ERUI_HOST_NOT_READY,
-            L"ERNativeUI.dll did not become ready before the connection timeout.")
+            module_label + L" did not become ready before the connection timeout.")
         : Error(ErrorCode::host_not_loaded, ERUI_HOST_NOT_READY,
-            L"ERNativeUI.dll was not loaded; this mod's configuration menu is disabled.");
+            module_label + L" was not loaded; this mod's configuration menu is disabled.");
     return result;
+}
+
+// r150: original entry point, kept for source compatibility (default options
+// with the given timeout).
+inline ApiConnectionResult connect_api(std::chrono::milliseconds timeout) {
+    ConnectOptions options{};
+    options.timeout = timeout;
+    return connect_api(options);
 }
 
 class Draft {
@@ -1483,12 +1629,15 @@ class ConnectionResult;
 [[nodiscard]] ConnectionResult connect(
     std::chrono::milliseconds timeout) noexcept;
 [[nodiscard]] ConnectionResult connect() noexcept;
+// r150: module name, minimum API version and loader-lock guard overload.
+[[nodiscard]] ConnectionResult connect(const ConnectOptions& options) noexcept;
 
 class Connection {
 public:
     [[nodiscard]] bool valid() const noexcept {
-        return api_.api_version == ERUI_API_VERSION_1_3 &&
-            api_.size == ERUI_API_V1_3_SIZE;
+        // r150: any complete 1.0-1.3 table; plain connect() still only ever
+        // produces 1.3, so existing callers see no difference.
+        return detail::connection_table_valid(api_);
     }
     explicit operator bool() const noexcept { return valid(); }
     [[nodiscard]] bool supports(Capability capability) const noexcept {
@@ -1520,6 +1669,7 @@ public:
 private:
     friend class ConnectionResult;
     friend ConnectionResult connect(std::chrono::milliseconds) noexcept;
+    friend ConnectionResult connect(const ConnectOptions&) noexcept;
 
     Connection() = default;
     explicit Connection(ERUI_Api api) noexcept : api_(api) {}
@@ -1536,15 +1686,16 @@ public:
 
 private:
     friend ConnectionResult connect(std::chrono::milliseconds) noexcept;
+    friend ConnectionResult connect(const ConnectOptions&) noexcept;
     bool success_{};
     Error error_{};
     Connection connection_{};
 };
 
-inline ConnectionResult connect(std::chrono::milliseconds timeout) noexcept {
+inline ConnectionResult connect(const ConnectOptions& options) noexcept {
     ConnectionResult output{};
     try {
-        const auto connection = detail::connect_api(timeout);
+        const auto connection = detail::connect_api(options);
         if (!connection.connected) {
             output.error_ = connection.error;
             return output;
@@ -1557,6 +1708,12 @@ inline ConnectionResult connect(std::chrono::milliseconds timeout) noexcept {
             ERUI_OUT_OF_MEMORY);
         return output;
     }
+}
+
+inline ConnectionResult connect(std::chrono::milliseconds timeout) noexcept {
+    ConnectOptions options{};
+    options.timeout = timeout;
+    return connect(options);
 }
 
 inline ConnectionResult connect() noexcept {
@@ -3642,11 +3799,12 @@ RegistrationResult Connection::register_menu(
     Builder&& builder) const noexcept {
     RegistrationResult output{};
     try {
-        if (!detail::api_complete_for_version(
-                api_, ERUI_API_VERSION_1_3)) {
+        // r150: accept the negotiated version (always 1.3 for plain connect()).
+        if (!detail::connection_table_valid(api_) ||
+            !detail::api_complete_for_version(api_, api_.api_version)) {
             output.error_ = Error(ErrorCode::incompatible_api,
                 ERUI_UNSUPPORTED_VERSION,
-                L"A valid ERNativeUI API 1.3 connection is required.");
+                L"A valid ERNativeUI API connection is required.");
             return output;
         }
         if (!detail::valid_machine_identifier(options.provider_id)) {

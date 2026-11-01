@@ -3,6 +3,7 @@
 // NT_GAME_EXE names an eldenring.exe, on the game image (mapped, not run),
 // and prints how long both take there.
 
+#include "known_rva.hpp"
 #include "module.hpp"
 
 #include <Windows.h>
@@ -10,7 +11,10 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -113,9 +117,131 @@ void compare(const erui::native::ModuleView& module, const char* label, bool tim
     }
 }
 
+// r148: a minimal mapped PE image in memory: headers and one executable
+// section at RVA 0x1000 filled with int3, so known_rva.hpp can be tested
+// against exact addresses without the game.
+constexpr std::size_t kImageSize = 0x3000;
+constexpr std::size_t kTextRva = 0x1000;
+constexpr std::size_t kTextSize = 0x2000;
+
+std::vector<std::uint8_t> synthetic_image() {
+    std::vector<std::uint8_t> image(kImageSize, 0);
+    auto* const dos = reinterpret_cast<IMAGE_DOS_HEADER*>(image.data());
+    dos->e_magic = IMAGE_DOS_SIGNATURE;
+    dos->e_lfanew = 0x80;
+    auto* const nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(image.data() + 0x80);
+    nt->Signature = IMAGE_NT_SIGNATURE;
+    nt->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
+    nt->FileHeader.NumberOfSections = 1;
+    nt->FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+    nt->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    nt->OptionalHeader.SizeOfImage = static_cast<DWORD>(kImageSize);
+    IMAGE_SECTION_HEADER* const text = IMAGE_FIRST_SECTION(nt);
+    std::memcpy(text->Name, ".text", 5);
+    text->VirtualAddress = static_cast<DWORD>(kTextRva);
+    text->Misc.VirtualSize = static_cast<DWORD>(kTextSize);
+    text->Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ;
+    std::memset(image.data() + kTextRva, 0xCC, kTextSize);
+    return image;
+}
+
+void put(std::vector<std::uint8_t>& image, std::size_t rva,
+    std::initializer_list<std::uint8_t> bytes) {
+    std::memcpy(image.data() + rva, bytes.begin(), bytes.size());
+}
+
+// The resolver before r145: scan first, the validated fallback RVA only when
+// the scan is not unique.
+std::uint8_t* scan_first_reference(const erui::native::ModuleView& game,
+    std::string_view pattern, std::uintptr_t fallback_rva, std::string_view validation) {
+    const erui::native::ScanResult scan = game.scan_executable(pattern);
+    if (scan.address && scan.matches == 1) return scan.address;
+    std::uint8_t* const fallback = game.at_rva(fallback_rva);
+    if (fallback && game.is_executable(fallback) &&
+        (validation.empty() || game.matches(fallback, validation))) {
+        return fallback;
+    }
+    return nullptr;
+}
+
+void test_known_rva_lookup() {
+    using erui::native::DirectLookupSource;
+    using erui::native::FallbackRvaSource;
+    using erui::native::lookup_direct;
+    constexpr std::string_view kUnique = "40 53 48 83 EC 20 48 8B D9 B9 37 13 00 00";
+    constexpr std::string_view kTwin = "4C 8B DC 55 56 57 41 54 B8 42 ?? 00 00";
+    std::vector<std::uint8_t> image = synthetic_image();
+    put(image, 0x1100, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xB9, 0x37, 0x13, 0x00, 0x00});
+    put(image, 0x1200, {0x4C, 0x8B, 0xDC, 0x55, 0x56, 0x57, 0x41, 0x54, 0xB8, 0x42, 0x01, 0x00, 0x00});
+    put(image, 0x1800, {0x4C, 0x8B, 0xDC, 0x55, 0x56, 0x57, 0x41, 0x54, 0xB8, 0x42, 0x02, 0x00, 0x00});
+    // Another module's hook jump over the prologue at a profile RVA.
+    put(image, 0x1400, {0xE9, 0x10, 0x20, 0x30, 0x40, 0x20, 0x48, 0x8B, 0xD9, 0xB9, 0x37, 0x13, 0x00, 0x00});
+    // Pattern bytes in the last bytes of .text, and a prefix cut by its end.
+    put(image, kTextRva + kTextSize - 6, {0x0F, 0x1F, 0x44, 0x00, 0x00, 0xC3});
+    erui::native::ModuleView game{};
+    check(game.initialize(reinterpret_cast<HMODULE>(image.data())), "synthetic image");
+    std::uint8_t* const base = game.base();
+
+    // Unique pattern: known RVA first gives the scan's own address.
+    auto lookup = lookup_direct(game, kUnique, 0x1100, kUnique, false,
+        FallbackRvaSource::exact_build_profile);
+    check(lookup.source == DirectLookupSource::known_rva && lookup.address == base + 0x1100,
+        "known RVA: unique pattern found at its RVA");
+    check(lookup.address == scan_first_reference(game, kUnique, 0x1100, kUnique),
+        "known RVA: same address as scanning first (unique)");
+    lookup = lookup_direct(game, kUnique, 0, {}, false, FallbackRvaSource::constant);
+    check(lookup.source == DirectLookupSource::unique_scan && lookup.address == base + 0x1100,
+        "known RVA: no RVA scans and finds the unique match");
+
+    // Ambiguous pattern: the scan falls back to the RVA; checking it first
+    // returns that same RVA without scanning.
+    for (const std::uintptr_t rva : {std::uintptr_t{0x1200}, std::uintptr_t{0x1800}}) {
+        lookup = lookup_direct(game, kTwin, rva, kTwin, true, FallbackRvaSource::constant);
+        check(lookup.source == DirectLookupSource::known_rva && lookup.address == base + rva &&
+                lookup.address == scan_first_reference(game, kTwin, rva, kTwin),
+            "known RVA: same address as scanning first (ambiguous, RVA " +
+                std::to_string(rva) + ")");
+    }
+    lookup = lookup_direct(game, kTwin, 0, kTwin, false, FallbackRvaSource::constant);
+    check(lookup.source == DirectLookupSource::ambiguous && !lookup.address &&
+            lookup.matches == 2,
+        "known RVA: ambiguous scan without an RVA accepts nothing");
+
+    // A unique hit away from the RVA: kept for a constant RVA, refused when
+    // the RVA comes from the running build's exact profile.
+    lookup = lookup_direct(game, kUnique, 0x1400, kUnique, false, FallbackRvaSource::constant);
+    check(lookup.source == DirectLookupSource::unique_scan && lookup.address == base + 0x1100,
+        "known RVA: constant RVA mismatch keeps the unique scan hit");
+    lookup = lookup_direct(game, kUnique, 0x1400, kUnique, false,
+        FallbackRvaSource::exact_build_profile);
+    check(lookup.source == DirectLookupSource::profile_mismatch && !lookup.address &&
+            lookup.rejected == base + 0x1100 && lookup.matches == 1,
+        "known RVA: profile RVA mismatch refuses the unique scan hit");
+    // The unique hit at the profile RVA itself is accepted even when the
+    // known-RVA check is skipped (no validation pattern).
+    lookup = lookup_direct(game, kUnique, 0x1100, {}, true, FallbackRvaSource::exact_build_profile);
+    check(lookup.source == DirectLookupSource::unique_scan && lookup.address == base + 0x1100,
+        "known RVA: unique hit at the profile RVA is accepted");
+    lookup = lookup_direct(game, "11 22 33 44 55", 0x1100, {}, false,
+        FallbackRvaSource::exact_build_profile);
+    check(lookup.source == DirectLookupSource::not_found && !lookup.address,
+        "known RVA: missing pattern accepts nothing");
+
+    // Bounds at the end of .text (and of this image): a match that ends on
+    // the last byte is found; one that would run past it is not.
+    const erui::native::ScanResult tail = game.scan_executable("0F 1F 44 00 00 C3");
+    check(tail.matches == 1 && tail.address == base + kTextRva + kTextSize - 6,
+        "end of .text: pattern ending on the last byte is found");
+    check(game.scan_executable("44 00 00 C3 CC CC").matches == 0 &&
+            !game.matches(base + kImageSize - 4, "44 00 00 C3 CC CC"),
+        "end of .text: pattern running past the end is not matched");
+}
+
 } // namespace
 
 int main() {
+    test_known_rva_lookup();
+
     erui::native::ModuleView self{};
     check(self.initialize(GetModuleHandleW(nullptr)), "own image");
     compare(self, "own image", false);

@@ -579,6 +579,54 @@ void release_button_display_text(std::byte* display_text) noexcept {
     release(owner, allocation);
 }
 
+// r146: Failure-path cleanup for text built by prepare_button_text when no
+// native row took a copy of it. Both buffers start zeroed, so untouched
+// objects are skipped: the display text keeps its inline capacity and unset
+// references are left alone, matching the success-path cleanup rules.
+void release_unused_button_text(
+    const GameAddresses& addresses,
+    void* text_references,
+    std::byte* display_text) noexcept {
+#if defined(_MSC_VER)
+    unsigned long seh_exception_code = 0;
+    EXCEPTION_POINTERS* exception_info = nullptr;
+    __try {
+#endif
+        auto* references = static_cast<std::byte*>(text_references);
+        void* label_object = *reinterpret_cast<void**>(references);
+        void* help_object = *reinterpret_cast<void**>(
+            references + kButtonHelpReferenceOffset);
+        if (label_object && help_object &&
+            addresses.destroy_text_references) {
+            addresses.destroy_text_references(text_references);
+        }
+#if defined(_MSC_VER)
+    } __except (
+        seh_exception_code = GetExceptionCode(),
+        exception_info = GetExceptionInformation(),
+        EXCEPTION_EXECUTE_HANDLER) {
+        log_button_seh_failure(
+            "failure-path text-reference cleanup",
+            seh_exception_code, exception_info);
+    }
+
+    seh_exception_code = 0;
+    exception_info = nullptr;
+    __try {
+#endif
+        release_button_display_text(display_text);
+#if defined(_MSC_VER)
+    } __except (
+        seh_exception_code = GetExceptionCode(),
+        exception_info = GetExceptionInformation(),
+        EXCEPTION_EXECUTE_HANDLER) {
+        log_button_seh_failure(
+            "failure-path display-text cleanup",
+            seh_exception_code, exception_info);
+    }
+#endif
+}
+
 bool call_add_button(
     void* page,
     const GameAddresses& addresses,
@@ -608,6 +656,8 @@ bool call_add_button(
         faulted = true;
         log_button_seh_failure(
             "native add_button", seh_exception_code, exception_info);
+        // r146: not released here. A fault inside add_button leaves its
+        // state unknown, and a leak is safer than a possible double release.
         return false;
     }
 
@@ -722,9 +772,14 @@ bool add_button_with_callback(
                 erui::LogLevel::error,
                 "button display-text constructor returned null");
         }
+        // r146: The display text may already be built when a later step
+        // fails; release whatever was constructed.
+        release_unused_button_text(addresses, text_references, display_text);
         return false;
     }
 
+    // r146: once called, call_add_button owns the text (and releases it).
+    bool text_handed_off = false;
     try {
         // ABI-faithful to the supplied Solid Uncapper helper: a populated
         // MSVC std::function<void()> and an empty secondary function.
@@ -748,6 +803,7 @@ bool add_button_with_callback(
                 row.target_page_index);
         }
 
+        text_handed_off = true;
         const bool added = call_add_button(
             page,
             addresses,
@@ -779,6 +835,9 @@ bool add_button_with_callback(
         erui::detail::logf(
             erui::LogLevel::error,
             "button callback construction failed with an unknown C++ exception");
+    }
+    if (!text_handed_off) {
+        release_unused_button_text(addresses, text_references, display_text);
     }
     return false;
 }

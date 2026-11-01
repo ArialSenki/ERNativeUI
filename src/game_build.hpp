@@ -101,6 +101,9 @@ find_elden_ring_build(
 
 // Fork: the known build an unknown image has the same layout as, or nullptr.
 // Exact identities never take this path.
+// r148: 2.7.1.0 and 2.7.1.1 share a layout; the first is returned. That is
+// safe only while every profile gives both builds the same RVAs (true for
+// all of them today); a build-specific RVA would make this match ambiguous.
 [[nodiscard]] constexpr const EldenRingBuildIdentity*
 find_layout_equivalent_build(
     std::uint32_t pe_timestamp,

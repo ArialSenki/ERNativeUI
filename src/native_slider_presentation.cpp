@@ -421,6 +421,16 @@ void end_native_slider_presentation_row() noexcept {
     g_constructing_value = 0;
 }
 
+namespace {
+std::atomic<std::size_t> g_published_value_lists{};
+std::atomic<std::size_t> g_published_value_bytes{};
+}
+
+void slider_value_store_stats(std::size_t& lists, std::size_t& bytes) noexcept {
+    lists = g_published_value_lists.load(std::memory_order_relaxed);
+    bytes = g_published_value_bytes.load(std::memory_order_relaxed);
+}
+
 bool set_native_slider_presentation_values(
     volatile std::uint8_t* bound_value,
     const std::vector<std::wstring>& values) noexcept {
@@ -428,14 +438,25 @@ bool set_native_slider_presentation_values(
         std::lock_guard lock(g_value_lock);
         const PresentationSlot* slot = find_slot(reinterpret_cast<std::uintptr_t>(
             const_cast<std::uint8_t*>(bound_value)));
-        if (!slot ||
-            slot->values->load(std::memory_order_acquire)->size() != values.size()) {
+        const ValueTexts* current = slot
+            ? slot->values->load(std::memory_order_acquire)
+            : nullptr;
+        if (!slot || current->size() != values.size()) {
             return false;
         }
+        // r146: Published lists are never freed (game-thread readers load
+        // them without the lock), so an unchanged update must not add a copy.
+        if (*current == values) return true;
         auto texts = std::make_unique<const ValueTexts>(values);
         const ValueTexts* published = texts.get();
         g_value_store.push_back(std::move(texts));
         slot->values->store(published, std::memory_order_release);
+        std::size_t bytes = sizeof(ValueTexts);
+        for (const std::wstring& value : values) {
+            bytes += (value.size() + 1) * sizeof(wchar_t);
+        }
+        g_published_value_lists.fetch_add(1, std::memory_order_relaxed);
+        g_published_value_bytes.fetch_add(bytes, std::memory_order_relaxed);
         return true;
     } catch (...) {
         return false;

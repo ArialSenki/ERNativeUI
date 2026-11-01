@@ -1,6 +1,8 @@
 #include "addresses.hpp"
 
+#include "foreign_hook.hpp"
 #include "game_build_profiles.hpp"
+#include "known_rva.hpp"
 #include "runtime_log.hpp"
 
 #include <cinttypes>
@@ -21,7 +23,6 @@ constexpr std::uintptr_t kConfigurationCategoryAppendRva = 0x968CF0;
 constexpr std::uintptr_t kModSettingsPanelRouteSiteRva = 0x93CB22;
 constexpr std::uintptr_t kModSettingsPanelRouteReturnSiteRva = 0x93CB34;
 constexpr std::uintptr_t kAddUnclassifiedRowBuilderDiagnosticRva = 0x94A430;
-constexpr std::uintptr_t kScaleformVisibilitySetterRva = 0x734190;
 constexpr std::uintptr_t kScaleformValueExistsRva = 0x733FA0;
 constexpr std::uintptr_t kStatusBarBinderRva = 0x746110;
 constexpr std::uintptr_t kScaleformMaxHScrollRva = 0x74AF90;
@@ -319,6 +320,9 @@ constexpr std::string_view kTextInputEditorFactoryPattern =
 // prologue up to the `mov rbx, rcx` (5 + 1 + 7 + 9). A 5-byte rel32 jump and
 // a 14-byte absolute jump both end inside it, so the rest stays untouched.
 constexpr std::size_t kNativeBackHookablePrologue = 22;
+// The same for the Scaleform visibility setter: everything up to its virtual call
+// (2 + 4 + 3 + 3 + 3), the whole instructions a 14-byte absolute jump covers.
+constexpr std::size_t kScaleformVisibilitySetterHookablePrologue = 15;
 
 [[nodiscard]] std::string_view pattern_after_bytes(
     std::string_view pattern,
@@ -355,12 +359,86 @@ void log_hooked_fallback(
     const char* name,
     const std::uint8_t* fallback,
     std::uintptr_t fallback_rva) noexcept {
+    // r150: name the module whose detour the entry jump leads to.
+    const ForeignHookOwner owner = find_foreign_hook_owner(fallback);
     erui::detail::logf(
         erui::LogLevel::info,
-        "Address %-22s = %p (fallback RVA 0x%" PRIXPTR "; entry already hooked by another module, body validated)",
+        "Address %-22s = %p (fallback RVA 0x%" PRIXPTR "; entry already hooked by %s, body validated)",
         name,
         static_cast<const void*>(fallback),
-        fallback_rva);
+        fallback_rva,
+        owner.hooked ? owner.name : "another module");
+}
+
+// r150: "; entry hooked by X" when the address starts with a hook jump,
+// otherwise empty, for logs that refuse or question an address.
+struct HookOwnerSuffix {
+    char text[160]{};
+};
+
+[[nodiscard]] HookOwnerSuffix hook_owner_suffix(const void* address) noexcept {
+    HookOwnerSuffix suffix{};
+    if (!address) return suffix;
+    const ForeignHookOwner owner = find_foreign_hook_owner(address);
+    if (owner.hooked) {
+        std::snprintf(
+            suffix.text,
+            sizeof(suffix.text),
+            "; entry hooked by %s",
+            owner.name);
+    }
+    return suffix;
+}
+
+// r145: about 70 executable scans ran at startup although every one of them
+// has a known RVA. Checking the RVA first gives the same result without
+// reading the whole .text section (see known_rva.hpp, unit-tested there).
+// r148: the decision itself moved to lookup_direct(); this logs its outcome.
+// Returns the accepted address, or nullptr to continue with the fallback.
+[[nodiscard]] std::uint8_t* report_direct_lookup(
+    const ModuleView& game,
+    const char* name,
+    const DirectLookup& lookup,
+    std::uintptr_t fallback_rva) noexcept {
+    switch (lookup.source) {
+    case DirectLookupSource::known_rva:
+        erui::detail::logf(
+            erui::LogLevel::verbose,
+            "Address %-22s = %p (known RVA 0x%" PRIXPTR ", pattern verified)",
+            name,
+            static_cast<void*>(lookup.address),
+            fallback_rva);
+        return lookup.address;
+    case DirectLookupSource::unique_scan:
+        erui::detail::logf(
+            erui::LogLevel::verbose,
+            "Address %-22s = %p (AOB, RVA 0x%" PRIXPTR ")",
+            name,
+            static_cast<void*>(lookup.address),
+            reinterpret_cast<std::uintptr_t>(lookup.address) -
+                reinterpret_cast<std::uintptr_t>(game.base()));
+        return lookup.address;
+    case DirectLookupSource::profile_mismatch: {
+        // r148: the exact build profile names another address; the unique
+        // hit may be a copy of the prologue (the real one hooked by another
+        // module) or a different function, so only the profile RVA is tried.
+        // r150: the usual cause is a detour on the profile RVA; name its owner.
+        const HookOwnerSuffix owner = hook_owner_suffix(game.at_rva(fallback_rva));
+        erui::detail::logf(
+            erui::LogLevel::warning,
+            "Address %-22s AOB matched once at RVA 0x%" PRIXPTR ", not at the exact build profile RVA 0x%" PRIXPTR "; scan result not accepted%s",
+            name,
+            reinterpret_cast<std::uintptr_t>(lookup.rejected) -
+                reinterpret_cast<std::uintptr_t>(game.base()),
+            fallback_rva,
+            owner.text);
+        return nullptr;
+    }
+    case DirectLookupSource::ambiguous:
+    case DirectLookupSource::not_found:
+        break;
+    }
+    return nullptr;
 }
 
 std::uint8_t* resolve_direct(
@@ -369,25 +447,22 @@ std::uint8_t* resolve_direct(
     std::string_view scan_pattern,
     std::uintptr_t fallback_rva,
     std::string_view fallback_validation = {},
+    FallbackRvaSource rva_source = FallbackRvaSource::constant,
     std::size_t hookable_prologue = 0) noexcept {
-    const ScanResult scan = game.scan_executable(scan_pattern);
-    if (scan.address && scan.matches == 1) {
-        erui::detail::logf(
-            erui::LogLevel::verbose,
-            "Address %-22s = %p (AOB, RVA 0x%" PRIXPTR ")",
-            name,
-            static_cast<void*>(scan.address),
-            reinterpret_cast<std::uintptr_t>(scan.address) -
-                reinterpret_cast<std::uintptr_t>(game.base()));
-        return scan.address;
+    const DirectLookup lookup = lookup_direct(
+        game, scan_pattern, fallback_rva, fallback_validation, false, rva_source);
+    if (auto* const found = report_direct_lookup(game, name, lookup, fallback_rva)) {
+        return found;
     }
 
-    if (scan.matches > 1) {
+    if (lookup.source == DirectLookupSource::profile_mismatch) {
+        // r148: already logged by report_direct_lookup.
+    } else if (lookup.source == DirectLookupSource::ambiguous) {
         erui::detail::logf(
             erui::LogLevel::verbose,
             "Address %-22s AOB was ambiguous (%zu matches)",
             name,
-            scan.matches);
+            lookup.matches);
     } else {
         erui::detail::logf(
             erui::LogLevel::verbose,
@@ -414,11 +489,15 @@ std::uint8_t* resolve_direct(
         return fallback;
     }
 
+    // r150: a hook jump the body check could not see past still names its owner.
+    const HookOwnerSuffix owner = hook_owner_suffix(
+        fallback && game.is_executable(fallback) ? fallback : nullptr);
     erui::detail::logf(
         erui::LogLevel::error,
-        "Address %-22s fallback RVA 0x%" PRIXPTR " failed validation",
+        "Address %-22s fallback RVA 0x%" PRIXPTR " failed validation%s",
         name,
-        fallback_rva);
+        fallback_rva,
+        owner.text);
     return nullptr;
 }
 
@@ -479,11 +558,15 @@ std::uint8_t* resolve_call_target(
         return fallback;
     }
 
+    // r150: name the owner when the fallback entry starts with a hook jump.
+    const HookOwnerSuffix owner = hook_owner_suffix(
+        fallback && game.is_executable(fallback) ? fallback : nullptr);
     erui::detail::logf(
         erui::LogLevel::error,
-        "Address %-22s fallback RVA 0x%" PRIXPTR " failed validation",
+        "Address %-22s fallback RVA 0x%" PRIXPTR " failed validation%s",
         name,
-        fallback_rva);
+        fallback_rva,
+        owner.text);
     return nullptr;
 }
 
@@ -493,17 +576,12 @@ std::uint8_t* resolve_optional_direct(
     std::string_view scan_pattern,
     std::uintptr_t fallback_rva,
     std::string_view fallback_validation,
+    FallbackRvaSource rva_source = FallbackRvaSource::constant,
     std::size_t hookable_prologue = 0) noexcept {
-    const ScanResult scan = game.scan_executable(scan_pattern);
-    if (scan.address && scan.matches == 1) {
-        erui::detail::logf(
-            erui::LogLevel::verbose,
-            "Address %-22s = %p (AOB, RVA 0x%" PRIXPTR ")",
-            name,
-            static_cast<void*>(scan.address),
-            reinterpret_cast<std::uintptr_t>(scan.address) -
-                reinterpret_cast<std::uintptr_t>(game.base()));
-        return scan.address;
+    const DirectLookup lookup = lookup_direct(
+        game, scan_pattern, fallback_rva, fallback_validation, true, rva_source);
+    if (auto* const found = report_direct_lookup(game, name, lookup, fallback_rva)) {
+        return found;
     }
 
     auto* fallback = game.at_rva(fallback_rva);
@@ -525,12 +603,16 @@ std::uint8_t* resolve_optional_direct(
         return fallback;
     }
 
+    // r150: name the owner when the fallback entry starts with a hook jump.
+    const HookOwnerSuffix owner = hook_owner_suffix(
+        fallback && game.is_executable(fallback) ? fallback : nullptr);
     erui::detail::logf(
         erui::LogLevel::warning,
-        "Optional address %-13s unavailable (AOB matches=%zu, fallback RVA 0x%" PRIXPTR " invalid)",
+        "Optional address %-13s unavailable (AOB matches=%zu, fallback RVA 0x%" PRIXPTR " invalid%s)",
         name,
-        scan.matches,
-        fallback_rva);
+        lookup.matches,
+        fallback_rva,
+        owner.text);
     return nullptr;
 }
 
@@ -569,7 +651,9 @@ std::uint8_t* resolve_text_resolver(
         "native text resolver",
         kTextResolverPrologue,
         fallback_rva,
-        kTextResolverPrologue);
+        kTextResolverPrologue,
+        // r148: the only caller passes shared_menu_profile->text_resolver_rva.
+        FallbackRvaSource::exact_build_profile);
 }
 
 
@@ -1270,7 +1354,8 @@ bool resolve_game_addresses(
                 shared_menu_profile
                     ? shared_menu_profile->game_options_handler_rva
                     : std::uintptr_t{0},
-                kGameOptionsHandlerPattern));
+                kGameOptionsHandlerPattern,
+                FallbackRvaSource::exact_build_profile));
         output.option_setting_tab_frame_dispatch = resolve_optional_direct(
             game,
             "Configuration tab frame dispatch",
@@ -1307,7 +1392,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->camera_panel_materializer_rva
                     : std::uintptr_t{0},
-                kCameraPanelMaterializerPattern));
+                kCameraPanelMaterializerPattern,
+                FallbackRvaSource::exact_build_profile));
         output.display_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
@@ -1316,7 +1402,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->display_panel_materializer_rva
                     : std::uintptr_t{0},
-                kDisplayPanelMaterializerPattern));
+                kDisplayPanelMaterializerPattern,
+                FallbackRvaSource::exact_build_profile));
         output.sound_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
@@ -1325,7 +1412,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->sound_panel_materializer_rva
                     : std::uintptr_t{0},
-                kSoundPanelMaterializerPattern));
+                kSoundPanelMaterializerPattern,
+                FallbackRvaSource::exact_build_profile));
         output.network_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
@@ -1334,7 +1422,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->network_panel_materializer_rva
                     : std::uintptr_t{0},
-                kNetworkPanelMaterializerPattern));
+                kNetworkPanelMaterializerPattern,
+                FallbackRvaSource::exact_build_profile));
         output.keyboard_mouse_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(
                 resolve_optional_direct(
@@ -1344,7 +1433,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->keyboard_mouse_panel_materializer_rva
                         : std::uintptr_t{0},
-                    kKeyboardMousePanelMaterializerPattern));
+                    kKeyboardMousePanelMaterializerPattern,
+                    FallbackRvaSource::exact_build_profile));
         output.graphics_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
@@ -1353,7 +1443,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->graphics_panel_materializer_rva
                     : std::uintptr_t{0},
-                kGraphicsPanelMaterializerPattern));
+                kGraphicsPanelMaterializerPattern,
+                FallbackRvaSource::exact_build_profile));
         output.mod_settings_panel_materializer =
             reinterpret_cast<BuiltinPanelMaterializerFn>(resolve_optional_direct(
                 game,
@@ -1450,12 +1541,25 @@ bool resolve_game_addresses(
                 erui::LogLevel::warning,
                 "Optional address Configuration panel switch unavailable; a menu opened directly on Mod Settings is built without a previous panel");
         }
+        // r152: wide provider help hides the native LineHelp through this, so it
+        // is no longer just diagnostics. Its fallback was 2.7.1's RVA, invalid on
+        // 2.7.2.0, and Solid Uncapper hooks the entry, which hides the pattern:
+        // with that mod the setter stayed null, nothing was hidden and both help
+        // lines showed (Nexus log). The build's RVA accepts the hooked entry.
+        const ColorPickerAddressProfile* const visibility_profile =
+            find_color_picker_address_profile(game_build);
         output.scaleform_visibility_setter = resolve_optional_direct(
             game,
-            "Scaleform visibility setter (diagnostics)",
+            "Scaleform visibility setter",
             kScaleformVisibilitySetterPattern,
-            kScaleformVisibilitySetterRva,
-            kScaleformVisibilitySetterPattern);
+            visibility_profile
+                ? visibility_profile->scaleform_visibility_setter_rva
+                : std::uintptr_t{0},
+            kScaleformVisibilitySetterPattern,
+            visibility_profile
+                ? FallbackRvaSource::exact_build_profile
+                : FallbackRvaSource::constant,
+            kScaleformVisibilitySetterHookablePrologue);
         output.scaleform_value_exists =
             reinterpret_cast<ScaleformValueExistsFn>(resolve_optional_direct(
                 game,
@@ -1510,7 +1614,8 @@ bool resolve_game_addresses(
                     shared_menu_profile
                         ? shared_menu_profile->sub_handler_rva
                         : std::uintptr_t{0},
-                    kSubHandlerPattern));
+                    kSubHandlerPattern,
+                    FallbackRvaSource::exact_build_profile));
             output.open_sub_page = reinterpret_cast<OpenSubPageFn>(resolve_direct(
                 game,
                 "open subpage",
@@ -1518,7 +1623,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->open_sub_page_rva
                     : std::uintptr_t{0},
-                kOpenSubPagePattern));
+                kOpenSubPagePattern,
+                FallbackRvaSource::exact_build_profile));
 
             // Presentation is deliberately optional. A game update may disable
             // custom titles without preventing page construction or row input.
@@ -1530,7 +1636,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->scaleform_path_resolver_rva
                         : std::uintptr_t{0},
-                    kScaleformPathResolverPattern));
+                    kScaleformPathResolverPattern,
+                    FallbackRvaSource::exact_build_profile));
             output.scaleform_text_setter =
                 reinterpret_cast<ScaleformTextSetterFn>(resolve_optional_direct(
                     game,
@@ -1539,14 +1646,16 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->scaleform_text_setter_rva
                         : std::uintptr_t{0},
-                    kScaleformTextSetterPattern));
+                    kScaleformTextSetterPattern,
+                    FallbackRvaSource::exact_build_profile));
             output.scaleform_result_destructor =
                 reinterpret_cast<ScaleformResultDestructorFn>(resolve_optional_direct(
                     game,
                     "Scaleform result dtor",
                     kScaleformResultDestructorPattern,
                     scaleform_result_destructor_fallback_rva,
-                    kScaleformResultDestructorPattern));
+                    kScaleformResultDestructorPattern,
+                    FallbackRvaSource::exact_build_profile));
         } else {
             erui::detail::logf(
                 erui::LogLevel::verbose,
@@ -1564,7 +1673,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->scaleform_path_resolver_rva
                         : std::uintptr_t{0},
-                    kScaleformPathResolverPattern));
+                    kScaleformPathResolverPattern,
+                    FallbackRvaSource::exact_build_profile));
             output.scaleform_text_setter =
                 reinterpret_cast<ScaleformTextSetterFn>(resolve_optional_direct(
                     game,
@@ -1573,7 +1683,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->scaleform_text_setter_rva
                         : std::uintptr_t{0},
-                    kScaleformTextSetterPattern));
+                    kScaleformTextSetterPattern,
+                    FallbackRvaSource::exact_build_profile));
             output.scaleform_result_destructor =
                 reinterpret_cast<ScaleformResultDestructorFn>(
                     resolve_optional_direct(
@@ -1581,7 +1692,8 @@ bool resolve_game_addresses(
                         "Scaleform result dtor",
                         kScaleformResultDestructorPattern,
                         scaleform_result_destructor_fallback_rva,
-                        kScaleformResultDestructorPattern));
+                        kScaleformResultDestructorPattern,
+                        FallbackRvaSource::exact_build_profile));
         }
         output.on_off_list = reinterpret_cast<BufferConstructorFn>(resolve_direct(
             game,
@@ -1590,7 +1702,8 @@ bool resolve_game_addresses(
             menu_runtime_profile
                 ? menu_runtime_profile->on_off_list_rva
                 : std::uintptr_t{0},
-            kOnOffListPattern));
+            kOnOffListPattern,
+            FallbackRvaSource::exact_build_profile));
         output.menu_context = reinterpret_cast<BufferConstructorFn>(resolve_direct(
             game,
             "menu context",
@@ -1598,7 +1711,8 @@ bool resolve_game_addresses(
             menu_runtime_profile
                 ? menu_runtime_profile->menu_context_rva
                 : std::uintptr_t{0},
-            kMenuContextPattern));
+            kMenuContextPattern,
+            FallbackRvaSource::exact_build_profile));
         output.text_ref_help = reinterpret_cast<TextReferenceFn>(resolve_direct(
             game,
             "text ref help",
@@ -1606,7 +1720,8 @@ bool resolve_game_addresses(
             menu_runtime_profile
                 ? menu_runtime_profile->text_ref_help_rva
                 : std::uintptr_t{0},
-            "4C 8B DC 57 48 81 EC 90 00 00 00"));
+            "4C 8B DC 57 48 81 EC 90 00 00 00",
+            FallbackRvaSource::exact_build_profile));
         output.text_ref_label = reinterpret_cast<TextReferenceFn>(resolve_call_target(
             game,
             "text ref label",
@@ -1624,7 +1739,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->root_button_text_references_rva
                         : std::uintptr_t{0},
-                    kRootButtonTextReferencesPattern));
+                    kRootButtonTextReferencesPattern,
+                    FallbackRvaSource::exact_build_profile));
             output.root_button_display_text =
                 reinterpret_cast<TextReferenceFn>(resolve_direct(
                     game,
@@ -1633,7 +1749,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->root_button_display_text_rva
                         : std::uintptr_t{0},
-                    kRootButtonDisplayTextPattern));
+                    kRootButtonDisplayTextPattern,
+                    FallbackRvaSource::exact_build_profile));
         }
         output.add_toggle = reinterpret_cast<AddToggleFn>(resolve_call_target(
             game,
@@ -1658,14 +1775,16 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->choice_context_constructor_rva
                     : std::uintptr_t{0},
-                kChoiceContextConstructorPrologue));
+                kChoiceContextConstructorPrologue,
+                FallbackRvaSource::exact_build_profile));
         output.choice_list_builder = reinterpret_cast<ChoiceListBuilderFn>(
             resolve_optional_direct(
                 game, "choice list builder", kChoiceListBuilderPrologue,
                 menu_runtime_profile
                     ? menu_runtime_profile->choice_list_builder_rva
                     : std::uintptr_t{0},
-                kChoiceListBuilderPrologue));
+                kChoiceListBuilderPrologue,
+                FallbackRvaSource::exact_build_profile));
         output.add_slider = reinterpret_cast<AddSliderFn>(resolve_call_target(
             game,
             "add slider",
@@ -1687,7 +1806,8 @@ bool resolve_game_addresses(
                 shared_menu_profile
                     ? shared_menu_profile->slider_refresh_rva
                     : std::uintptr_t{0},
-                kSliderRefreshPattern));
+                kSliderRefreshPattern,
+                FallbackRvaSource::exact_build_profile));
         output.add_unclassified_row_builder_diagnostic =
             resolve_optional_direct(
                 game,
@@ -1709,7 +1829,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->destroy_text_references_rva
                     : std::uintptr_t{0},
-                kDestroyTextReferencesPrologue));
+                kDestroyTextReferencesPrologue,
+                FallbackRvaSource::exact_build_profile));
 
         if (require_buttons) {
             output.add_button = reinterpret_cast<AddButtonFn>(resolve_direct(
@@ -1719,7 +1840,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->add_button_rva
                     : std::uintptr_t{0},
-                kAddButtonPrologue));
+                kAddButtonPrologue,
+                FallbackRvaSource::exact_build_profile));
         } else {
             erui::detail::logf(
                 erui::LogLevel::verbose,
@@ -1735,7 +1857,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->popup_choice_constructor_rva
                         : std::uintptr_t{0},
-                    kPopupChoiceConstructorPattern));
+                    kPopupChoiceConstructorPattern,
+                    FallbackRvaSource::exact_build_profile));
             output.popup_choice_list_provider =
                 reinterpret_cast<PopupChoiceListProviderFn>(resolve_direct(
                     game,
@@ -1744,7 +1867,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->popup_choice_list_provider_rva
                         : std::uintptr_t{0},
-                    kPopupChoiceListProviderPattern));
+                    kPopupChoiceListProviderPattern,
+                    FallbackRvaSource::exact_build_profile));
             output.popup_choice_list_template =
                 reinterpret_cast<PopupChoiceListTemplateFn>(resolve_direct(
                     game,
@@ -1753,7 +1877,8 @@ bool resolve_game_addresses(
                     menu_runtime_profile
                         ? menu_runtime_profile->popup_choice_list_template_rva
                         : std::uintptr_t{0},
-                    kPopupChoiceListTemplatePattern));
+                    kPopupChoiceListTemplatePattern,
+                    FallbackRvaSource::exact_build_profile));
             auto* value_invoke = resolve_direct(
                 game,
                 "popup value invoke",
@@ -1761,7 +1886,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->popup_choice_value_invoke_rva
                     : std::uintptr_t{0},
-                kPopupChoiceValueInvokePattern);
+                kPopupChoiceValueInvokePattern,
+                FallbackRvaSource::exact_build_profile);
             auto* selection_invoke = resolve_direct(
                 game,
                 "popup commit invoke",
@@ -1769,7 +1895,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->popup_choice_selection_invoke_rva
                     : std::uintptr_t{0},
-                kPopupChoiceSelectionInvokePattern);
+                kPopupChoiceSelectionInvokePattern,
+                FallbackRvaSource::exact_build_profile);
             if (value_invoke) {
                 output.popup_choice_value_vtable = resolve_callable_vtable(
                     game,
@@ -1851,42 +1978,48 @@ bool resolve_game_addresses(
             reinterpret_cast<TextInputRowProducerFn>(resolve_optional_direct(
                 game, "text input producer", kTextInputRowProducerPattern,
                 text_input_profile->row_producer_rva,
-                kTextInputRowProducerPattern));
+                kTextInputRowProducerPattern,
+                FallbackRvaSource::exact_build_profile));
         output.native_menu_string_constructor =
             reinterpret_cast<NativeMenuStringConstructorFn>(
                 resolve_optional_direct(
                     game, "menu string ctor",
                     kNativeMenuStringConstructorPattern,
                     text_input_profile->menu_string_constructor_rva,
-                    kNativeMenuStringConstructorPattern));
+                    kNativeMenuStringConstructorPattern,
+                    FallbackRvaSource::exact_build_profile));
         output.native_menu_string_borrowed_constructor =
             reinterpret_cast<NativeMenuStringBorrowedConstructorFn>(
                 resolve_optional_direct(
                     game, "menu string literal ctor",
                     kNativeMenuStringBorrowedConstructorPattern,
                     text_input_profile->menu_string_borrowed_constructor_rva,
-                    kNativeMenuStringBorrowedConstructorPattern));
+                    kNativeMenuStringBorrowedConstructorPattern,
+                    FallbackRvaSource::exact_build_profile));
         output.native_menu_string_destructor =
             reinterpret_cast<NativeMenuStringDestructorFn>(
                 resolve_optional_direct(
                     game, "menu string dtor",
                     kNativeMenuStringDestructorPattern,
                     text_input_profile->menu_string_destructor_rva,
-                    kNativeMenuStringDestructorPattern));
+                    kNativeMenuStringDestructorPattern,
+                    FallbackRvaSource::exact_build_profile));
         output.text_input_editor_factory_builder =
             reinterpret_cast<TextInputEditorFactoryBuilderFn>(
                 resolve_optional_direct(
                     game, "text editor builder",
                     kTextInputEditorFactoryBuilderPattern,
                     text_input_profile->editor_factory_builder_rva,
-                    kTextInputEditorFactoryBuilderPattern));
+                    kTextInputEditorFactoryBuilderPattern,
+                    FallbackRvaSource::exact_build_profile));
         output.text_input_editor_factory =
             reinterpret_cast<TextInputEditorFactoryFn>(
                 resolve_optional_direct(
                     game, "text editor factory",
                     kTextInputEditorFactoryPattern,
                     text_input_profile->editor_factory_rva,
-                    kTextInputEditorFactoryPattern));
+                    kTextInputEditorFactoryPattern,
+                    FallbackRvaSource::exact_build_profile));
         output.option_setting_dialog_vtable =
             game.at_rva(text_input_profile->option_setting_dialog_vtable_rva);
         output.pad_setting_dialog_vtable =
@@ -1910,7 +2043,8 @@ bool resolve_game_addresses(
             menu_runtime_profile
                 ? menu_runtime_profile->native_back_rva
                 : std::uintptr_t{0},
-            kNativeBackPattern, kNativeBackHookablePrologue));
+            kNativeBackPattern,
+            FallbackRvaSource::exact_build_profile, kNativeBackHookablePrologue));
         if (!output.native_back) {
             return false;
         }
@@ -1923,7 +2057,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->native_back_rva
                     : std::uintptr_t{0},
-                kNativeBackPattern, kNativeBackHookablePrologue));
+                kNativeBackPattern,
+                FallbackRvaSource::exact_build_profile, kNativeBackHookablePrologue));
     }
 
     if (require_custom_text || require_text_inputs) {
@@ -1933,7 +2068,8 @@ bool resolve_game_addresses(
                 menu_runtime_profile
                     ? menu_runtime_profile->page_frame_rva
                     : std::uintptr_t{0},
-                kPageFramePattern));
+                kPageFramePattern,
+                FallbackRvaSource::exact_build_profile));
     }
 
     if (!output.complete(

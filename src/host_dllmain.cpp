@@ -20,6 +20,7 @@
 
 #include "runtime.hpp"
 #include "resource.h"
+#include "ernativeui_version_rc.h"
 
 #include <Windows.h>
 
@@ -30,6 +31,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -51,6 +53,13 @@ bool g_attach_shared_menu_snapshot_ready{};
 bool g_attach_input_snapshot_ready{};
 bool g_attach_color_snapshot_ready{};
 bool g_attach_solid_uncapper_present{};
+// r148: the build the game image was adopted as at attach (same layout,
+// unlisted timestamp), or nullptr; logged once by the host thread.
+const erui::native::EldenRingBuildIdentity* g_attach_layout_adopted{};
+// r148: per-process "one active host" mutex. Held (never closed) for the
+// process lifetime by the copy that won; a second ERNativeUI.dll loaded from
+// another folder finds it and stays passive.
+HANDLE g_host_instance_mutex{};
 
 constexpr DWORD kSteamReadinessPollMs = 25;
 constexpr std::uint64_t kSteamReadinessLogMs = 2000;
@@ -894,6 +903,75 @@ bool revalidate_solid_uncapper_shared_entries(
     return true;
 }
 
+// r147: the fork build, shown in the log banner and the status file.
+// r148: set by ERNATIVEUI_FORK_BUILD in CMakeLists.txt (also the DLL version).
+constexpr const char kForkBuild[] = ERUI_FORK_BUILD_TAG;
+
+// r147: logging is off by default, so a refused start (an Elden Ring patch
+// this build does not know, a failed install) left users with no trace at
+// all. ERNativeUI-status.txt is rewritten on every start, a few lines, even
+// with logging off. Until write() is called, the destructor records that
+// startup stopped before the native hooks were ready.
+class StartupStatus {
+public:
+    explicit StartupStatus(std::filesystem::path path) noexcept
+        : path_(std::move(path)) {}
+    StartupStatus(const StartupStatus&) = delete;
+    StartupStatus& operator=(const StartupStatus&) = delete;
+    ~StartupStatus() {
+        if (!written_) {
+            write("failed",
+                "startup stopped before the menu hooks were installed. "
+                "Set [Logging] EnableLog = 1 in ERNativeUI.ini and start the "
+                "game again; ERNativeUI.log then says why.");
+        }
+    }
+
+    void write(const char* state, const char* detail) noexcept {
+        written_ = true;
+        const auto* const base =
+            reinterpret_cast<const std::uint8_t*>(GetModuleHandleW(nullptr));
+        std::uint32_t timestamp = 0;
+        std::uint32_t image_size = 0;
+        if (base) {
+            const auto* const dos =
+                reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+            const auto* const nt =
+                reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+            timestamp = nt->FileHeader.TimeDateStamp;
+            image_size = nt->OptionalHeader.SizeOfImage;
+        }
+        const std::string_view game = erui::native::elden_ring_build_name(
+            erui::native::running_elden_ring_build());
+        SYSTEMTIME now{};
+        GetLocalTime(&now);
+        char text[1024];
+        const int length = ::_snprintf_s(text, sizeof(text), _TRUNCATE,
+            "ERNativeUI %s (NativeTweaks fork %s)\r\n"
+            "Started: %04u-%02u-%02u %02u:%02u:%02u\r\n"
+            "Game: %.*s (exe timestamp 0x%08X, image size 0x%X)\r\n"
+            "State: %s\r\n"
+            "%s\r\n",
+            ER_NATIVE_UI_BUILD_VERSION, kForkBuild,
+            now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute,
+            now.wSecond,
+            static_cast<int>(game.size()), game.data(), timestamp, image_size,
+            state, detail);
+        if (length <= 0) return;
+        const HANDLE file = CreateFileW(path_.c_str(), GENERIC_WRITE,
+            FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (file == INVALID_HANDLE_VALUE) return;
+        DWORD written = 0;
+        WriteFile(file, text, static_cast<DWORD>(length), &written, nullptr);
+        CloseHandle(file);
+    }
+
+private:
+    std::filesystem::path path_;
+    bool written_{};
+};
+
 DWORD run_host() noexcept {
     try {
         // The compatibility snapshots were taken synchronously during DLL
@@ -924,6 +1002,7 @@ DWORD run_host() noexcept {
             g_attach_solid_uncapper_present;
 
         const auto directory = module_directory(g_module);
+        StartupStatus startup_status(directory / L"ERNativeUI-status.txt");
         const auto ini = directory / L"ERNativeUI.ini";
         if (!ensure_default_ini(g_module, ini)) {
             OutputDebugStringA(
@@ -949,8 +1028,43 @@ DWORD run_host() noexcept {
             logging_ready ? &runtime_log_sink : nullptr);
         log::write("============================================================");
         log::write("ERNativeUI host v%s starting", ER_NATIVE_UI_BUILD_VERSION);
-        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.3.0) build=r140");
+        log::write("NativeTweaks fork (Mod Settings tab, live text API, wide provider help, runtime GFX, ultrawide layout, ERUI 1.3.0) build=%s", kForkBuild);
         log::write("Offline / EAC-disabled use only; hot unloading is unsupported");
+        // r147: an Elden Ring patch this build does not know is refused by the
+        // native install much later; say so up front, in the status file too,
+        // and leave the menu movies alone (see install_runtime_gfx below).
+        const bool known_game_build =
+            erui::native::running_elden_ring_build() !=
+            erui::native::EldenRingBuild::unsupported;
+        if (!known_game_build) {
+            log::write(
+                erui::LogLevel::error,
+                "This Elden Ring executable is not a version ERNativeUI %s knows; the menu hooks and the fork's menu changes stay off",
+                kForkBuild);
+            startup_status.write("unsupported game version",
+                "This Elden Ring executable is not a version this ERNativeUI "
+                "build knows (probably a new game patch). The mod menus stay "
+                "off and the game runs unchanged. Update NativeTweaks / "
+                "ERNativeUI, or report the exe timestamp above.");
+        }
+        // r148: a layout adoption decides every native address this run;
+        // say so once, at warning level, whatever the verbosity.
+        if (const erui::native::EldenRingBuildIdentity* const adopted =
+                g_attach_layout_adopted) {
+            const auto* const game_base = reinterpret_cast<const std::uint8_t*>(
+                GetModuleHandleW(nullptr));
+            const auto* const game_nt =
+                reinterpret_cast<const IMAGE_NT_HEADERS64*>(game_base +
+                    reinterpret_cast<const IMAGE_DOS_HEADER*>(game_base)
+                        ->e_lfanew);
+            log::write(
+                erui::LogLevel::warning,
+                "Game executable (exe timestamp 0x%08X) adopted as equivalent of Elden Ring %.*s; code hotfixes with the same layout would not be detected",
+                static_cast<unsigned>(game_nt->FileHeader.TimeDateStamp),
+                static_cast<int>(adopted->product_version.size()),
+                adopted->product_version.data());
+        }
+        log::set_startup_fault_logging(true);
 
         std::string tab_configuration_bytes{};
         DWORD tab_configuration_error{};
@@ -1006,6 +1120,7 @@ DWORD run_host() noexcept {
             tab_error_count);
         // Read-only; decided before the GFX hooks because it sets how many
         // tab cells the settings movie needs.
+        log::write("Native custom-tab backend preflight starting");
         const erui::native::NativeTabsPreflightStatus tab_preflight =
             erui::native::preflight_native_tabs();
         if (tab_preflight ==
@@ -1183,7 +1298,11 @@ DWORD run_host() noexcept {
         // menu edge layouts. They run after the upstream settings completion
         // inside its OpenFile hook; without that hook the fork hooks OpenFile
         // itself so these movies are still adapted.
-        if (runtime_gfx_patching_enabled) {
+        if (runtime_gfx_patching_enabled && !known_game_build) {
+            log::write(
+                erui::LogLevel::warning,
+                "Fork runtime GFX skipped: unknown game version (the Mod Settings tab would have no menu behind it)");
+        } else if (runtime_gfx_patching_enabled) {
             // HUD layout defaults; a client (NativeTweaks) can change them
             // later with ERNativeUIFork_SetHudLayout.
             const int hud_scale = read_ini(ini, L"GFX", L"HudScale", 100);
@@ -1558,6 +1677,10 @@ DWORD run_host() noexcept {
 
         set_api_state(ApiState::runtime_ready);
         log::write("ERNativeUI host ready");
+        startup_status.write("ready",
+            "The menu hooks are installed. Set [Logging] EnableLog = 1 in "
+            "ERNativeUI.ini for a detailed log.");
+        log::set_startup_fault_logging(false);
         log::enable_buffering();
         // A client language (ERNativeUIFork_SetHostLanguage) that arrived
         // while the menu was compiling goes on the published menu now.
@@ -1669,6 +1792,42 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetHostLanguage(
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         erui::host::g_module = module;
+        DisableThreadLibraryCalls(module);
+        // r148: two mods may each ship ERNativeUI.dll in their own folder;
+        // both copies would hook the same functions. The first copy in the
+        // process owns a per-process mutex (DllMain runs under the loader
+        // lock, so the check cannot race); a later copy takes no snapshot,
+        // starts no thread, installs nothing, and every export of it reports
+        // ERUI_HOST_FAILED (or NOT_SUPPORTED for the GFX ones).
+        wchar_t mutex_name[64]{};
+        (void)::_snwprintf_s(mutex_name, _countof(mutex_name), _TRUNCATE,
+            L"Local\\ERNativeUI.Host.%lu", GetCurrentProcessId());
+        SetLastError(ERROR_SUCCESS);
+        erui::host::g_host_instance_mutex =
+            CreateMutexW(nullptr, FALSE, mutex_name);
+        if (erui::host::g_host_instance_mutex &&
+            GetLastError() == ERROR_ALREADY_EXISTS) {
+            erui::host::set_api_state(erui::host::ApiState::failed);
+            wchar_t path[MAX_PATH]{};
+            if (GetModuleFileNameW(module, path, MAX_PATH) == 0) {
+                (void)::_snwprintf_s(path, _countof(path), _TRUNCATE, L"?");
+            }
+            wchar_t line[MAX_PATH + 160]{};
+            (void)::_snwprintf_s(line, _countof(line), _TRUNCATE,
+                L"ERNativeUI: another ERNativeUI host is already active in "
+                L"this process; this copy stays passive: %ls\n",
+                path);
+            OutputDebugStringW(line);
+            return TRUE;
+        }
+        // r148: pin now, not later on the host thread: a FreeLibrary between
+        // this return and the thread's own pin would unmap running code.
+        // The host thread's later pin stays (pinning twice is harmless).
+        HMODULE pinned_at_attach{};
+        (void)GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(module), &pinned_at_attach);
         // Record the exact-profile shared interfaces while this DLL is still
         // being attached. ModEngine may load the next DLL as soon as we
         // return, so worker-thread-only capture is inherently racy when
@@ -1677,7 +1836,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
         HMODULE const game_module = GetModuleHandleW(nullptr);
         // Fork: a rebuild of a known executable (same layout, other
         // timestamp) is adopted before any profile lookup.
-        (void)erui::native::adopt_layout_equivalent_image(game_module);
+        erui::host::g_attach_layout_adopted =
+            erui::native::adopt_layout_equivalent_image(game_module);
         erui::host::g_attach_shared_menu_snapshot_ready =
             erui::native::capture_preserved_shared_menu_addresses_at_attach(
                 game_module,
@@ -1690,7 +1850,6 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
                 game_module);
         erui::host::g_attach_solid_uncapper_present =
             GetModuleHandleW(L"Solid Uncapper.dll") != nullptr;
-        DisableThreadLibraryCalls(module);
         if (HANDLE thread = CreateThread(nullptr, 0, &erui::host::host_thread,
                 nullptr, 0, nullptr)) {
             CloseHandle(thread);
@@ -1699,6 +1858,11 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
         }
     } else if (reason == DLL_PROCESS_DETACH) {
         erui::host::g_stop.store(true, std::memory_order_release);
+        // r147: the buffered lines (up to 250 ms) were lost at every exit,
+        // the last ones before a crash included. shutdown() also disables
+        // logging, so global destructors that run after this (they may log)
+        // cannot block on a lock held by a thread the exit already killed.
+        erui::host::log::shutdown();
     }
     return TRUE;
 }

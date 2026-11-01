@@ -11,6 +11,9 @@ void set_diagnostics_enabled(bool enabled) noexcept;
 // Ordinary lines go through the background writer from here on; before this
 // call they are written synchronously.
 void enable_buffering() noexcept;
+// While on (and the log is open), hardware faults on any thread are logged
+// before the process may end. Turned on at startup, off once the host is ready.
+void set_startup_fault_logging(bool enabled) noexcept;
 void shutdown() noexcept;
 
 #if defined(__GNUC__) || defined(__clang__)

@@ -68,6 +68,11 @@ void set_pending_menu_warning(std::wstring message) noexcept;
 // that run on every UI text (log_hook_perf writes and resets the totals).
 void set_hook_perf_enabled(bool enabled) noexcept;
 void log_hook_perf(std::uint64_t interval_ms) noexcept;
+// r151: PerfLog timing fed from other translation units (QueryPerformance
+// counter ticks). Cheap no-ops while PerfLog is off.
+[[nodiscard]] bool hook_perf_enabled() noexcept;
+[[nodiscard]] std::uint64_t hook_perf_ticks() noexcept;
+void record_tab_fingerprint_perf(std::uint64_t ticks) noexcept;
 
 // Fork: true while the fork's own category-4 Mod Settings tab hooks the
 // Configuration category append (only when Mod Settings is not a custom tab).

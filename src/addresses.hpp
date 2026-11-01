@@ -212,7 +212,8 @@ struct GameAddresses {
     DestroyTextReferencesFn destroy_text_references{};
     TextResolverFn text_resolver{};
     ScaleformPathResolverFn scaleform_path_resolver{};
-    // Exact-build Scaleform visibility setter, resolved only for diagnostics.
+    // Exact-build Scaleform visibility setter: hides the native LineHelp while
+    // wide provider help is on, and diagnostics.
     void* scaleform_visibility_setter{};
     ScaleformTextSetterFn scaleform_text_setter{};
     ScaleformResultDestructorFn scaleform_result_destructor{};

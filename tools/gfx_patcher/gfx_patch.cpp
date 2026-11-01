@@ -3652,6 +3652,48 @@ constexpr std::uint8_t kEditTextWordWrapMultiline = 0x60U;
     return parse_gfx(output, parsed, code, error);
 }
 
+// r150: the native LineHelp is placed with a PlaceObject3 whose filter list
+// holds the game's text DropShadow (black, 4x4 blur). A plain PlaceObject2
+// left the twins flat next to every native text. The twin is now LineHelp's
+// own placement record with only the depth, character and name replaced, so
+// its matrix, colour transform and filters stay exactly the game's.
+[[nodiscard]] bool clone_line_help_placement(
+    std::span<const std::uint8_t> output,
+    const Placement& help,
+    std::uint16_t character_id,
+    std::uint16_t depth,
+    std::string_view name,
+    std::vector<std::uint8_t>& placement) {
+    constexpr std::uint8_t kPlaceHasClassName = 0x08U;
+    if (!help.is_place_object3 || !help.has_name ||
+        (help.flags2 & kPlaceHasClassName) != 0 ||
+        help.tag.body_start + 6 > help.tag.body_end) {
+        return false;
+    }
+    std::vector<std::uint8_t> body(
+        output.begin() + static_cast<std::ptrdiff_t>(help.tag.body_start),
+        output.begin() + static_cast<std::ptrdiff_t>(help.tag.body_end));
+    // flags, flags2, depth, then the character ID (no class name).
+    write_u16(body, 2, depth);
+    write_u16(body, 4, character_id);
+    std::vector<std::uint8_t> source_name(help.name.begin(), help.name.end());
+    source_name.push_back(0);
+    const auto found = std::search(
+        body.begin() + 6, body.end(), source_name.begin(), source_name.end());
+    if (found == body.end() ||
+        std::search(std::next(found), body.end(),
+            source_name.begin(), source_name.end()) != body.end()) {
+        return false;
+    }
+    const auto at = body.erase(found,
+        found + static_cast<std::ptrdiff_t>(source_name.size()));
+    std::vector<std::uint8_t> twin_name(name.begin(), name.end());
+    twin_name.push_back(0);
+    body.insert(at, twin_name.begin(), twin_name.end());
+    placement = make_tag(kTagPlaceObject3, body);
+    return true;
+}
+
 [[nodiscard]] bool add_wide_line_help_twin(
     std::vector<std::uint8_t>& output,
     std::uint16_t sprite_id,
@@ -3713,8 +3755,15 @@ constexpr std::uint8_t kEditTextWordWrapMultiline = 0x60U;
         error = "LineHelp owner sprite has no ShowFrame tag";
         return false;
     }
-    const std::vector<std::uint8_t> placement = make_named_placement(
-        *twin_id, depth, help_x, help_y, twin_name);
+    // help points into the parse before the definition was inserted; the
+    // sprite's own placement after the re-parse has the same record.
+    const Placement* const placed_help = find_unique_placement(*sprite, "LineHelp");
+    std::vector<std::uint8_t> placement{};
+    if (!placed_help || !clone_line_help_placement(
+            output, *placed_help, *twin_id, depth, twin_name, placement)) {
+        // Movies whose LineHelp is a plain PlaceObject2 keep the old twin.
+        placement = make_named_placement(*twin_id, depth, help_x, help_y, twin_name);
+    }
     if (!patch_tag_body_length(output, sprite->tag, placement.size(), error)) {
         return false;
     }

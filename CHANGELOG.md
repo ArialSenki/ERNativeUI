@@ -1,5 +1,92 @@
 # Changelog
 
+## NativeTweaks fork
+
+Fork builds are numbered rNNN (`ERNATIVEUI_FORK_BUILD` in `CMakeLists.txt`;
+DLL `FileVersion` 1.3.0.NNN). They are based on upstream ERNativeUI 1.3.0,
+whose entries follow below. Fork-only exports are documented in
+[docs/fork/api.md](docs/fork/api.md).
+
+### r150 (in progress)
+
+* Wide help: the `LineHelpWide` / `LineHelpWide2` twins get the game's native
+  text DropShadow, matching the native `LineHelp`.
+* Client header: `connect_api` improvements.
+* Logs name the module that owns a foreign hook found on a known function.
+* GFx rows are inserted in batches when a page is built.
+* The alert queue no longer stays stuck after quitting to the title screen.
+* Research probe build fixed.
+* Documentation: fork section in the README, fork API reference, this
+  changelog section.
+
+### r149
+
+* `native_tabs.cpp` (16.8k lines) split into nine translation units with a
+  shared internal header; mechanical move, no behaviour change (globals keep
+  their order, so construction and destruction order are unchanged).
+
+### r148
+
+* Static CRT (`/MT`) in every target: no MSVCP140/VCRUNTIME140 dependency,
+  the runtime that broke the host on old Proton prefixes.
+* Version resource: `FileVersion` 1.3.0.148, "ERNativeUI host (NativeTweaks
+  fork r148)"; `ERNATIVEUI_FORK_BUILD` is the one build number (log banner,
+  `ERNativeUI-status.txt`).
+* Single host: a second `ERNativeUI.dll` in the same process stays passive and
+  its exports report failure; the host pins itself at attach.
+* With an exact build profile, a scan hit away from the profile address is
+  refused with a warning (another mod hooked the prologue).
+* safetyhook and minhook pinned to tagged commits.
+* Smaller fixes: one warning per image adopted by layout, draft providers named
+  when the readiness wait times out, UTF-8 module path in crash text.
+
+### r147
+
+* Every build gets a PDB (`/Z7`, `/DEBUG:FULL`) without growing the DLL.
+* Clean exit: buffered log lines are written at process detach and logging
+  stops before global destructors run.
+* `ERNativeUI-status.txt` is rewritten on every start, even with logging off:
+  fork build, game version, executable timestamp, and ready / unsupported game
+  version / failed with what to do.
+* An unknown game version is reported at startup and the fork's runtime GFX is
+  skipped.
+* The default `ERNativeUI.ini` starts with comments, so a UTF-8 BOM cannot hide
+  the `[Logging]` section.
+
+### r146
+
+* Startup fault handler ignores breakpoints and walks the stack safely.
+* Runtime GFX: a short read or an allocation failure serves the original file.
+* Dialog input ownership checks the live popup slot; keybinds no longer stay
+  blocked when the popup stops updating.
+* Text input trims a lone trailing high surrogate; identical slider texts are
+  not republished; button text released when a row fails to build.
+* Storage saves no longer hold the outer lock during disk I/O; stale temp files
+  of exited processes are removed on load.
+* `ERUI_INTERNAL_ERROR` for unexpected exceptions.
+
+### r145
+
+* Wide help: only the page that drew the status bar re-hides the native
+  `LineHelp`, and a bar not drawn for 2 s is dropped instead of being used
+  after it was freed.
+* Value polling writes a normalised value back with a compare-exchange, so a
+  change the player made in between is kept.
+* Known addresses are checked against the full pattern first, skipping about
+  70 `.text` scans at startup.
+* `ToggleIndexOf -1` no longer selects out of range.
+
+### r135-r144
+
+* Mod Settings tab and Game Options rebuild when reopening on it; layout
+  fingerprint adoption of unlisted executables; wide help keeps the native
+  `LineHelp` hidden on rebinds; native Back accepts an entry already hooked by
+  another mod; startup faults logged; live switch for the coloured labels
+  (`ERNativeUIFork_SetHighlightEnabled`); the item pop-up stays where the game
+  puts it with menus at the screen edges.
+
+## Upstream ERNativeUI
+
 ## [1.3.0](https://github.com/Flammrock/ERNativeUI/compare/ERNativeUI-v1.2.1...ERNativeUI-v1.3.0) (2026-10-20)
 
 

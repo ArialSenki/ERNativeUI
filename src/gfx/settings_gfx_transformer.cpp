@@ -1842,9 +1842,17 @@ enum class PlaceholderColor { invalid, gray, red };
             SettingsGfxErrorCode::invalid_argument,
             contract.feature,
             required);
-    for (;;) {
-        Model model(document);
-        PanelContext panel{};
+    // r150: every missing row of the panel goes in one GfxDocument::apply.
+    // The former loop applied one row at a time, and each apply copies the
+    // whole document, serializes, reparses and reindexes it; that ran dozens
+    // of times inside the game's file-open hook. The batch reproduces what
+    // the per-row loop computed: each inserted row becomes the panel's
+    // deepest placement, so the next target depth follows from it; the donor
+    // search skips the panel's own sprite, so earlier inserted rows never
+    // change the donor; and the rows go before the same ShowFrame in order.
+    // The output bytes are identical (settings_gfx_chain_test pins them).
+    const auto locate = [&](Model& model, PanelContext& panel)
+        -> SettingsGfxError {
         // Reacquire the WindowList by the stable character ID after each
         // document edit. Model and every view into it are revision-local.
         const SpriteView* window_list = expected_window_list_id != 0
@@ -1856,9 +1864,12 @@ enum class PlaceholderColor { invalid, gray, red };
                 contract.feature,
                 12);
         }
-        if (auto error = locate_panel(
-                model, contract, window_list, panel);
-            !error.success()) {
+        return locate_panel(model, contract, window_list, panel);
+    };
+    {
+        Model model(document);
+        PanelContext panel{};
+        if (auto error = locate(model, panel); !error.success()) {
             return error;
         }
         if (panel.row_count >= required) return {};
@@ -1868,45 +1879,64 @@ enum class PlaceholderColor { invalid, gray, red };
             maximum_depth = std::max<std::uint32_t>(
                 maximum_depth, placement->depth);
         }
-        std::uint32_t target_depth = maximum_depth + 1U;
-        if ((target_depth & 1U) == 0U) ++target_depth;
-        if (target_depth > std::numeric_limits<std::uint16_t>::max()) {
-            return semantic_error(
-                SettingsGfxErrorCode::resource_conflict,
-                contract.feature,
-                maximum_depth);
-        }
         const auto* frame = model.show_frame(*panel.panel);
-        if (!frame) {
-            return semantic_error(
-                SettingsGfxErrorCode::incompatible_structure,
-                contract.feature,
-                7);
+        std::vector<GfxEdit> edits{};
+        edits.reserve(static_cast<std::size_t>(required - panel.row_count));
+        for (std::uint16_t index = panel.row_count; index < required;
+             ++index) {
+            std::uint32_t target_depth = maximum_depth + 1U;
+            if ((target_depth & 1U) == 0U) ++target_depth;
+            if (target_depth > std::numeric_limits<std::uint16_t>::max()) {
+                return semantic_error(
+                    SettingsGfxErrorCode::resource_conflict,
+                    contract.feature,
+                    maximum_depth);
+            }
+            if (!frame) {
+                return semantic_error(
+                    SettingsGfxErrorCode::incompatible_structure,
+                    contract.feature,
+                    7);
+            }
+            std::optional<GfxRawTag> donor{};
+            if (auto error = donor_row_placement(
+                    document,
+                    model,
+                    panel,
+                    index,
+                    static_cast<std::uint16_t>(target_depth),
+                    contract.feature,
+                    donor);
+                !error.success()) {
+                return error;
+            }
+            edits.push_back(GfxEdit::insert_before(frame->handle,
+                donor ? std::move(*donor)
+                      : row_placement(
+                            panel.item_character,
+                            index,
+                            static_cast<std::uint16_t>(target_depth))));
+            maximum_depth = target_depth;
         }
-        std::optional<GfxRawTag> donor{};
-        if (auto error = donor_row_placement(
-                document,
-                model,
-                panel,
-                panel.row_count,
-                static_cast<std::uint16_t>(target_depth),
-                contract.feature,
-                donor);
-            !error.success()) {
-            return error;
-        }
-        auto edit = GfxEdit::insert_before(frame->handle,
-            donor ? std::move(*donor)
-                  : row_placement(
-                        panel.item_character,
-                        panel.row_count,
-                        static_cast<std::uint16_t>(target_depth)));
-        if (auto error = apply_one(
-                document, std::move(edit), contract.feature);
-            !error.success()) {
-            return error;
+        const auto error = document.apply(edits);
+        if (!error.success()) {
+            return document_error(contract.feature, error);
         }
     }
+    // r150: the per-row loop revalidated the panel after every insertion;
+    // one check of the grown panel keeps that guarantee for the batch.
+    Model model(document);
+    PanelContext panel{};
+    if (auto error = locate(model, panel); !error.success()) {
+        return error;
+    }
+    if (panel.row_count < required) {
+        return semantic_error(
+            SettingsGfxErrorCode::incompatible_structure,
+            contract.feature,
+            13);
+    }
+    return {};
 }
 
 [[nodiscard]] bool raw_equal(const GfxRawTag& left, const GfxRawTag& right) noexcept {

@@ -390,6 +390,94 @@ StorageDocumentResult write_file_atomically(
     return StorageDocumentResult::io_error;
 }
 
+// r146: parses one decimal field of a temporary name; false unless every
+// character is a digit and the value fits.
+bool parse_decimal(std::wstring_view text, std::uint64_t& output) noexcept {
+    if (text.empty() || text.size() > 20) return false;
+    std::uint64_t value = 0;
+    for (const wchar_t character : text) {
+        if (character < L'0' || character > L'9') return false;
+        const auto digit = static_cast<std::uint64_t>(character - L'0');
+        if (value > ((std::numeric_limits<std::uint64_t>::max)() - digit) / 10) {
+            return false;
+        }
+        value = value * 10 + digit;
+    }
+    output = value;
+    return true;
+}
+
+// r146: true only when the process that wrote a temporary file is known to be
+// gone. Our own PID and anything we cannot check count as alive, so an
+// in-flight save of this or another running process is never touched.
+bool temporary_owner_exited(std::uint64_t process_id) noexcept {
+    if (process_id == GetCurrentProcessId() ||
+        process_id > (std::numeric_limits<DWORD>::max)()) {
+        return false;
+    }
+    HANDLE process = OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION,
+        FALSE,
+        static_cast<DWORD>(process_id));
+    if (!process) return GetLastError() == ERROR_INVALID_PARAMETER;
+    DWORD exit_code{};
+    const bool exited = GetExitCodeProcess(process, &exit_code) != FALSE &&
+        exit_code != STILL_ACTIVE;
+    CloseHandle(process);
+    return exited;
+}
+
+// r146: a crash between the temporary write and the replace in
+// write_file_atomically leaves "<file>.tmp.<pid>.<ticks>.<counter>" behind
+// forever. Best effort: remove exactly that pattern when its writer is gone;
+// any failure is ignored and never affects load().
+void remove_stale_temporaries(const std::filesystem::path& path) noexcept {
+    try {
+        const std::filesystem::path parent = path.parent_path();
+        const std::wstring prefix = path.filename().wstring() + L".tmp.";
+        std::error_code error{};
+        std::filesystem::directory_iterator iterator(
+            parent.empty() ? std::filesystem::path(L".") : parent, error);
+        if (error) return;
+        std::vector<std::filesystem::path> stale{};
+        for (const std::filesystem::directory_iterator end{};
+             iterator != end;
+             iterator.increment(error)) {
+            if (error) return;
+            const std::wstring name = iterator->path().filename().wstring();
+            if (name.size() <= prefix.size() ||
+                name.compare(0, prefix.size(), prefix) != 0) {
+                continue;
+            }
+            std::wstring_view rest(name);
+            rest.remove_prefix(prefix.size());
+            const std::size_t first = rest.find(L'.');
+            if (first == std::wstring_view::npos) continue;
+            const std::size_t second = rest.find(L'.', first + 1);
+            if (second == std::wstring_view::npos) continue;
+            std::uint64_t process_id{};
+            std::uint64_t ignored{};
+            if (!parse_decimal(rest.substr(0, first), process_id) ||
+                !parse_decimal(
+                    rest.substr(first + 1, second - first - 1), ignored) ||
+                !parse_decimal(rest.substr(second + 1), ignored)) {
+                continue;
+            }
+            std::error_code status_error{};
+            if (!iterator->is_regular_file(status_error) || status_error) {
+                continue;
+            }
+            if (temporary_owner_exited(process_id)) {
+                stale.push_back(iterator->path());
+            }
+        }
+        for (const std::filesystem::path& file : stale) {
+            DeleteFileW(file.c_str());
+        }
+    } catch (...) {
+    }
+}
+
 } // namespace
 
 StorageDocument::StorageDocument(std::filesystem::path path)
@@ -405,6 +493,8 @@ StorageDocumentResult StorageDocument::load() noexcept {
         return StorageDocumentResult::invalid_argument;
     }
     std::lock_guard io_lock(io_mutex_);
+    // r146: under io_mutex_, so this document's own save() cannot be mid-write.
+    remove_stale_temporaries(path_);
     try {
         std::string bytes{};
         bool missing = false;

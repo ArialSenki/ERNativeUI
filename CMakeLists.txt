@@ -15,6 +15,32 @@ endif()
 # (mostly decoder tables of the fetched hook libraries): ~110 KB smaller host.
 if(MSVC)
     add_compile_options("$<$<CONFIG:Release>:/Gw>")
+    # Fork (r147): Release keeps debug info (/Z7, in the objects) so the host
+    # gets a PDB; crash dumps and logged addresses of a given rNNN can then be
+    # matched to source. Archive the PDB with each build.
+    add_compile_options("$<$<CONFIG:Release>:/Z7>")
+endif()
+
+# Fork: since MSVC 14.40 (VS 2022 17.10) std::mutex has a constexpr
+# constructor that an older MSVCP140.dll cannot lock (null read in _Mtx_lock).
+# Proton/Wine prefixes often carry such a runtime: the host crashed at startup
+# for a Linux user until they updated it. Keep the old constructor so any
+# VC++ 2015-2022 runtime works. Set before the fetched hook libraries.
+if(_ernativeui_msvc_abi)
+    add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+endif()
+
+# Fork (r148): link the CRT statically (/MT, /MTd in Debug) in every target,
+# the fetched hook libraries included (set before FetchContent). This removes
+# the VC++ runtime dependency (MSVCP140/VCRUNTIME140) that broke the host on
+# Proton prefixes with an old or missing runtime. The C API passes plain data
+# only (no FILE*, heap ownership or std:: objects cross the DLL boundary), so
+# each module having its own CRT heap is safe. CMP0091 is NEW under 3.28;
+# the policy default also covers minhook, whose old cmake_minimum_required
+# would leave it OLD (Zydis/Zycore set it NEW themselves).
+if(_ernativeui_msvc_abi)
+    set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 include(GNUInstallDirs)
@@ -247,20 +273,35 @@ if(_ernativeui_need_native_core)
     set(_ernativeui_hooks_source src/hooks.cpp)
     set(_ernativeui_registry_source src/host_registry.cpp)
     set(_ernativeui_tab_viewport_probe_source
-        src/native_tabs.cpp)
+        src/native_tabs.cpp
+        src/native_tabs_hooks.cpp
+        src/native_tabs_icons.cpp
+        src/native_tabs_pointer_dwell.cpp
+        src/native_tabs_records.cpp
+        src/native_tabs_research.cpp
+        src/native_tabs_rgba8.cpp
+        src/native_tabs_slot_growth.cpp
+        src/native_tabs_transitions.cpp)
     include(FetchContent)
     set(BUILD_SHARED_LIBS OFF)
     set(SAFETYHOOK_FETCH_ZYDIS ON CACHE BOOL "" FORCE)
     set(SAFETYHOOK_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(SAFETYHOOK_BUILD_TEST OFF CACHE BOOL "" FORCE)
     set(SAFETYHOOK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    # Fork (r148): dependencies pinned to commits, not movable tags.
+    # safetyhook v0.7.0; it fetches Zydis v4.1.0 (569320ad...) with its Zycore
+    # submodule (74620eef...) through its own CMake, by tag. Shallow clones
+    # cannot check out a SHA, hence GIT_SHALLOW FALSE.
     FetchContent_Declare(safetyhook
         GIT_REPOSITORY https://github.com/cursey/safetyhook.git
-        GIT_TAG v0.7.0 GIT_SHALLOW TRUE
+        GIT_TAG 19223663fb8a573253ffb2e82da87cc354bf5c16 # v0.7.0
+        GIT_SHALLOW FALSE
         EXCLUDE_FROM_ALL)
+    # minhook v1.3.4.
     FetchContent_Declare(minhook
         GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-        GIT_TAG v1.3.4 GIT_SHALLOW TRUE
+        GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
+        GIT_SHALLOW FALSE
         EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(safetyhook minhook)
 
@@ -439,6 +480,14 @@ if(_ernativeui_need_native_core)
         src/native_tab_catalogue.cpp
         src/native_tab_runtime_state.cpp
         src/native_tabs.cpp
+        src/native_tabs_hooks.cpp
+        src/native_tabs_icons.cpp
+        src/native_tabs_pointer_dwell.cpp
+        src/native_tabs_records.cpp
+        src/native_tabs_research.cpp
+        src/native_tabs_rgba8.cpp
+        src/native_tabs_slot_growth.cpp
+        src/native_tabs_transitions.cpp
         src/native_dialog.cpp
         src/native_input_bindings.cpp
         src/native_gfx_loader.cpp
@@ -498,6 +547,24 @@ if(_ernativeui_need_native_core)
             src/ernativeui.rc)
         add_library(ERNativeUI::Host ALIAS ERNativeUIHost)
 
+        # Fork (r148): the fork build number, the one place to bump it. It
+        # feeds the VERSIONINFO in src/ernativeui.rc (only this target
+        # compiles it) and kForkBuild in src/host_dllmain.cpp (log banner and
+        # ERNativeUI-status.txt).
+        set(ERNATIVEUI_FORK_BUILD 152)
+        file(CONFIGURE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/ernativeui_version_rc.h"
+            CONTENT [=[
+#pragma once
+#define ERUI_RC_VERSION_NUMBER @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,@ERNATIVEUI_FORK_BUILD@
+#define ERUI_RC_VERSION_STRING "@PROJECT_VERSION@.@ERNATIVEUI_FORK_BUILD@"
+#define ERUI_RC_FILE_DESCRIPTION "ERNativeUI host (NativeTweaks fork r@ERNATIVEUI_FORK_BUILD@)"
+#define ERUI_FORK_BUILD_TAG "r@ERNATIVEUI_FORK_BUILD@"
+]=]
+            @ONLY NEWLINE_STYLE CRLF)
+        target_include_directories(ERNativeUIHost PRIVATE
+            "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
         # Fork: offline address audit (maps eldenring.exe, runs no game code).
         add_executable(ERNativeUIAudit tools/address_audit/main.cpp
             src/runtime_gfx_locate.cpp)
@@ -529,6 +596,10 @@ if(_ernativeui_need_native_core)
             target_compile_options(ERNativeUIHost PRIVATE
                 /W4 /EHsc /permissive- /utf-8 /Zc:__cplusplus /wd4100 /wd4324)
             target_link_options(ERNativeUIHost PRIVATE /INCREMENTAL:NO)
+            # r147: /DEBUG turns /OPT:REF and /OPT:ICF off unless named.
+            # /PDBALTPATH keeps only the file name of the PDB in the DLL.
+            target_link_options(ERNativeUIHost PRIVATE
+                "$<$<CONFIG:Release>:/DEBUG:FULL;/OPT:REF;/OPT:ICF;/PDBALTPATH:%_PDB%>")
         endif()
 
     endif()
@@ -1184,6 +1255,7 @@ if(_ernativeui_enable_tests)
         add_executable(ERNativeUIHostStorageTests
             tests/host_storage_test.cpp
             src/host_storage.cpp
+            src/sha256.cpp
             src/input_binding_model.cpp
             src/storage_document.cpp)
         target_include_directories(ERNativeUIHostStorageTests PRIVATE

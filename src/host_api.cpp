@@ -701,6 +701,9 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetRowDefaultEx(
 
 // Turns the coloured labels of rows with a default on or off, live (on by
 // default). The registered defaults are kept.
+// r151: deliberately no callable_state() check, unlike the other exports: it
+// only stores a flag the UI thread reads, which is safe in any host state, and
+// a client that sets it before the host is ready must not lose the setting.
 extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetHighlightEnabled(std::uint32_t enabled) {
     erui::native::set_native_value_highlight(enabled != 0);
     return ERUI_OK;

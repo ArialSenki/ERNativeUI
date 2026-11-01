@@ -103,6 +103,9 @@ public:
             result.value.slots[index].analog =
                 analog_[index].load(std::memory_order_relaxed);
         }
+        // r146: an acquire load alone does not stop the relaxed loads above
+        // from moving after it; the fence keeps them before the re-check.
+        std::atomic_thread_fence(std::memory_order_acquire);
         const std::uint32_t confirmed_revision =
             revision_.load(std::memory_order_acquire);
         return result.revision == confirmed_revision &&

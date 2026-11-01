@@ -1,5 +1,6 @@
 #include "native_tab_runtime_state.hpp"
 #include "native_tab_slot_growth_policy.hpp"
+#include "failure_log_budget.hpp"
 
 #include "test_assertions.hpp"
 
@@ -15,6 +16,7 @@
 
 namespace {
 
+using erui::detail::FailureLogBudget;
 using erui::detail::NativeTabRuntimeEntry;
 using erui::detail::NativeTabLiveGeometry;
 using erui::detail::NativeTabPhysicalLayer;
@@ -432,6 +434,71 @@ void test_epoch_reset_preserves_retained_icon_roots() {
     ERUI_TEST_CHECK(icon.ready.load());
 }
 
+// r148: native_tabs.cpp's failure log budget (per call site and in total).
+void test_failure_log_budget_counts_each_site_separately() {
+    static const char first[] = "first failure %d";
+    static const char second[] = "second failure %d";
+    FailureLogBudget<4> budget{2, 100};
+
+    auto decision = budget.record(first);
+    ERUI_TEST_CHECK(decision.log && decision.site_count == 1);
+    ERUI_TEST_CHECK(!decision.last_for_site);
+    decision = budget.record(first);
+    ERUI_TEST_CHECK(decision.log && decision.site_count == 2);
+    ERUI_TEST_CHECK(decision.last_for_site);
+    decision = budget.record(first);
+    ERUI_TEST_CHECK(!decision.log && decision.site_count == 3);
+    // A site past its own budget does not use up the total.
+    ERUI_TEST_CHECK(decision.total_count == 0);
+
+    // A different site keeps its own budget after the first one is spent.
+    decision = budget.record(second);
+    ERUI_TEST_CHECK(decision.log && decision.site_count == 1);
+    ERUI_TEST_CHECK(decision.total_count == 3);
+
+    // Sites are told apart by pointer, not by text.
+    ERUI_TEST_CHECK(budget.count_site(first) == 4);
+    ERUI_TEST_CHECK(budget.count_site(second) == 2);
+    ERUI_TEST_CHECK(budget.count_site(nullptr) == 0);
+}
+
+void test_failure_log_budget_full_table_returns_zero() {
+    static const char sites[3][8] = {"site a", "site b", "site c"};
+    FailureLogBudget<2> budget{1, 100};
+    ERUI_TEST_CHECK(budget.count_site(sites[0]) == 1);
+    ERUI_TEST_CHECK(budget.count_site(sites[1]) == 1);
+    ERUI_TEST_CHECK(budget.count_site(sites[2]) == 0);
+    ERUI_TEST_CHECK(budget.count_site(sites[2]) == 0);
+    // Known sites keep counting while the table is full.
+    ERUI_TEST_CHECK(budget.count_site(sites[0]) == 2);
+
+    // An untracked site is still logged, bounded only by the total cap.
+    FailureLogBudget<1> small{1, 3};
+    ERUI_TEST_CHECK(small.record(sites[0]).log);
+    auto decision = small.record(sites[1]);
+    ERUI_TEST_CHECK(decision.log && decision.site_count == 0);
+    ERUI_TEST_CHECK(!decision.last_for_site);
+    decision = small.record(sites[2]);
+    ERUI_TEST_CHECK(decision.log && decision.last_overall);
+    ERUI_TEST_CHECK(!small.record(sites[1]).log);
+}
+
+void test_failure_log_budget_total_cap() {
+    static const char sites[5][8] = {"site 0", "site 1", "site 2", "site 3", "site 4"};
+    FailureLogBudget<8> budget{4, 3};
+    ERUI_TEST_CHECK(budget.record(sites[0]).log);
+    ERUI_TEST_CHECK(budget.record(sites[1]).log);
+    auto decision = budget.record(sites[2]);
+    ERUI_TEST_CHECK(decision.log && decision.total_count == 3);
+    ERUI_TEST_CHECK(decision.last_overall);
+    // Every later failure, from any site, is suppressed.
+    decision = budget.record(sites[3]);
+    ERUI_TEST_CHECK(!decision.log && decision.site_count == 1);
+    ERUI_TEST_CHECK(!decision.last_overall);
+    ERUI_TEST_CHECK(!budget.record(sites[0]).log);
+    ERUI_TEST_CHECK(!budget.record(sites[4]).log);
+}
+
 } // namespace
 
 static_assert(native_tab_physical_slot_capacity == 10);
@@ -454,5 +521,8 @@ int main() {
     test_retirement_worklist_is_sparse_and_duplicate_safe();
     test_icon_publication_release_acquire_contract();
     test_epoch_reset_preserves_retained_icon_roots();
+    test_failure_log_budget_counts_each_site_separately();
+    test_failure_log_budget_full_table_returns_zero();
+    test_failure_log_budget_total_cap();
     return 0;
 }

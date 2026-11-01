@@ -1,12 +1,14 @@
 #include "hooks.hpp"
 
 #include "dialog_input_gate.hpp"
+#include "foreign_hook.hpp"
 #include "game_build.hpp"
 #include "mod_settings_direct_open.hpp"
 #include "native_dialog.hpp"
 #include "native_menu.hpp"
 #include "native_popup_choice.hpp"
 #include "native_slider_presentation.hpp"
+#include "text_registry.hpp"
 #include "native_text_input.hpp"
 #include "native_text_result.hpp"
 #include "native_value_refresh.hpp"
@@ -54,6 +56,13 @@ std::atomic<bool> g_hook_perf{false};
 HookPerfCounter g_perf_text_setter{"ScaleformTextSetter"};
 HookPerfCounter g_perf_scaleform_path{"ScaleformPathObserver"};
 HookPerfCounter g_perf_text_resolver{"TextResolver"};
+// r151: measured before deciding whether these per-frame safety steps are
+// worth making event-driven: the whole page-frame pump (own time = the fork's
+// work around the game's page frame), the LineHelp re-hide inside it, and
+// the native-tab movie fingerprint sampled on every Configuration frame.
+HookPerfCounter g_perf_page_frame{"PageFramePump"};
+HookPerfCounter g_perf_line_help_hide{"LineHelpReHide"};
+HookPerfCounter g_perf_tab_fingerprint{"TabFingerprint"};
 
 std::uint64_t perf_now() noexcept {
     LARGE_INTEGER value{};
@@ -763,7 +772,17 @@ BuiltinPanelSnapshot inspect_builtin_panel(void* page) noexcept {
 // the option-setting pages (Solid Uncapper 2.3+). Logs which object the
 // category-4 route actually handed to Game Options so it can be compared
 // with a clean run. Read-only; every read is fault-guarded.
+// r145: kept in user logs (they diagnose Solid Uncapper reports) but only for
+// the first visits; every open of the Mods panel used to add three lines.
+std::atomic<std::uint32_t> g_scoped_panel_identity_logs{};
+constexpr std::uint32_t kScopedPanelIdentityLogLimit = 8;
+
 void log_scoped_panel_identity(void* page, const char* phase) noexcept {
+    if (!erui::detail::diagnostics_enabled() &&
+        g_scoped_panel_identity_logs.fetch_add(1, std::memory_order_relaxed) >=
+            kScopedPanelIdentityLogLimit) {
+        return;
+    }
     if (!page) {
         erui::detail::logf(erui::LogLevel::info,
             "diagnostic: scoped panel identity phase=%s page=null", phase);
@@ -3016,8 +3035,16 @@ bool copy_native_title_source_path(
 #if defined(_MSC_VER)
     __try {
 #endif
-        for (std::size_t index = 0; index < sizeof(destination); ++index) {
-            destination[index] = source[index];
+        // r146: stop at the terminator; a short path that ends just before an
+        // unmapped page must not fault and skip the redirects below.
+        std::size_t index = 0;
+        for (; index < sizeof(destination); ++index) {
+            const char value = source[index];
+            destination[index] = value;
+            if (value == '\0') break;
+        }
+        for (; index < sizeof(destination); ++index) {
+            destination[index] = '\0';
         }
         return true;
 #if defined(_MSC_VER)
@@ -3634,6 +3661,7 @@ std::atomic<StatusBarBinderFn> g_original_status_bar_binder{};
 std::atomic<ScaleformTextSetterFn> g_original_line_help_text_setter{};
 std::atomic<std::uint32_t> g_wide_line_help_events{};
 std::atomic<std::uint8_t*> g_marquee_bar{};  // status bar whose help scrolls
+std::atomic<std::uint8_t*> g_wide_bar{};     // status bar showing provider help
 
 // Every text write of the whole UI (HUD included) passes line_help_text_detour.
 // One bit per hashed LineHelp field address answers "not a known status bar"
@@ -3691,16 +3719,22 @@ void* __fastcall status_bar_binder_detour(
                                    : status_bar;
     auto* const bar = static_cast<std::uint8_t*>(status_bar);
     if (!bar) return result;
+    for (StatusBarSlot& slot : g_status_bars) {
+        if (slot.bar.load(std::memory_order_relaxed) != bar) continue;
+        // A page that comes back (Back from a submenu, pagination) binds its
+        // bar again, sometimes after the help of the selected row was written
+        // and with no write after it. Showing the native LineHelp here left
+        // that help twice on screen, 332 px apart. It stays hidden (and its
+        // marquee runs on); the next non-provider text restores it in the setter.
+        if (slot.wide_active.load(std::memory_order_relaxed)) {
+            set_native_line_help_visible(bar, false);
+        } else if (g_marquee_bar.load(std::memory_order_relaxed) == bar) {
+            g_marquee_bar.store(nullptr, std::memory_order_release);
+        }
+        return result;
+    }
     if (g_marquee_bar.load(std::memory_order_relaxed) == bar) {
         g_marquee_bar.store(nullptr, std::memory_order_release);
-    }
-    for (StatusBarSlot& slot : g_status_bars) {
-        if (slot.bar.load(std::memory_order_relaxed) == bar) {
-            if (slot.wide_active.exchange(false, std::memory_order_relaxed)) {
-                set_native_line_help_visible(bar, true);
-            }
-            return result;
-        }
     }
     const std::size_t next =
         g_next_status_bar.fetch_add(1, std::memory_order_relaxed);
@@ -3857,6 +3891,52 @@ void arm_marquee(std::uint8_t* bar) noexcept {
     g_marquee_bar.store(bar, std::memory_order_release);
 }
 
+// The game shows the native LineHelp again by itself (Nexus, r142 with a
+// controller: on the category list both helps were on screen, 346 px apart,
+// although the r141 rebind fix kept it hidden on Back and page changes). While
+// provider help is on, it is hidden again every frame of the page that owns
+// the bar; the next non-provider text restores it in the setter, as before.
+// r145: the first page within reach of the bar claims it, and only that page
+// hides it. Closing the menu with provider help on screen left g_wide_bar set
+// to a freed bar; once its page has not drawn for kWideOwnerIdleMs, any other
+// page drops it instead of calling Scaleform on freed memory.
+std::atomic<void*> g_wide_owner{};
+std::atomic<std::uint64_t> g_wide_owner_tick{};
+constexpr std::uint64_t kWideOwnerIdleMs = 2000;
+
+void set_wide_bar(std::uint8_t* bar) noexcept {
+    g_wide_owner.store(nullptr, std::memory_order_relaxed);
+    g_wide_owner_tick.store(GetTickCount64(), std::memory_order_relaxed);
+    g_wide_bar.store(bar, std::memory_order_release);
+}
+
+void keep_native_line_help_hidden(void* page) noexcept {
+    std::uint8_t* const bar = g_wide_bar.load(std::memory_order_acquire);
+    if (!bar || !page) return;
+    const std::uint64_t now = GetTickCount64();
+    void* owner = g_wide_owner.load(std::memory_order_relaxed);
+    if (!owner) {
+        const auto page_address = reinterpret_cast<std::uintptr_t>(page);
+        const auto bar_address = reinterpret_cast<std::uintptr_t>(bar);
+        if (bar_address >= page_address && bar_address - page_address < kMarqueeMaxBarOffset) {
+            g_wide_owner.store(page, std::memory_order_relaxed);
+            owner = page;
+        }
+    }
+    if (owner != page) {
+        if (now - g_wide_owner_tick.load(std::memory_order_relaxed) > kWideOwnerIdleMs) {
+            std::uint8_t* expected = bar;
+            if (g_wide_bar.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
+                g_wide_owner.store(nullptr, std::memory_order_relaxed);
+            }
+        }
+        return;
+    }
+    g_wide_owner_tick.store(now, std::memory_order_relaxed);
+    HookPerfScope perf_scope(g_perf_line_help_hide);
+    set_native_line_help_visible(bar, false);
+}
+
 void tick_marquee(void* page) noexcept {
     std::uint8_t* const bar = g_marquee_bar.load(std::memory_order_acquire);
     if (!bar || !page) return;
@@ -3979,6 +4059,7 @@ void __fastcall line_help_text_detour(void* value, const wchar_t* text) noexcept
         { HookPerfScope game(g_perf_text_setter, true); original(value, text); }
         set_native_line_help_visible(bar, false);
         match->wide_active.store(true, std::memory_order_relaxed);
+        set_wide_bar(bar);
         arm_marquee(bar);
         const std::uint32_t event =
             g_wide_line_help_events.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -3997,6 +4078,7 @@ void __fastcall line_help_text_detour(void* value, const wchar_t* text) noexcept
     for (StatusBarSlot& slot : g_status_bars) {
         was_active |= slot.wide_active.exchange(false, std::memory_order_relaxed);
     }
+    set_wide_bar(nullptr);
     if (was_active) {
         (void)assign_wide_line_help(bar, L"", original);
         (void)assign_wide_line_help(bar, L"", original, 0, nullptr, kTwoLineHelpPath);
@@ -4727,6 +4809,7 @@ void __fastcall page_frame_gate_detour(
     // TextInput setters may run on the host/client thread. Publish their
     // canonical values into the native MenuString shadow only from this UI
     // frame boundary, including while a native alert owns page input.
+    HookPerfScope perf_scope(g_perf_page_frame);
     synchronize_pending_text_inputs();
     synchronize_color_picker_previews(page);
 
@@ -4736,8 +4819,9 @@ void __fastcall page_frame_gate_detour(
         page == g_dialog_input_page.load(std::memory_order_acquire)) {
         return;
     }
-    original(page, frame_value, input_enabled);
+    { HookPerfScope game(g_perf_page_frame, true); original(page, frame_value, input_enabled); }
     tick_marquee(page);
+    keep_native_line_help_hidden(page);
     refresh_dirty_native_values();
 }
 
@@ -4874,10 +4958,34 @@ bool revalidate_shared_menu_entry_before_hook(
             *game, *preserved, entry)) {
         return true;
     }
+    // r150: name the module whose detour now sits on the entry, if any.
+    const void* address{};
+    switch (entry) {
+    case PreservedSharedMenuEntry::game_options:
+        address = reinterpret_cast<const void*>(preserved->game_options_handler);
+        break;
+    case PreservedSharedMenuEntry::sub_handler:
+        address = reinterpret_cast<const void*>(preserved->sub_handler);
+        break;
+    case PreservedSharedMenuEntry::text_resolver:
+        address = reinterpret_cast<const void*>(preserved->text_resolver);
+        break;
+    case PreservedSharedMenuEntry::slider_refresh:
+        address = reinterpret_cast<const void*>(preserved->slider_refresh);
+        break;
+    case PreservedSharedMenuEntry::selector_select:
+        address = preserved->selector_select;
+        break;
+    }
+    const ForeignHookOwner owner = address
+        ? find_foreign_hook_owner(address)
+        : ForeignHookOwner{};
     erui::detail::logf(
         erui::LogLevel::error,
-        "Approved shared menu entry '%s' changed immediately before hook creation",
-        name ? name : "unknown");
+        "Approved shared menu entry '%s' changed immediately before hook creation%s%s",
+        name ? name : "unknown",
+        owner.hooked ? "; entry now hooked by " : "",
+        owner.hooked ? owner.name : "");
     return false;
 }
 
@@ -5370,7 +5478,8 @@ bool install_mod_settings_tab_hooks(
         g_mod_settings_panel_route_hook.reset();
         g_mod_settings_panel_route_return_hook.reset();
         g_mod_settings_direct_open_hook.reset();
-        t_mod_settings_route_depth = 0;
+        // r146: t_mod_settings_route_depth is per game thread; resetting it
+        // here would only clear this (host) thread's copy.
     };
 
     if (!erui::detail::runtime_state().options.enable_custom_text ||
@@ -5689,7 +5798,9 @@ void reset_hooks() noexcept {
     g_mod_settings_route_scopes.store(0, std::memory_order_release);
     g_mod_settings_route_calls.store(0, std::memory_order_release);
     g_mod_settings_route_returns.store(0, std::memory_order_release);
-    t_mod_settings_route_depth = 0;
+    // r146: t_mod_settings_route_depth and t_diagnostic_native_category are
+    // thread_local and scoped on the game thread (route/return hooks and
+    // DiagnosticNativeCategoryScope); a reset here only touched this thread.
     for (auto& call : g_native_panel_materialization_calls) {
         call.store(0, std::memory_order_release);
     }
@@ -5702,8 +5813,6 @@ void reset_hooks() noexcept {
     for (auto& call : g_scaleform_text_diagnostic_calls) {
         call.store(0, std::memory_order_release);
     }
-    t_diagnostic_native_category =
-        std::numeric_limits<std::uint32_t>::max();
     g_builtin_panel_observer_only_mask.store(0, std::memory_order_release);
     set_color_picker_widget_path_bridge_available(false);
     {
@@ -6114,7 +6223,8 @@ HookInstallStatus install_native_menu_hooks(
     g_mod_settings_route_scopes.store(0, std::memory_order_release);
     g_mod_settings_route_calls.store(0, std::memory_order_release);
     g_mod_settings_route_returns.store(0, std::memory_order_release);
-    t_mod_settings_route_depth = 0;
+    // r146: the thread_local route depth and native category are scoped on
+    // the game thread; resetting them here only touched this thread's copy.
     for (auto& call : g_native_panel_materialization_calls) {
         call.store(0, std::memory_order_release);
     }
@@ -6124,8 +6234,6 @@ HookInstallStatus install_native_menu_hooks(
     for (auto& call : g_scaleform_visibility_diagnostic_calls) {
         call.store(0, std::memory_order_release);
     }
-    t_diagnostic_native_category =
-        std::numeric_limits<std::uint32_t>::max();
     g_last_tab_selection_tick.store(0, std::memory_order_release);
     g_last_page.store(nullptr, std::memory_order_release);
     g_dialog_input_page.store(nullptr, std::memory_order_release);
@@ -6437,9 +6545,15 @@ HookInstallStatus install_native_menu_hooks(
                     path_hook_target, entry_before_hook) &&
                 entry_before_hook == kScaleformPathResolverEntry;
             if (exact_path_ownership_required && !pristine_entry) {
+                // r150: name the module whose detour changed the entry.
+                const ForeignHookOwner owner =
+                    find_foreign_hook_owner(path_hook_target);
                 erui::detail::logf(
                     erui::LogLevel::error,
-                    "Shared Scaleform path target changed after native-tab preflight; refusing to chain or expose process-lifetime custom-tab hooks");
+                    "Shared Scaleform path target changed after native-tab preflight%s%s%s; refusing to chain or expose process-lifetime custom-tab hooks",
+                    owner.hooked ? " (entry hooked by " : "",
+                    owner.hooked ? owner.name : "",
+                    owner.hooked ? ")" : "");
                 reset_hooks();
                 remove_native_dialog_transport();
                 return HookInstallStatus::hook_failed;
@@ -6574,17 +6688,31 @@ void set_hook_perf_enabled(bool enabled) noexcept {
     g_hook_perf.store(enabled, std::memory_order_relaxed);
 }
 
+bool hook_perf_enabled() noexcept {
+    return g_hook_perf.load(std::memory_order_relaxed);
+}
+
+std::uint64_t hook_perf_ticks() noexcept {
+    return perf_now();
+}
+
+void record_tab_fingerprint_perf(std::uint64_t ticks) noexcept {
+    g_perf_tab_fingerprint.calls.fetch_add(1, std::memory_order_relaxed);
+    g_perf_tab_fingerprint.total_ticks.fetch_add(ticks, std::memory_order_relaxed);
+}
+
 void log_hook_perf(std::uint64_t interval_ms) noexcept {
     LARGE_INTEGER frequency{};
     QueryPerformanceFrequency(&frequency);
     const double us_per_tick = frequency.QuadPart > 0
         ? 1000000.0 / static_cast<double>(frequency.QuadPart) : 0.0;
-    char line[768]{};
+    char line[1024]{};
     int used = std::snprintf(line, sizeof(line),
         "Perf %llu s, hooks (calls / own us / game us):",
         static_cast<unsigned long long>(interval_ms / 1000));
     for (HookPerfCounter* counter :
-            {&g_perf_text_setter, &g_perf_scaleform_path, &g_perf_text_resolver}) {
+            {&g_perf_text_setter, &g_perf_scaleform_path, &g_perf_text_resolver,
+             &g_perf_page_frame, &g_perf_line_help_hide, &g_perf_tab_fingerprint}) {
         const std::uint64_t calls = counter->calls.exchange(0, std::memory_order_relaxed);
         const std::uint64_t total = counter->total_ticks.exchange(0, std::memory_order_relaxed);
         const std::uint64_t game = counter->game_ticks.exchange(0, std::memory_order_relaxed);
@@ -6597,6 +6725,15 @@ void log_hook_perf(std::uint64_t interval_ms) noexcept {
             static_cast<double>(game) * us_per_tick);
         if (added < 0) break;
         used += added;
+    }
+    // r151: memory kept forever by live text and slider-label updates.
+    std::size_t text_count = 0, text_bytes = 0, slider_lists = 0, slider_bytes = 0;
+    erui::detail::text_storage_stats(text_count, text_bytes);
+    slider_value_store_stats(slider_lists, slider_bytes);
+    if (used > 0 && static_cast<std::size_t>(used) < sizeof(line)) {
+        (void)std::snprintf(line + used, sizeof(line) - used,
+            " kept texts %zu (%zu KB), slider label lists %zu (%zu KB)",
+            text_count, text_bytes / 1024, slider_lists, slider_bytes / 1024);
     }
     erui::detail::logf(erui::LogLevel::info, "%s", line);
 }

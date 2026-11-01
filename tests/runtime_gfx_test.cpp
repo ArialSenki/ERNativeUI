@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -53,8 +54,16 @@ void test_movie(const char* name, erui::gfx::SettingsMovie movie) {
     }
     const auto patched = erui::gfx::patch_settings_movie(movie, vanilla);
     check(patched.success(), (std::string(name) + " patches from vanilla").c_str());
+    // r150: ERNATIVEUI_TEST_DUMP_GFX_DIR writes the output, to review and
+    // adopt it as the new reference after an intended change (r150: the wide
+    // help twins carry LineHelp's DropShadow, so r121 files no longer match).
+    if (const char* dump = std::getenv("ERNATIVEUI_TEST_DUMP_GFX_DIR"); dump && *dump) {
+        std::ofstream(std::filesystem::path(dump) / name, std::ios::binary).write(
+            reinterpret_cast<const char*>(patched.output.data()),
+            static_cast<std::streamsize>(patched.output.size()));
+    }
     check(patched.output == expected,
-        (std::string(name) + " equals the shipped r121 file byte for byte").c_str());
+        (std::string(name) + " equals the reference file byte for byte").c_str());
     const auto again = erui::gfx::patch_settings_movie(movie, expected);
     check(again.success() && again.report.already_satisfied && again.output == expected,
         (std::string(name) + " is idempotent on an already patched file").c_str());
@@ -95,7 +104,7 @@ void test_backdrop_alpha(const char* name, erui::gfx::SettingsMovie movie) {
     const auto expected_half = erui::gfx::set_menu_background_alpha(expected, 50);
     check(combined.success() && !combined.report.menu_background_skipped &&
             combined.output == expected_half.output,
-        (label + " runtime patch with backdrop alpha = r121 file + alpha").c_str());
+        (label + " runtime patch with backdrop alpha = reference file + alpha").c_str());
     const auto combined_again = erui::gfx::patch_settings_movie(movie, combined.output, options);
     check(combined_again.success() && combined_again.report.already_satisfied &&
             combined_again.output == combined.output,

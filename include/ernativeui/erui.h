@@ -1682,7 +1682,9 @@ typedef ERUI_Result (ERUI_CALL* ERUI_GetApiFn)(
 /*
  * ERUI_GetApi is also the explicit connection handshake. Call it from
  * a worker and retry ERUI_HOST_NOT_READY without reusing a partially written
- * table. A successful API 1.1 or later request guarantees that startup language
+ * table. r150: the C++ erui::connect() helpers refuse to sleep-wait while the
+ * calling thread holds the loader lock (ErrorCode::loader_lock_held) and
+ * accept erui::ConnectOptions for a minimum API version and module name. A successful API 1.1 or later request guarantees that startup language
  * selection has settled. In automatic mode, get_game_language may still
  * return ERUI_NOT_SUPPORTED after a definitive Steam incompatibility. API 1.0
  * keeps its released compatibility lifecycle.

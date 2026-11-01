@@ -148,10 +148,20 @@ bool decode_native_menu_string(
     const NativeBinding& binding,
     std::wstring& output) noexcept {
     DecodedNativeText copied{};
-    if (!copy_native_menu_string(binding, copied) ||
-        !valid_utf16({copied.units.data(), copied.length})) {
-        return false;
+    if (!copy_native_menu_string(binding, copied)) return false;
+    // r146: The native editor counts UTF-16 units, so a surrogate pair typed
+    // at the length limit can be cut after its high half. Drop that one
+    // trailing lone high surrogate instead of rejecting the whole edit; the
+    // forced synchronization after commit rewrites the native string to match.
+    if (copied.length != 0) {
+        const auto last = static_cast<std::uint16_t>(
+            copied.units[copied.length - 1]);
+        if (last >= 0xD800u && last <= 0xDBFFu) {
+            --copied.length;
+            copied.units[copied.length] = L'\0';
+        }
     }
+    if (!valid_utf16({copied.units.data(), copied.length})) return false;
     try {
         output.assign(copied.units.data(), copied.length);
         return true;

@@ -70,6 +70,8 @@ private:
     // Serializes public ABI operations, including complete assignment-change
     // batches. StorageDocument remains independently thread-safe, while this
     // mutex prevents an observer from seeing an intermediate batch state.
+    // r146: save() does not take it; the document snapshots atomically and
+    // writes to disk without holding the locks that get/set calls take.
     mutable std::mutex mutex_{};
     StorageDocument document_;
 };

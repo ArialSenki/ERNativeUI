@@ -30,4 +30,8 @@ bool set_native_slider_presentation_values(
     volatile std::uint8_t* bound_value,
     const std::vector<std::wstring>& values) noexcept;
 
+// r151: value-text lists published by set_native_slider_presentation_values
+// (never freed: game-thread readers load them without a lock).
+void slider_value_store_stats(std::size_t& lists, std::size_t& bytes) noexcept;
+
 } // namespace erui::native

@@ -7,6 +7,7 @@
 #endif
 #include <Windows.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -119,9 +120,47 @@ void test_startup_lines_written_immediately() {
     std::filesystem::remove(path, error);
 }
 
+// A fault during startup is logged with its code and module, and a guarded
+// read still reaches its own __except handler.
+bool read_unmapped_guarded() noexcept {
+    __try {
+        return *reinterpret_cast<volatile const int*>(std::uintptr_t{0x10}) == 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void test_startup_fault_logged() {
+    const auto path = test_log_path(L"fault");
+    std::error_code error{};
+    std::filesystem::remove(path, error);
+
+    ERUI_TEST_CHECK(erui::host::log::initialize(path));
+    erui::host::log::set_startup_fault_logging(true);
+    ERUI_TEST_CHECK(!read_unmapped_guarded());
+    erui::host::log::set_startup_fault_logging(false);
+    ERUI_TEST_CHECK(!read_unmapped_guarded());
+    erui::host::log::shutdown();
+
+    const std::string contents = read_all(path);
+    const std::size_t first = contents.find("Startup fault on T");
+    ERUI_TEST_CHECK(first != std::string::npos);
+    ERUI_TEST_CHECK(contents.find("code=0xC0000005") != std::string::npos);
+    ERUI_TEST_CHECK(contents.find("reading 0x10") != std::string::npos);
+    ERUI_TEST_CHECK(contents.find("ERNativeUILoggerIntegrationTests.exe+0x") !=
+        std::string::npos);
+    // Off again: the second fault is not logged.
+    ERUI_TEST_CHECK(contents.find("Startup fault on T", first + 1) ==
+        std::string::npos);
+
+    error.clear();
+    std::filesystem::remove(path, error);
+}
+
 } // namespace
 
 int main() {
+    test_startup_fault_logged();
     test_default_log();
     test_diagnostic_log();
     test_startup_lines_written_immediately();

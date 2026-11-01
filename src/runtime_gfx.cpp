@@ -38,6 +38,11 @@ constexpr std::size_t kSlotIsValid = 2;
 constexpr std::size_t kSlotTell = 4;
 constexpr std::size_t kSlotGetLength = 6;
 constexpr std::size_t kSlotRead = 10;
+// r146: Seek(offset, origin) follows Read, SkipBytes, BytesAvailable and Flush
+// in Scaleform::File; only used to hand back a partially read original, and
+// its result is checked with Tell.
+constexpr std::size_t kSlotSeek = 14;
+constexpr int kSeekSet = 0;
 constexpr std::size_t kMemoryFileSlots = 20;
 constexpr std::size_t kRefCountOffset = 0x08;
 // Scaleform::MemoryFile fields.
@@ -52,6 +57,8 @@ using DestructorFn = void*(__fastcall*)(void* file, unsigned flags);
 using GetLengthFn = int(__fastcall*)(void* file);
 using ReadFn = int(__fastcall*)(void* file, std::uint8_t* buffer, int bytes);
 using IsValidFn = bool(__fastcall*)(void* file);
+using TellFn = int(__fastcall*)(void* file);
+using SeekFn = int(__fastcall*)(void* file, int offset, int origin);
 
 void* g_open_file_target{};
 std::atomic<OpenFileFn> g_original_open_file{};
@@ -323,6 +330,14 @@ void release_native_file(void* file) noexcept {
     }
 }
 
+// r146: puts a partially read original back at its start, so it can be
+// served unchanged; true only when Tell confirms the position.
+bool rewind_native_file(void* file) noexcept {
+    void** vtable = vtable_of(file);
+    reinterpret_cast<SeekFn>(vtable[kSlotSeek])(file, 0, kSeekSet);
+    return reinterpret_cast<TellFn>(vtable[kSlotTell])(file) == 0;
+}
+
 void* replace_with_patched(
     const char* name,
     MovieStatus& status,
@@ -351,7 +366,14 @@ void* replace_with_patched(
     if (!reinterpret_cast<IsValidFn>(vtable[kSlotIsValid])(file)) return file;
     const int length = reinterpret_cast<GetLengthFn>(vtable[kSlotGetLength])(file);
     if (length <= 0 || length > kMaxMovieBytes) return file;
-    std::vector<std::uint8_t> input(static_cast<std::size_t>(length));
+    // r146: this function is noexcept; a failed allocation keeps the
+    // original (nothing has been read yet) instead of std::terminate.
+    std::vector<std::uint8_t> input;
+    try {
+        input.resize(static_cast<std::size_t>(length));
+    } catch (...) {
+        return file;
+    }
     int total = 0;
     while (total < length) {
         const int read = reinterpret_cast<ReadFn>(vtable[kSlotRead])(
@@ -360,9 +382,16 @@ void* replace_with_patched(
         total += read;
     }
     if (total != length) {
-        // Partially consumed: the original can no longer be handed back.
+        // r146: hand back the original itself, rewound. Only if it cannot be
+        // rewound are the bytes that were read served in its place.
+        if (total == 0 || rewind_native_file(file)) {
+            log::write(
+                "WARN: Runtime GFX: %s short read (%d of %d bytes); serving it unchanged",
+                name, total, length);
+            return file;
+        }
         log::write(
-            "WARN: Runtime GFX: %s short read (%d of %d bytes); serving it unchanged",
+            "WARN: Runtime GFX: %s short read (%d of %d bytes) and the file cannot be rewound; serving the bytes read",
             name, total, length);
     }
     const std::vector<std::uint8_t>* output =
@@ -388,7 +417,9 @@ void* replace_with_patched(
         wrapper->valid = wrapper->size > 0;
     } catch (...) {
         delete wrapper;
-        return file;  // the original may be consumed, but this is the best fallback
+        // r146: the original was read; rewind it before handing it back.
+        (void)rewind_native_file(file);
+        return file;
     }
     release_native_file(file);
     if (output) status.patched.fetch_add(1, std::memory_order_acq_rel);

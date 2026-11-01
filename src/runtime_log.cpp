@@ -33,13 +33,17 @@ void logf(LogLevel level, const char* format, ...) noexcept {
         return;
     }
 
-    char buffer[2048]{};
+    // r146: no 2 KB zero-fill per call; the formatter NUL-terminates, and the
+    // first byte covers a formatter that writes nothing.
+    char buffer[2048];
+    buffer[0] = '\0';
     va_list args;
     va_start(args, format);
 #if defined(_MSC_VER)
     ::_vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, format, args);
 #else
     std::vsnprintf(buffer, sizeof(buffer), format, args);
+    buffer[sizeof(buffer) - 1] = '\0';
 #endif
     va_end(args);
     sink(level, buffer);

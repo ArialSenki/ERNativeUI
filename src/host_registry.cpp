@@ -1425,7 +1425,9 @@ ERUI_Result Registry::open_storage(
     } catch (const std::bad_alloc&) {
         return ERUI_OUT_OF_MEMORY;
     } catch (...) {
-        return ERUI_INVALID_ARGUMENT;
+        // r146: arguments are validated by ProviderStorage::open (noexcept);
+        // anything thrown here is a host fault, not a caller error.
+        return ERUI_INTERNAL_ERROR;
     }
 }
 
@@ -2980,8 +2982,11 @@ ERUI_Result Registry::enqueue_alert(
             description->user_data);
     } catch (const std::bad_alloc&) {
         return ERUI_OUT_OF_MEMORY;
-    } catch (...) {
+    } catch (const std::invalid_argument&) {
+        // r146: copy_utf16 rejects malformed message text this way.
         return ERUI_INVALID_ARGUMENT;
+    } catch (...) {
+        return ERUI_INTERNAL_ERROR;
     }
 }
 
@@ -3633,6 +3638,27 @@ std::unique_ptr<erui::Menu> Registry::try_freeze_and_build(
         now - opened_at >= quiet_ms &&
         now - last_activity_tick_ >= quiet_ms;
     if (!maximum_reached && !quiet) return {};
+    // r148: one client that registers and never commits or aborts holds the
+    // menu back for everyone until the maximum wait; name it so its author
+    // (or the user) can find it. Timing is unchanged.
+    if (!quiet && drafts != 0) {
+        std::string draft_ids{};
+        for (const auto& item : providers_) {
+            if (item.second->committed) continue;
+            if (draft_ids.size() >= 512) {
+                draft_ids += ", ...";
+                break;
+            }
+            if (!draft_ids.empty()) draft_ids += ", ";
+            draft_ids += item.second->id;
+        }
+        erui::detail::logf(
+            erui::LogLevel::warning,
+            "Provider registration reached its maximum wait (%llu ms) with %zu provider(s) never committed or aborted: %s; the menu is built without them",
+            static_cast<unsigned long long>(maximum_wait_ms),
+            drafts,
+            draft_ids.c_str());
+    }
     return freeze_and_build_locked();
 }
 

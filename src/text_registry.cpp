@@ -1,5 +1,6 @@
 #include "text_registry.hpp"
 
+#include <atomic>
 #include <Windows.h>
 
 #include <limits>
@@ -23,6 +24,13 @@ TextId TextRegistry::add(std::wstring_view text) {
 namespace {
 // Guards every registry's pool_ and storage_ (kept out of the class layout).
 SRWLOCK g_pool_lock = SRWLOCK_INIT;
+std::atomic<std::size_t> g_stored_texts{};
+std::atomic<std::size_t> g_stored_text_bytes{};
+}
+
+void text_storage_stats(std::size_t& count, std::size_t& bytes) noexcept {
+    count = g_stored_texts.load(std::memory_order_relaxed);
+    bytes = g_stored_text_bytes.load(std::memory_order_relaxed);
 }
 
 const wchar_t* TextRegistry::intern(std::wstring_view text) {
@@ -35,6 +43,9 @@ const wchar_t* TextRegistry::intern(std::wstring_view text) {
         } else {
             storage_.emplace_back(text);
             const std::wstring& stored = storage_.back();
+            g_stored_texts.fetch_add(1, std::memory_order_relaxed);
+            g_stored_text_bytes.fetch_add(
+                (stored.size() + 1) * sizeof(wchar_t), std::memory_order_relaxed);
             pool_.emplace(std::wstring_view(stored), stored.c_str());
             result = stored.c_str();
         }
