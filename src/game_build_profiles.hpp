@@ -37,9 +37,9 @@ inline constexpr std::array<SharedMenuAddressProfile, 4>
     kSharedMenuAddressProfiles{{
         {
             EldenRingBuild::v2_7_0_0,
-            0x958C50,
-            0x95A5D0,
-            0x7633D0,
+            0x959DF0,
+            0x95B770,
+            0x764220,
             0x74FA20,
             0x739B90,
         },
@@ -209,10 +209,10 @@ inline constexpr std::array<MenuRuntimeAddressProfile, 4>
         {
             EldenRingBuild::v2_7_0_0,
             0x959320, 0x95D540, 0x959090, 0x95AD00,
-            0x95CB30, 0x95C050, 0x94FA20, 0x955550,
-            0x869300, 0x760790, 0x760970, 0x958210,
-            0x763BA0, 0x948FA0, 0x949120, 0x86A410,
-            0x956CF0, 0x9493F0, 0x9298A0, 0x742C90,
+            0x95CB30, 0x95C050, 0x950850, 0x955550,
+            0x86A2F0, 0x7615E0, 0x7617C0, 0x958210,
+            0x763BA0, 0x94A140, 0x94A2C0, 0x86A410,
+            0x956CF0, 0x94A590, 0x92AA40, 0x743AE0,
             0x747CD0, 0x958FF0, 0x74B140, 0x74AE50,
             0x95D010, 0x9623A0, 0x86A610, 0x962520,
             0x962330, 0x2B15A78, 0x2B15AB0, 0x2B15AE8,
