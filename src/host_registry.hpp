@@ -307,6 +307,36 @@ public:
 
     void apply_pending_values() noexcept;
 
+    // Fork (r157): the talk menu (talk_menu.cpp) shows every provider's Mod
+    // Settings page as talk pages and changes values the way the player does
+    // in the menu: the bound byte changes and the worker's next poll reports
+    // it through the provider's change callback.
+    struct TalkProviderView {
+        ERUI_ProviderHandle handle{};
+        std::wstring name{};
+        ERUI_PageHandle root_page{};
+    };
+    enum class TalkRowKind : std::uint8_t { button, toggle, values, submenu, text, other };
+    struct TalkRowView {
+        ERUI_RowHandle handle{};
+        TalkRowKind kind{TalkRowKind::other};
+        std::wstring label{};
+        std::wstring value{};          // current value text (toggle, values, text)
+        bool enabled{true};
+        ERUI_PageHandle child_page{};  // submenu
+        std::uint32_t current{};       // toggle 0/1
+    };
+    [[nodiscard]] std::vector<TalkProviderView> talk_providers() const;
+    [[nodiscard]] bool talk_page(ERUI_ProviderHandle provider, ERUI_PageHandle page,
+        std::vector<TalkRowView>& rows) const;
+    // Every value text of a toggle/slider/choice row and the current index.
+    [[nodiscard]] bool talk_values(ERUI_ProviderHandle provider, ERUI_RowHandle row,
+        std::wstring& label, std::vector<std::wstring>& texts, std::uint32_t& current) const;
+    ERUI_Result talk_set_value(ERUI_ProviderHandle provider, ERUI_RowHandle row,
+        std::uint32_t index) noexcept;
+    // Runs a button row's callback (outside the registry lock).
+    ERUI_Result talk_press(ERUI_ProviderHandle provider, ERUI_RowHandle row) noexcept;
+
 private:
     enum class RowKind : std::uint8_t {
         button,

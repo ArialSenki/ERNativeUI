@@ -1054,9 +1054,7 @@ DWORD run_host() noexcept {
             read_ini(ini, L"TalkMenu", L"Enable", 1) != 0) {
             const std::wstring talk_key =
                 read_ini_text(ini, L"TalkMenu", L"Key", L"F11");
-            erui::talk::start(
-                read_ini(ini, L"TalkMenu", L"TestProvider", 0) != 0,
-                talk_key.c_str());
+            erui::talk::start(talk_key.c_str());
         }
         // r148: a layout adoption decides every native address this run;
         // say so once, at warning level, whatever the verbosity.
@@ -1513,11 +1511,23 @@ DWORD run_host() noexcept {
         // A mod with its own early provider (e.g. Spirit Multiplier) would
         // otherwise end the quiet window first and lock NativeTweaks out, so
         // while NativeTweaks.dll is loaded wait for it (still capped by maxWait).
+        // r157: NativeTweaks ships next to this DLL, and it can be mapped
+        // seconds after it (07-11: Steam answered late and NativeTweaks.dll
+        // was loaded 6.6 s after ERNativeUI, after the quiet window had
+        // closed registration). Waiting for it only once it was loaded locked
+        // it out of Mod Settings and the talk menu for that session, so the
+        // file in this folder counts too.
+        std::error_code hub_file_error{};
+        const bool hub_file_here = std::filesystem::exists(
+            directory / L"NativeTweaks.dll", hub_file_error);
         bool awaiting_logged = false;
         while (!g_stop.load(std::memory_order_acquire)) {
-            const bool await_hub = GetModuleHandleW(L"NativeTweaks.dll") != nullptr;
+            const bool hub_loaded = GetModuleHandleW(L"NativeTweaks.dll") != nullptr;
+            const bool await_hub = hub_loaded || hub_file_here;
             if (await_hub && !awaiting_logged) {
-                log::write("NativeTweaks.dll is loaded: registration stays open until it registers (maxWait still applies)");
+                log::write(hub_loaded
+                    ? "NativeTweaks.dll is loaded: registration stays open until it registers (maxWait still applies)"
+                    : "NativeTweaks.dll is next to ERNativeUI.dll but not loaded yet: registration stays open until it registers (maxWait still applies)");
                 awaiting_logged = true;
             }
             if (auto menu = registry().try_freeze_and_build(

@@ -5,7 +5,7 @@ pub const MAX_DEPTH: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Level {
-    /// The "NativeTweaks" list: one row per provider, Mod Settings, Leave.
+    /// The "NativeTweaks" list: one row per mod, then Leave.
     Top,
     /// A page of a provider (0 = its first page).
     Provider { entry: u64, page: u32 },
@@ -15,7 +15,6 @@ pub enum Level {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Row {
     Entry(u64),
-    ModSettings,
     Leave,
     Back,
     /// A provider's own row id.

@@ -3031,6 +3031,212 @@ void Registry::apply_pending_values() noexcept {
     }
 }
 
+// ---- Fork (r157): talk-menu view of the Mod Settings pages
+
+namespace {
+
+const wchar_t* const kTalkOff = L"Off";
+const wchar_t* const kTalkOn = L"On";
+
+std::uint32_t talk_slider_count(const erui::SliderSpec& slider) noexcept {
+    if (slider.step <= 0 || slider.maximum < slider.minimum) return 1;
+    return static_cast<std::uint32_t>((slider.maximum - slider.minimum) / slider.step) + 1u;
+}
+
+} // namespace
+
+std::vector<Registry::TalkProviderView> Registry::talk_providers() const {
+    std::vector<std::pair<std::uint64_t, TalkProviderView>> found;
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& item : providers_) {
+            const Provider& provider = *item.second;
+            if (!provider.committed) continue;
+            // The provider's own page, or the rows it added to the built-in
+            // Mod Settings page (NativeTweaks).
+            ERUI_PageHandle shown = ERUI_INVALID_PAGE;
+            for (const ERUI_PageHandle candidate : {provider.root_page,
+                     provider.builtin_pages[static_cast<std::size_t>(
+                         erui::detail::BuiltinPage::mod_settings)]}) {
+                if (candidate == ERUI_INVALID_PAGE) continue;
+                const auto page = provider.page_lookup.find(candidate);
+                if (page != provider.page_lookup.end() && !page->second->rows.empty()) {
+                    shown = candidate;
+                    break;
+                }
+            }
+            if (shown == ERUI_INVALID_PAGE) continue;
+            // Mod Settings order: the Hub (NativeTweaks) first.
+            const std::uint64_t order = provider.id == "er-mod-settings-hub"
+                ? 0u : provider.ordinal + 1u;
+            found.push_back({order, {provider.handle, provider.display_name, shown}});
+        }
+    }
+    std::sort(found.begin(), found.end(),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<TalkProviderView> out;
+    out.reserve(found.size());
+    for (auto& item : found) out.push_back(std::move(item.second));
+    return out;
+}
+
+bool Registry::talk_page(ERUI_ProviderHandle provider_handle, ERUI_PageHandle page_handle,
+    std::vector<TalkRowView>& rows) const {
+    rows.clear();
+    std::vector<std::pair<std::size_t, erui::detail::TextInputState*>> text_states;
+    {
+        std::lock_guard lock(mutex_);
+        const auto provider_it = providers_.find(provider_handle);
+        if (provider_it == providers_.end() || !provider_it->second->committed) return false;
+        const auto page_it = provider_it->second->page_lookup.find(page_handle);
+        if (page_it == provider_it->second->page_lookup.end()) return false;
+        for (const Row* row : page_it->second->rows) {
+            TalkRowView view{};
+            view.handle = row->handle;
+            view.label = row->label;
+            view.enabled = row->enabled;
+            const std::uint8_t value = row->public_value.load(std::memory_order_acquire);
+            switch (row->kind) {
+            case RowKind::button: view.kind = TalkRowKind::button; break;
+            case RowKind::submenu:
+                view.kind = TalkRowKind::submenu;
+                view.child_page = row->child_page;
+                break;
+            case RowKind::toggle:
+                view.kind = TalkRowKind::toggle;
+                view.current = value ? 1u : 0u;
+                view.value = value ? kTalkOn : kTalkOff;
+                break;
+            case RowKind::slider:
+                view.kind = TalkRowKind::values;
+                view.value = std::to_wstring(static_cast<int>(value));
+                break;
+            case RowKind::numeric_slider:
+            case RowKind::custom_slider:
+                view.kind = TalkRowKind::values;
+                if (value < row->slider_value_texts.size()) view.value = row->slider_value_texts[value];
+                break;
+            case RowKind::inline_choice:
+            case RowKind::popup_choice:
+                view.kind = TalkRowKind::values;
+                if (value < row->choices.size()) view.value = row->choices[value];
+                break;
+            case RowKind::text_input:
+                view.kind = TalkRowKind::text;
+                if (row->text_input_state) {
+                    text_states.push_back({rows.size(), row->text_input_state.get()});
+                }
+                break;
+            default: view.kind = TalkRowKind::other; break;
+            }
+            rows.push_back(std::move(view));
+        }
+    }
+    for (const auto& [index, state] : text_states) {
+        try {
+            rows[index].value = state->snapshot().value;
+        } catch (...) {
+        }
+    }
+    return true;
+}
+
+bool Registry::talk_values(ERUI_ProviderHandle provider_handle, ERUI_RowHandle row_handle,
+    std::wstring& label, std::vector<std::wstring>& texts, std::uint32_t& current) const {
+    texts.clear();
+    std::lock_guard lock(mutex_);
+    const auto provider_it = providers_.find(provider_handle);
+    if (provider_it == providers_.end() || !provider_it->second->committed) return false;
+    const auto row_it = provider_it->second->row_lookup.find(row_handle);
+    if (row_it == provider_it->second->row_lookup.end()) return false;
+    const Row& row = *row_it->second;
+    label = row.label;
+    const std::uint8_t value = row.public_value.load(std::memory_order_acquire);
+    switch (row.kind) {
+    case RowKind::toggle:
+        texts = {kTalkOff, kTalkOn};
+        current = value ? 1u : 0u;
+        return true;
+    case RowKind::slider: {
+        const std::uint32_t count = talk_slider_count(row.slider);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            texts.push_back(std::to_wstring(row.slider.minimum + static_cast<int>(i) * row.slider.step));
+        }
+        current = row.slider.step > 0 && value >= row.slider.minimum
+            ? static_cast<std::uint32_t>((value - row.slider.minimum) / row.slider.step) : 0u;
+        return true;
+    }
+    case RowKind::numeric_slider:
+    case RowKind::custom_slider:
+        texts = row.slider_value_texts;
+        current = value;
+        return true;
+    case RowKind::inline_choice:
+    case RowKind::popup_choice:
+        texts = row.choices;
+        current = value;
+        return true;
+    default:
+        return false;
+    }
+}
+
+ERUI_Result Registry::talk_set_value(ERUI_ProviderHandle provider_handle,
+    ERUI_RowHandle row_handle, std::uint32_t index) noexcept {
+    std::lock_guard lock(mutex_);
+    const auto provider_it = providers_.find(provider_handle);
+    if (provider_it == providers_.end() || !provider_it->second->committed) return ERUI_INVALID_HANDLE;
+    const auto row_it = provider_it->second->row_lookup.find(row_handle);
+    if (row_it == provider_it->second->row_lookup.end()) return ERUI_INVALID_HANDLE;
+    Row& row = *row_it->second;
+    if (!row.enabled) return ERUI_INVALID_ARGUMENT;
+    std::uint32_t value = index;
+    switch (row.kind) {
+    case RowKind::toggle: value = index ? 1u : 0u; break;
+    case RowKind::slider:
+        if (index >= talk_slider_count(row.slider)) return ERUI_INVALID_ARGUMENT;
+        value = static_cast<std::uint32_t>(row.slider.minimum + static_cast<int>(index) * row.slider.step);
+        break;
+    case RowKind::numeric_slider:
+    case RowKind::custom_slider:
+        if (index >= row.slider_value_texts.size()) return ERUI_INVALID_ARGUMENT;
+        break;
+    case RowKind::inline_choice:
+    case RowKind::popup_choice:
+        if (index >= row.choices.size()) return ERUI_INVALID_ARGUMENT;
+        break;
+    default:
+        return ERUI_INVALID_ARGUMENT;
+    }
+    if (value > 0xFF) return ERUI_INVALID_ARGUMENT;
+    // As a player edit in the menu: the bound byte changes and the worker's
+    // next poll reports it to the provider. public_value is updated at once
+    // so the talk page shows the new value when it is rebuilt.
+    const auto byte = static_cast<std::uint8_t>(value);
+    row.public_value.store(byte, std::memory_order_release);
+    row.native_value = byte;
+    erui::native::mark_native_value_dirty(&row.native_value);
+    return ERUI_OK;
+}
+
+ERUI_Result Registry::talk_press(ERUI_ProviderHandle provider_handle,
+    ERUI_RowHandle row_handle) noexcept {
+    Row* row{};
+    {
+        std::lock_guard lock(mutex_);
+        const auto provider_it = providers_.find(provider_handle);
+        if (provider_it == providers_.end() || !provider_it->second->committed) return ERUI_INVALID_HANDLE;
+        const auto row_it = provider_it->second->row_lookup.find(row_handle);
+        if (row_it == provider_it->second->row_lookup.end()) return ERUI_INVALID_HANDLE;
+        if (row_it->second->kind != RowKind::button || !row_it->second->enabled) {
+            return ERUI_INVALID_ARGUMENT;
+        }
+        row = row_it->second;
+    }
+    button_bridge(row);
+    return ERUI_OK;
+}
+
 void Registry::button_bridge(void* user_data) noexcept {
     auto* row = static_cast<Row*>(user_data);
     if (!row) return;

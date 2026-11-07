@@ -1,4 +1,13 @@
 // Fork (r157): the shared talk menu (F11 by default). See talk_menu.hpp.
+//
+// Besides the ERNativeUIFork_Talk* exports, every committed ERNativeUI
+// provider with a Mod Settings page gets a row: its page and submenus become
+// talk pages, a toggle flips when chosen, a slider or choice opens a page with
+// its values, and a button runs its callback (the menu closes, as the button
+// may open a game menu). Values change as a player edit in the menu would
+// (Registry::talk_set_value), so the provider's callbacks and saving run as
+// usual. A provider that registered talk pages under the same name keeps only
+// those (NPC Spawner).
 
 #include "talk_menu.hpp"
 
@@ -13,16 +22,22 @@
 #include <cstdint>
 #include <cstdio>
 #include <cwchar>
+#include <deque>
 #include <iterator>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 // The Rust side (talk/src/lib.rs).
 extern "C" {
 using erui_talk_log_fn = void (*)(std::uint32_t level, const char* text, std::size_t length);
-using erui_talk_start_job_fn = std::uint32_t (*)(
-    std::uintptr_t start_job, std::uintptr_t function_vtable, std::uintptr_t factory);
-std::uint32_t erui_talk_start(erui_talk_log_fn log, erui_talk_start_job_fn start_job,
+using erui_talk_before_open_fn = void (*)();
+std::uint32_t erui_talk_start(erui_talk_log_fn log, erui_talk_before_open_fn before_open,
     const std::uint16_t* key, std::size_t key_length);
 std::uint32_t erui_talk_register(const std::uint16_t* name, std::size_t length,
+    ERUI_TalkBuildFn build, ERUI_TalkChooseFn choose, void* user, std::uint64_t* out);
+std::uint32_t erui_talk_register_settings(const std::uint16_t* name, std::size_t length,
     ERUI_TalkBuildFn build, ERUI_TalkChooseFn choose, void* user, std::uint64_t* out);
 std::uint32_t erui_talk_unregister(std::uint64_t entry);
 std::uint32_t erui_talk_add_row(
@@ -46,71 +61,216 @@ void log_sink(std::uint32_t level, const char* text, std::size_t length) {
     host::log::write(mapped, "%.*s", static_cast<int>(length), text);
 }
 
-using StartMenuJobFn = void* (*)(void* out, const void* function);
+// ---- Mod Settings pages as talk pages (game thread only)
 
-// start_job(out, std::function<DLRefPtr<MenuJob>(ComponentStack&)>) with a
-// plain function-pointer impl, laid out like the game's own (impl inline,
-// the pointer to it in the last slot). The returned handle does not own the
-// job (the job manager does), so nothing is released.
-std::uint32_t start_menu_job(
-    std::uintptr_t start_job, std::uintptr_t function_vtable, std::uintptr_t factory) {
-    alignas(16) void* function[8]{};
-    function[0] = reinterpret_cast<void*>(function_vtable);
-    function[1] = reinterpret_cast<void*>(factory);
-    function[7] = &function[0];
-    void* handle[2]{};
-    unsigned long code = 0;
-    __try {
-        reinterpret_cast<StartMenuJobFn>(start_job)(handle, function);
-    } __except (code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+using Registry = host::Registry;
+
+// Rows per talk page before "Next page" (the host adds Back; a page has
+// room for 63 rows).
+constexpr std::uint32_t kPerPage = 60;
+
+struct BridgePage {
+    ERUI_PageHandle page{};       // a Mod Settings page, or
+    ERUI_RowHandle values_row{};  // the row whose values are listed
+    std::uint32_t offset{};       // first row shown
+};
+
+enum class Act : std::uint8_t { none, press, toggle, values, submenu, set, turn };
+
+struct Action {
+    Act act{Act::none};
+    ERUI_RowHandle row{};
+    std::uint32_t value{};  // toggle: new value; set: index; values: current
+    std::uint32_t page{};   // submenu / turn: talk page id
+};
+
+struct Bridge {
+    ERUI_ProviderHandle provider{};
+    std::string name{};
+    std::vector<BridgePage> pages{};  // talk page id = index (0 = root)
+    std::unordered_map<std::uint32_t, std::vector<Action>> shown{};
+};
+
+std::deque<Bridge> g_bridges{};
+std::unordered_set<ERUI_ProviderHandle> g_bridged{};
+
+std::uint32_t intern(Bridge& bridge, ERUI_PageHandle page, ERUI_RowHandle values_row,
+    std::uint32_t offset) {
+    for (std::uint32_t id = 0; id < bridge.pages.size(); ++id) {
+        const BridgePage& known = bridge.pages[id];
+        if (known.page == page && known.values_row == values_row && known.offset == offset) return id;
     }
-    if (code != 0) {
-        host::log::write(LogLevel::error,
-            "talk menu: starting the Configuration job faulted (%08lX)", code);
-        return 0;
-    }
-    return 1;
+    bridge.pages.push_back({page, values_row, offset});
+    return static_cast<std::uint32_t>(bridge.pages.size() - 1);
 }
 
-// ---- the test provider ([TalkMenu] TestProvider=1 in ERNativeUI.ini)
-
-std::uint32_t g_test_counter{};
-bool g_test_toggle{};
-
-void add(ERUI_TalkMenu* menu, std::uint32_t row, const wchar_t* text) {
-    const ERUI_Utf16View view{reinterpret_cast<const std::uint16_t*>(text),
-        static_cast<std::uint32_t>(std::wcslen(text)), 0u};
-    (void)erui_talk_add_row(menu, row, view.data, view.length);
-}
-
-void ERUI_CALL test_build(void*, ERUI_TalkMenu* menu, std::uint32_t page) {
-    wchar_t text[96]{};
-    if (page == 0) {
-        std::swprintf(text, 96, L"Counter: %u (choose to add one)", g_test_counter);
-        add(menu, 1, text);
-        add(menu, 2, g_test_toggle ? L"Toggle: on" : L"Toggle: off");
-        add(menu, 3, L"A long list...");
-        add(menu, 4, L"Close the menu");
-        return;
-    }
-    for (std::uint32_t row = 1; row <= 30; ++row) {
-        std::swprintf(text, 96, L"Row %u (goes back)", row);
-        add(menu, row, text);
+void add(ERUI_TalkMenu* menu, std::vector<Action>& shown, const std::wstring& text, Action action) {
+    const std::uint32_t row = static_cast<std::uint32_t>(shown.size());
+    if (erui_talk_add_row(menu, row, reinterpret_cast<const std::uint16_t*>(text.data()),
+            text.size()) == ERUI_OK) {
+        shown.push_back(action);
     }
 }
 
-void ERUI_CALL test_choose(void*, ERUI_TalkMenu* menu, std::uint32_t page, std::uint32_t row) {
-    host::log::write("talk menu test provider: page %u row %u", page, row);
-    if (page != 0) {
+std::wstring page_counter(const wchar_t* what, std::uint32_t number, std::uint32_t count) {
+    return std::wstring(what) + L" (" + std::to_wstring(number) + L"/" + std::to_wstring(count) + L")";
+}
+
+void pagination(Bridge& bridge, ERUI_TalkMenu* menu, std::vector<Action>& shown,
+    const BridgePage& at, std::uint32_t total, bool before) {
+    const std::uint32_t pages = (total + kPerPage - 1) / kPerPage;
+    const std::uint32_t number = at.offset / kPerPage + 1;
+    if (before && at.offset > 0) {
+        add(menu, shown, page_counter(L"Previous page", number - 1, pages),
+            {Act::turn, 0, 0, intern(bridge, at.page, at.values_row, at.offset - kPerPage)});
+    }
+    if (!before && at.offset + kPerPage < total) {
+        add(menu, shown, page_counter(L"Next page", number + 1, pages),
+            {Act::turn, 0, 0, intern(bridge, at.page, at.values_row, at.offset + kPerPage)});
+    }
+}
+
+void ERUI_CALL bridge_build(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
+    Bridge& bridge = *static_cast<Bridge*>(user);
+    if (id >= bridge.pages.size()) {
         (void)erui_talk_back(menu);
         return;
     }
-    switch (row) {
-    case 1: ++g_test_counter; break;
-    case 2: g_test_toggle = !g_test_toggle; break;
-    case 3: (void)erui_talk_open_page(menu, 1); break;
-    case 4: (void)erui_talk_close(menu); break;
-    default: break;
+    const BridgePage at = bridge.pages[id];
+    std::vector<Action>& shown = bridge.shown[id];
+    shown.clear();
+    Registry& registry = host::registry();
+
+    if (at.values_row != ERUI_INVALID_ROW) {
+        std::wstring label;
+        std::vector<std::wstring> texts;
+        std::uint32_t current = 0;
+        if (!registry.talk_values(bridge.provider, at.values_row, label, texts, current)) {
+            (void)erui_talk_back(menu);
+            return;
+        }
+        const auto total = static_cast<std::uint32_t>(texts.size());
+        pagination(bridge, menu, shown, at, total, true);
+        for (std::uint32_t i = at.offset; i < total && i < at.offset + kPerPage; ++i) {
+            add(menu, shown, i == current ? texts[i] + L"  (current)" : texts[i],
+                {Act::set, at.values_row, i, 0});
+        }
+        pagination(bridge, menu, shown, at, total, false);
+        return;
+    }
+
+    std::vector<Registry::TalkRowView> rows;
+    if (!registry.talk_page(bridge.provider, at.page, rows)) {
+        (void)erui_talk_back(menu);
+        return;
+    }
+    const auto total = static_cast<std::uint32_t>(rows.size());
+    pagination(bridge, menu, shown, at, total, true);
+    for (std::uint32_t i = at.offset; i < total && i < at.offset + kPerPage; ++i) {
+        const Registry::TalkRowView& row = rows[i];
+        std::wstring text = row.label;
+        Action action{};
+        switch (row.kind) {
+        case Registry::TalkRowKind::button:
+            action = {Act::press, row.handle, 0, 0};
+            break;
+        case Registry::TalkRowKind::submenu:
+            if (text.size() < 3 || text.compare(text.size() - 3, 3, L"...") != 0) text += L"...";
+            action = {Act::submenu, row.handle, 0, intern(bridge, row.child_page, ERUI_INVALID_ROW, 0)};
+            break;
+        case Registry::TalkRowKind::toggle:
+            text += L": " + row.value;
+            action = {Act::toggle, row.handle, row.current ? 0u : 1u, 0};
+            break;
+        case Registry::TalkRowKind::values:
+            text += L": " + row.value;
+            action = {Act::values, row.handle, 0, 0};
+            break;
+        case Registry::TalkRowKind::text:
+            if (!row.value.empty()) text += L": " + row.value;
+            break;
+        default:
+            break;
+        }
+        if (text.empty()) continue;
+        if (!row.enabled) action = {};
+        add(menu, shown, text, action);
+    }
+    pagination(bridge, menu, shown, at, total, false);
+}
+
+void ERUI_CALL bridge_choose(void* user, ERUI_TalkMenu* menu, std::uint32_t id, std::uint32_t row) {
+    Bridge& bridge = *static_cast<Bridge*>(user);
+    const auto shown = bridge.shown.find(id);
+    if (shown == bridge.shown.end() || row >= shown->second.size()) return;
+    const Action action = shown->second[row];
+    Registry& registry = host::registry();
+    switch (action.act) {
+    case Act::press: {
+        const ERUI_Result result = registry.talk_press(bridge.provider, action.row);
+        host::log::write("talk menu: %s button %llu pressed (%u)", bridge.name.c_str(),
+            static_cast<unsigned long long>(action.row), static_cast<unsigned>(result));
+        (void)erui_talk_close(menu);
+        break;
+    }
+    case Act::toggle:
+    case Act::set: {
+        const ERUI_Result result = registry.talk_set_value(bridge.provider, action.row, action.value);
+        host::log::write("talk menu: %s row %llu set to %u (%u)", bridge.name.c_str(),
+            static_cast<unsigned long long>(action.row), static_cast<unsigned>(action.value),
+            static_cast<unsigned>(result));
+        if (action.act == Act::set) (void)erui_talk_back(menu);
+        break;
+    }
+    case Act::values: {
+        std::wstring label;
+        std::vector<std::wstring> texts;
+        std::uint32_t current = 0;
+        std::uint32_t offset = 0;
+        if (registry.talk_values(bridge.provider, action.row, label, texts, current)) {
+            offset = current / kPerPage * kPerPage;
+        }
+        (void)erui_talk_open_page(menu, intern(bridge, 0, action.row, offset));
+        break;
+    }
+    case Act::submenu:
+        (void)erui_talk_open_page(menu, action.page);
+        break;
+    case Act::turn:
+        (void)erui_talk_replace_page(menu, action.page);
+        break;
+    default:
+        break;
+    }
+}
+
+// Before the top list is built: a row for every provider committed since.
+void sync_providers() {
+    for (Registry::TalkProviderView& provider : host::registry().talk_providers()) {
+        if (!g_bridged.insert(provider.handle).second) continue;
+        Bridge& bridge = g_bridges.emplace_back();
+        bridge.provider = provider.handle;
+        char name[256]{};
+        WideCharToMultiByte(CP_UTF8, 0, provider.name.c_str(), -1, name, sizeof(name) - 1,
+            nullptr, nullptr);
+        bridge.name = name;
+        (void)intern(bridge, provider.root_page, ERUI_INVALID_ROW, 0);
+        std::uint64_t entry = 0;
+        const std::uint32_t result = erui_talk_register_settings(
+            reinterpret_cast<const std::uint16_t*>(provider.name.c_str()), provider.name.size(),
+            &bridge_build, &bridge_choose, &bridge, &entry);
+        if (result != ERUI_OK) {
+            host::log::write(LogLevel::warning, "talk menu: no row for \"%s\" (%u)", name,
+                static_cast<unsigned>(result));
+        }
+    }
+}
+
+void before_open() {
+    try {
+        sync_providers();
+    } catch (...) {
+        host::log::write(LogLevel::error, "talk menu: listing the Mod Settings pages failed");
     }
 }
 
@@ -120,18 +280,9 @@ bool passive() noexcept {
 
 } // namespace
 
-void start(bool test_provider, const wchar_t* key) noexcept {
+void start(const wchar_t* key) noexcept {
     if (g_started.exchange(true)) return;
-    if (test_provider) {
-        static constexpr wchar_t kName[] = L"ERNativeUI test";
-        std::uint64_t entry = 0;
-        const std::uint32_t result = erui_talk_register(
-            reinterpret_cast<const std::uint16_t*>(kName), std::size(kName) - 1,
-            &test_build, &test_choose, nullptr, &entry);
-        host::log::write("talk menu: test provider row %s (%u)",
-            result == ERUI_OK ? "added" : "failed", static_cast<unsigned>(result));
-    }
-    const std::uint32_t result = erui_talk_start(&log_sink, &start_menu_job,
+    const std::uint32_t result = erui_talk_start(&log_sink, &before_open,
         reinterpret_cast<const std::uint16_t*>(key), key ? std::wcslen(key) : 0u);
     if (result != ERUI_OK) {
         host::log::write(LogLevel::error, "talk menu: start failed (%u)",

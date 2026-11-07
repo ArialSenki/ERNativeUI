@@ -331,6 +331,13 @@ bool initialize(const std::filesystem::path& path) noexcept {
         g_file = INVALID_HANDLE_VALUE;
     }
 
+    // r157: keep the previous run's log as <name>.previous.log, so a
+    // crash or hang is still readable after the game is started again.
+    {
+        std::filesystem::path previous = path;
+        previous.replace_extension(L".previous.log");
+        (void)MoveFileExW(path.c_str(), previous.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
     g_file = CreateFileW(
         path.c_str(),
         GENERIC_WRITE,

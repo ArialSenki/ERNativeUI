@@ -273,12 +273,24 @@ the definitive answer.
 
 r157. **F11** (or the `[TalkMenu] Key` below), in a game with no other menu
 open, opens the game's own
-talk-list dialog (as a merchant's): one row per
-registered provider, a **Mod Settings** row that opens the Configuration
-screen, and **Leave**. Choosing a provider's row opens that provider's own
-pages. Typedefs are in `include/ernativeui/erui_fork_talk.h`; the dialog is a
-Rust static library (`talk/`) linked into `ERNativeUI.dll`, the exports are in
-`src/talk_menu.cpp`.
+talk-list dialog (as a merchant's): one row per mod, then **Leave**.
+Typedefs are in `include/ernativeui/erui_fork_talk.h`; the dialog is a Rust
+static library (`talk/`) linked into `ERNativeUI.dll`, the exports and the
+Mod Settings pages are in `src/talk_menu.cpp`.
+
+**Mod Settings pages, automatically.** Every committed provider whose Mod
+Settings page has rows gets a row named after it, with nothing to call: its
+page and submenus become talk pages, live. A toggle flips when chosen
+(`Name: On`), a slider, numeric or custom slider or choice opens a page with
+its values (`(current)` marks the one in use; picking one goes back), a
+submenu opens its page, a button runs its callback and closes the menu (it
+may open a game menu), a text input shows its value. Long pages are split
+into pages of 60 rows. A value is changed as a player edit in the
+Configuration screen would change it, so the provider's change callback runs
+on the ERNativeUI worker within about 50 ms and saving works as usual.
+Disabled rows are shown but do nothing. These rows come first in the list,
+in Mod Settings order; a provider that also registers talk pages
+(`ERNativeUIFork_TalkRegister`) under the same name keeps only those.
 
 The presence of `ERNativeUIFork_TalkRegister` means the host owns the
 talk-menu key: a mod with its own talk-menu hotkey (NPC Spawner's Ctrl+F11)
@@ -340,13 +352,10 @@ changed that function's bytes the menu does not open and the log says so.
 Enable=1        ; 0 turns the key and the exports' menu off
 Key=F11         ; F1-F24, Home, End, Insert, Delete, PageUp, PageDown, Pause,
                 ; ScrollLock, with optional Ctrl+ / Alt+ / Shift+ (e.g. Ctrl+Home)
-TestProvider=0  ; 1 adds an "ERNativeUI test" row (counter, toggle, long list)
 ```
 
 Supported game versions: those of fromsoftware-rs (WW 2.7.0.0, 2.7.1.0,
-2.7.2.0, JP 2.7.0.1, 2.7.1.1, 2.7.2.1) and of ERNativeUI. The Mod Settings
-row's code is found by bytes (`talk/src/settings.rs`); without it, the row is
-left out and the log says why.
+2.7.2.0, JP 2.7.0.1, 2.7.1.1, 2.7.2.1) and of ERNativeUI.
 
 ## Example
 

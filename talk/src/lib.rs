@@ -2,11 +2,12 @@
 //!
 //! A key (F11 by default, ERNativeUI.ini [TalkMenu] Key; hotkey.rs), in a
 //! game with no other menu open, opens the game's own
-//! talk-list dialog, as a merchant's, with one row per mod that registered
-//! through the ERNativeUIFork_Talk* exports (src/talk_menu.cpp, documented in
-//! docs/fork/api.md), a "Mod Settings" row that opens the Configuration
-//! screen, and Leave. Choosing a mod's row opens that mod's own pages, which
-//! it fills from callbacks on the game thread.
+//! talk-list dialog, as a merchant's, with one row per mod: the Mod Settings
+//! pages of every ERNativeUI provider (shown by src/talk_menu.cpp, values
+//! changed live) and the talk pages of mods that registered through the
+//! ERNativeUIFork_Talk* exports (documented in docs/fork/api.md), and Leave.
+//! Choosing a mod's row opens its pages, filled from callbacks on the game
+//! thread.
 //!
 //! The dialog is driven through TalkScript (fromsoftware-rs, as in its
 //! examples/invoke-esd and NPC Spawner's dialog.rs), with our own texts
@@ -16,7 +17,6 @@
 mod hotkey;
 mod mem;
 mod nav;
-mod settings;
 mod texts;
 
 use std::{
@@ -103,6 +103,9 @@ pub type ChooseFn = unsafe extern "C" fn(user: *mut c_void, menu: *mut Ctx, page
 #[derive(Clone)]
 struct Entry {
     id: u64,
+    /// A provider's Mod Settings pages (talk_menu.cpp); a talk entry of the
+    /// same name hides it.
+    settings: bool,
     name: Vec<u16>,
     build: BuildFn,
     choose: ChooseFn,
@@ -113,16 +116,10 @@ static ENTRIES: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// Open request from erui_talk_open: u64::MAX none, 0 top list, else entry.
 static PENDING_OPEN: AtomicU64 = AtomicU64::new(u64::MAX);
-/// Runs the game's menu job start (C++, guarded against faults):
-/// start_job(out, std::function{impl vtable, factory}). 1 = started.
-type StartJobFn = unsafe extern "C" fn(start_job: usize, function_vtable: usize, factory: usize) -> u32;
-static START_JOB: AtomicUsize = AtomicUsize::new(0);
-/// Where the Configuration screen opener is, when found.
-static OPENER: OnceLock<Option<settings::Opener>> = OnceLock::new();
-
-fn settings_available() -> bool {
-    START_JOB.load(Ordering::Acquire) != 0 && OPENER.get().is_some_and(|o| o.is_some())
-}
+/// Called on the game thread before the top list is built, so the C++ side
+/// can add rows for providers committed since (talk_menu.cpp).
+type BeforeOpenFn = unsafe extern "C" fn();
+static BEFORE_OPEN: AtomicUsize = AtomicUsize::new(0);
 static HOTKEY: OnceLock<hotkey::Hotkey> = OnceLock::new();
 static STARTED: AtomicBool = AtomicBool::new(false);
 /// The context of the callback being run (null outside callbacks).
@@ -163,13 +160,12 @@ fn current(ctx: *mut Ctx) -> Option<&'static mut Ctx> {
 
 // ---- C interface (wrapped by src/talk_menu.cpp)
 
-/// Starts the menu (once): the log sink, the guarded menu-job starter for
-/// the Mod Settings row (may be null) and the game's frame task, from a
-/// background thread.
+/// Starts the menu (once): the log sink, the before-open hook (may be null),
+/// the key, and the game's frame task, from a background thread.
 #[unsafe(no_mangle)]
 pub extern "C" fn erui_talk_start(
     log: Option<LogFn>,
-    start_job: Option<StartJobFn>,
+    before_open: Option<BeforeOpenFn>,
     key: *const u16,
     key_len: usize,
 ) -> u32 {
@@ -182,8 +178,8 @@ pub extern "C" fn erui_talk_start(
         log_warn(&format!("talk menu: [TalkMenu] Key = \"{text}\" is not a key this build knows; using {}", hotkey::DEFAULT));
     }
     let _ = HOTKEY.set(parsed.or_else(|| hotkey::parse(hotkey::DEFAULT)).expect("default key"));
-    if let Some(f) = start_job {
-        START_JOB.store(f as usize, Ordering::Release);
+    if let Some(f) = before_open {
+        BEFORE_OPEN.store(f as usize, Ordering::Release);
     }
     if STARTED.swap(true, Ordering::AcqRel) {
         return ERUI_OK;
@@ -203,23 +199,6 @@ fn start_task() {
     // The message lookup is found by its bytes; another mod may have it
     // hooked for a moment, so the frame task tries again before each open.
     texts::install();
-    let opener = match settings::find() {
-        Ok(o) => {
-            let base = mem::image().0;
-            log_info(&format!(
-                "talk menu: Configuration opener found (start job +{:#X}, function vtable +{:#X}, in-game job +{:#X})",
-                o.start_job - base,
-                o.function_vtable - base,
-                o.option_job - base
-            ));
-            Some(o)
-        }
-        Err(e) => {
-            log_warn(&format!("talk menu: no Mod Settings row ({e})"));
-            None
-        }
-    };
-    let _ = OPENER.set(opener);
     let start = std::time::Instant::now();
     let task = loop {
         match CSTaskImp::wait_for_instance(Duration::ZERO) {
@@ -233,10 +212,9 @@ fn start_task() {
     };
     std::mem::forget(task.run_recurring(frame as fn(&FD4TaskData), CSTaskGroupIndex::FrameBegin));
     log_info(&format!(
-        "talk menu: frame task installed; {} opens it ({} rows registered, Mod Settings row {})",
+        "talk menu: frame task installed; {} opens it ({} talk rows registered so far)",
         HOTKEY.get().map_or("?", |h| h.name.as_str()),
         ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).len(),
-        if settings_available() { "on" } else { "off" }
     ));
 }
 
@@ -249,6 +227,31 @@ pub extern "C" fn erui_talk_register(
     user: *mut c_void,
     out: *mut u64,
 ) -> u32 {
+    register(name, name_len, build, choose, user, out, false)
+}
+
+/// A provider's Mod Settings pages (talk_menu.cpp only).
+#[unsafe(no_mangle)]
+pub extern "C" fn erui_talk_register_settings(
+    name: *const u16,
+    name_len: usize,
+    build: Option<BuildFn>,
+    choose: Option<ChooseFn>,
+    user: *mut c_void,
+    out: *mut u64,
+) -> u32 {
+    register(name, name_len, build, choose, user, out, true)
+}
+
+fn register(
+    name: *const u16,
+    name_len: usize,
+    build: Option<BuildFn>,
+    choose: Option<ChooseFn>,
+    user: *mut c_void,
+    out: *mut u64,
+    settings: bool,
+) -> u32 {
     let (Some(build), Some(choose)) = (build, choose) else { return ERUI_INVALID_ARGUMENT };
     let Some(name) = text_of(name, name_len).filter(|n| !n.is_empty()) else { return ERUI_INVALID_ARGUMENT };
     let mut entries = ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
@@ -256,8 +259,12 @@ pub extern "C" fn erui_talk_register(
         return ERUI_QUEUE_FULL;
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    log_info(&format!("talk menu: row \"{}\" registered (id {id})", String::from_utf16_lossy(&name)));
-    entries.push(Entry { id, name, build, choose, user: user as usize });
+    log_info(&format!(
+        "talk menu: row \"{}\" registered (id {id}{})",
+        String::from_utf16_lossy(&name),
+        if settings { ", Mod Settings pages" } else { "" }
+    ));
+    entries.push(Entry { id, settings, name, build, choose, user: user as usize });
     if !out.is_null() {
         unsafe { *out = id };
     }
@@ -350,8 +357,6 @@ struct Menu {
     stack: Vec<Level>,
     rows: Vec<Row>,
     key_prev: bool,
-    /// Frames until the Configuration screen opens (0 = no request).
-    settings_in: u32,
 }
 
 // Only touched from the game's frame task.
@@ -401,7 +406,6 @@ fn frame_inner() {
         stack: Vec::new(),
         rows: Vec::new(),
         key_prev: false,
-        settings_in: 0,
     });
 
     let down = HOTKEY
@@ -410,13 +414,6 @@ fn frame_inner() {
     let pressed = down && !m.key_prev;
     m.key_prev = down;
     let request = PENDING_OPEN.swap(u64::MAX, Ordering::AcqRel);
-
-    if m.settings_in > 0 {
-        m.settings_in -= 1;
-        if m.settings_in == 0 {
-            open_settings();
-        }
-    }
 
     let Ok(world) = (unsafe { WorldChrMan::instance() }) else {
         close(m);
@@ -476,15 +473,26 @@ fn close(m: &mut Menu) {
     IS_OPEN.store(false, Ordering::Release);
 }
 
-fn open_settings() {
-    let f = START_JOB.load(Ordering::Acquire);
-    let Some(Some(o)) = OPENER.get().copied() else { return };
-    if f == 0 {
-        return;
+fn before_open() {
+    let f = BEFORE_OPEN.load(Ordering::Acquire);
+    if f != 0 {
+        let f: BeforeOpenFn = unsafe { std::mem::transmute(f) };
+        unsafe { f() };
     }
-    let f: StartJobFn = unsafe { std::mem::transmute(f) };
-    let ok = unsafe { f(o.start_job, o.function_vtable, o.option_job) };
-    log_info(&format!("talk menu: Mod Settings -> Configuration screen {}", if ok != 0 { "requested" } else { "failed" }));
+}
+
+/// The top list: Mod Settings pages first, then talk entries; a provider's
+/// Mod Settings pages are left out when it registered talk pages of the same
+/// name (NPC Spawner).
+fn top_entries() -> Vec<Entry> {
+    let entries = ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut out: Vec<Entry> = entries
+        .iter()
+        .filter(|e| !e.settings || !entries.iter().any(|t| !t.settings && t.name == e.name))
+        .cloned()
+        .collect();
+    out.sort_by_key(|e| (!e.settings, e.id));
+    out
 }
 
 /// Runs a provider callback with a fresh context.
@@ -516,12 +524,9 @@ fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
         rows.clear();
         match level {
             Level::Top => {
-                let entries = ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                for e in entries.iter() {
-                    rows.push((Row::Entry(e.id), e.name.clone()));
-                }
-                if settings_available() {
-                    rows.push((Row::ModSettings, "Mod Settings".encode_utf16().collect()));
+                before_open();
+                for e in top_entries() {
+                    rows.push((Row::Entry(e.id), e.name));
                 }
                 rows.push((Row::Leave, Vec::new()));
                 break;
@@ -603,10 +608,6 @@ fn poll(m: &mut Menu) -> Result<(), EzStateInvokeError> {
     let level = m.stack.last().copied();
     let next = match (chosen, level) {
         (Some(Row::Entry(id)), _) => Nav::Enter(id),
-        (Some(Row::ModSettings), _) => {
-            m.settings_in = 2;
-            Nav::Close
-        }
         (Some(Row::Provider(row)), Some(Level::Provider { entry: id, page })) => match entry(id) {
             Some(e) => call(false, &e, page, row).nav,
             None => Nav::Back,
