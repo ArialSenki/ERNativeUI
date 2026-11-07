@@ -2842,6 +2842,26 @@ ERUI_Result Registry::set_text_input_value(
     }
 }
 
+ERUI_Result Registry::set_text_input_read_only(
+    ERUI_ProviderHandle provider_handle,
+    ERUI_RowHandle row_handle,
+    bool read_only) noexcept {
+    std::lock_guard lock(mutex_);
+    const auto provider_it = providers_.find(provider_handle);
+    if (provider_it == providers_.end()) return ERUI_INVALID_HANDLE;
+    Provider& provider = *provider_it->second;
+    if (provider.api_version < ERUI_API_VERSION_1_1) return ERUI_NOT_SUPPORTED;
+    // Allowed before commit too, so a client can create the row read-only.
+    const auto row_it = provider.row_lookup.find(row_handle);
+    if (row_it == provider.row_lookup.end()) return ERUI_INVALID_HANDLE;
+    if (row_it->second->kind != RowKind::text_input ||
+        !row_it->second->text_input_state) {
+        return ERUI_INVALID_ARGUMENT;
+    }
+    row_it->second->text_input_state->set_read_only(read_only);
+    return ERUI_OK;
+}
+
 ERUI_Result Registry::get_text_input_value(
     ERUI_ProviderHandle provider_handle,
     ERUI_RowHandle row_handle,

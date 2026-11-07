@@ -4639,6 +4639,108 @@ const char* submenu_resolution_name(
     return "unknown";
 }
 
+// Fork r156 (NPC Test Arena and NativeTweaks screenshots): a page this host
+// opens with open_sub_page leaves its parent dialog drawn faintly underneath,
+// so a shorter child shows the parent's title and rows through it. Vanilla
+// subpages (Graphics > Advanced) cover their parent. The parent stays alive
+// for Back, so its panel scene object (+0x1200) is hidden while the child is
+// open and shown again on Back. Both objects are checked first: the parent must
+// be an OptionSetting dialog and +0x1200 the scene proxy of the validated
+// carrier profile; anything else is left alone.
+std::atomic_uint32_t g_parent_panel_log_count{};
+
+bool set_page_panel_visible(void* page, bool visible) noexcept {
+#if defined(ER_NATIVE_UI_CUSTOM_TABS_BACKEND)
+    using SetVisibleFn = void(__fastcall*)(void* proxy, std::uint8_t visible);
+    const auto set_visible =
+        reinterpret_cast<SetVisibleFn>(g_addresses.scaleform_visibility_setter);
+    // g_tab_carrier_build_profile is only set when a client registers a custom
+    // tab, so look the running build's profile up directly (test3 returned
+    // here without hiding anything).
+    const TabCarrierBuildProfile* profile = g_tab_carrier_build_profile;
+    if (!profile && g_addresses.game_image_base) {
+#if defined(_MSC_VER)
+        __try {
+#endif
+            const auto* const dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(
+                g_addresses.game_image_base);
+            if (dos->e_magic == IMAGE_DOS_SIGNATURE && dos->e_lfanew > 0 &&
+                static_cast<std::size_t>(dos->e_lfanew) +
+                        sizeof(IMAGE_NT_HEADERS64) <= g_addresses.game_image_size) {
+                const auto* const nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+                    reinterpret_cast<const std::byte*>(g_addresses.game_image_base) +
+                    dos->e_lfanew);
+                if (nt->Signature == IMAGE_NT_SIGNATURE &&
+                    nt->OptionalHeader.SizeOfImage == g_addresses.game_image_size) {
+                    profile = find_tab_carrier_build_profile(
+                        nt->FileHeader.TimeDateStamp,
+                        nt->OptionalHeader.SizeOfImage);
+                }
+            }
+#if defined(_MSC_VER)
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            profile = nullptr;
+        }
+#endif
+    }
+    if (!page || !set_visible || !profile || !g_addresses.game_image_base ||
+        !profile->option_setting_dialog_vtable_rva ||
+        !profile->scene_obj_proxy_vtable_rva) {
+        // 1.17 (2.7.0.0) has no carrier profile: the old behaviour stays there.
+        if (g_parent_panel_log_count.fetch_add(1, std::memory_order_relaxed) == 0) {
+            erui::detail::logf(erui::LogLevel::warning,
+                "Parent page panel unavailable: page=%p setter=%u profile=%u",
+                page, set_visible ? 1U : 0U, profile ? 1U : 0U);
+        }
+        return false;
+    }
+    const auto image =
+        reinterpret_cast<std::uintptr_t>(g_addresses.game_image_base);
+    bool applied = false;
+    std::uintptr_t page_vtable_rva{};
+    std::uintptr_t proxy_vtable_rva{};
+#if defined(_MSC_VER)
+    __try {
+#endif
+        void* const page_vtable = *static_cast<void* const*>(page);
+        auto* const proxy = static_cast<std::byte*>(page) + kPanelSceneProxyOffset;
+        void* const proxy_vtable = *reinterpret_cast<void* const*>(proxy);
+        page_vtable_rva = reinterpret_cast<std::uintptr_t>(page_vtable) - image;
+        proxy_vtable_rva = reinterpret_cast<std::uintptr_t>(proxy_vtable) - image;
+        if (page_vtable == reinterpret_cast<void*>(
+                image + profile->option_setting_dialog_vtable_rva) &&
+            proxy_vtable == reinterpret_cast<void*>(
+                image + profile->scene_obj_proxy_vtable_rva)) {
+            set_visible(proxy, visible ? 1 : 0);
+            applied = true;
+        }
+#if defined(_MSC_VER)
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        applied = false;
+    }
+#endif
+    // Applied: trace. Rejected: one warning per process is enough to diagnose.
+    if (applied ? erui::detail::trace_logging()
+                : g_parent_panel_log_count.fetch_add(1, std::memory_order_relaxed) == 0) {
+        erui::detail::logf(
+            applied ? erui::LogLevel::trace : erui::LogLevel::warning,
+            "Parent page panel %s page=%p applied=%u pageVtable=+0x%llX (want +0x%llX) proxyVtable=+0x%llX (want +0x%llX)",
+            visible ? "shown" : "hidden",
+            page,
+            applied ? 1U : 0U,
+            static_cast<unsigned long long>(page_vtable_rva),
+            static_cast<unsigned long long>(profile->option_setting_dialog_vtable_rva),
+            static_cast<unsigned long long>(proxy_vtable_rva),
+            static_cast<unsigned long long>(profile->scene_obj_proxy_vtable_rva));
+    }
+    return applied;
+#else
+    (void)page;
+    (void)visible;
+    return false;
+#endif
+}
+
 void __fastcall sub_handler_detour(
     void* page,
     std::uintptr_t argument2,
@@ -4773,6 +4875,15 @@ void __fastcall sub_handler_detour(
     const std::uint32_t injection =
         g_sub_injection_count.fetch_add(1, std::memory_order_relaxed) + 1;
     const RowInjectionOutcome outcome = inject_page_route(page, route, g_addresses);
+    if (resolution.kind == erui::detail::SubmenuResolutionKind::pending_request) {
+        void* const parent = g_submenu_navigation.parent_page(page);
+        if (parent && parent != page) {
+            set_page_panel_visible(parent, false);
+        } else if (g_parent_panel_log_count.fetch_add(1, std::memory_order_relaxed) == 0) {
+            erui::detail::logf(erui::LogLevel::warning,
+                "Parent page panel not hidden: child=%p parent=%p", page, parent);
+        }
+    }
     const erui::detail::ResolvedPagePresentation presentation =
         runtime.menu->resolve_presentation(route);
     const wchar_t* const outer_title = runtime.menu->texts.lookup(
@@ -4879,6 +4990,7 @@ void __fastcall dialog_back_gate_detour(
     if (restored_parent) {
         g_submenu_navigation.unbind_native_page(page);
         g_dialog_input_page.store(restored_parent, std::memory_order_release);
+        set_page_panel_visible(restored_parent, true);
     }
 }
 
@@ -6090,6 +6202,7 @@ void request_navigate_page(
             if (restored_page) {
                 g_dialog_input_page.store(
                     restored_page, std::memory_order_release);
+                set_page_panel_visible(restored_page, true);
             }
         }
         erui::detail::logf(

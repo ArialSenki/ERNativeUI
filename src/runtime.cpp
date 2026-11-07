@@ -556,14 +556,18 @@ InstallResult install_impl(
     // Native tabs become process-lifetime once their hooks are installed.
     // Keep this as the terminal fallible install stage so a successful tab
     // install is never followed by rollback work.
+    // Fork r156: a failure here only turns the custom tabs off. Before, one
+    // client's add_tab took the whole host down, Mod Settings included.
+    // install_native_tabs() leaves no hook behind on failure, or a pinned
+    // unarmed runtime whose callbacks stay native no-ops.
     if (runtime.tab_catalogue &&
         runtime.tab_catalogue->custom_count() != 0 &&
         !erui::native::install_native_tabs(
             *runtime.tab_catalogue, preserved_shared_addresses)) {
         detail::logf(
             LogLevel::error,
-            "Failed to install the native custom-tab backend after menu hooks");
-        return fail_install(InstallError::hook_install_failed);
+            "Failed to install the native custom-tab backend after menu hooks; the %zu custom tab(s) stay off and the rest of the menu keeps working",
+            runtime.tab_catalogue->custom_count());
     }
 
     detail::logf(LogLevel::info, "ERNativeUI install completed successfully");

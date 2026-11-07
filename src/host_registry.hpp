@@ -249,6 +249,11 @@ public:
         ERUI_ProviderHandle provider,
         ERUI_RowHandle row,
         const ERUI_Utf16View* value) noexcept;
+    // Fork: a read-only TextInput shows its value live but opens no editor.
+    ERUI_Result set_text_input_read_only(
+        ERUI_ProviderHandle provider,
+        ERUI_RowHandle row,
+        bool read_only) noexcept;
     ERUI_Result get_text_input_value(
         ERUI_ProviderHandle provider,
         ERUI_RowHandle row,

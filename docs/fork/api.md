@@ -22,6 +22,7 @@ The implementations live in `src/host_api.cpp`, `src/host_dllmain.cpp`
 |---|---|
 | [`ERNativeUIFork_SetRowText`](#ernativeuifork_setrowtext) | Change a row's label and/or help text at run time |
 | [`ERNativeUIFork_SetSubmenuText`](#ernativeuifork_setsubmenutext) | Change a submenu row's texts and its page title/help at run time |
+| [`ERNativeUIFork_SetTextInputReadOnly`](#ernativeuifork_settextinputreadonly) | Make a TextInput a read-only live display (no editor) |
 | [`ERNativeUIFork_SetCustomSliderValues`](#ernativeuifork_setcustomslidervalues) | Replace the per-position texts of a custom or numeric slider |
 | [`ERNativeUIFork_SetRowDefault`](#ernativeuifork_setrowdefault) | Register a row's default value for the changed-value label colour |
 | [`ERNativeUIFork_SetRowDefaultEx`](#ernativeuifork_setrowdefaultex) | As above, with flags (inverted sliders) |
@@ -74,6 +75,11 @@ Replaces the label and/or help of any row of a committed provider. Passing
 `NULL` (or a view whose `data` is `NULL`) for one of them keeps the current
 text.
 
+The new text is used the next time the row is built: a page that is open
+keeps showing the old text until it is opened again. For a value that changes
+while the page is open, use a read-only TextInput
+([`SetTextInputReadOnly`](#ernativeuifork_settextinputreadonly)).
+
 | Result | When |
 |---|---|
 | `ERUI_OK` | Applied (or stored for compilation) |
@@ -103,6 +109,32 @@ then ignored.
 
 Results as for `SetRowText`, plus `ERUI_INVALID_ARGUMENT` when no submenu row
 of that provider opens `page`.
+
+### `ERNativeUIFork_SetTextInputReadOnly`
+
+```c
+ERUI_Result ERUI_CALL ERNativeUIFork_SetTextInputReadOnly(
+    ERUI_ProviderHandle provider,
+    ERUI_RowHandle row,      /* a row from add_text_input */
+    uint32_t read_only);     /* 1: read-only, 0: editable */
+```
+
+A read-only TextInput keeps showing its value, and `set_text_input_value`
+still updates it at once while the page is open, but selecting it opens no
+editor. It is meant for status lines ("Status", "Selected", counters). The
+value keeps the normal (white) text colour. The flag is read when the row is
+built, that is each time its page opens: set it before `commit_provider` so
+the row is read-only from the start; a change made while the page is open
+applies the next time it opens. Values are limited to the TextInput maximum
+length (35 UTF-16 units).
+
+| Result | When |
+|---|---|
+| `ERUI_OK` | Applied |
+| `ERUI_INVALID_ARGUMENT` | The row is not a TextInput |
+| `ERUI_INVALID_HANDLE` | Unknown provider, or row not owned by it |
+| `ERUI_NOT_SUPPORTED` | Provider registered with API 1.0 |
+| `ERUI_HOST_NOT_READY`, `ERUI_HOST_FAILED` | Host initializing, failed or passive copy |
 
 ### `ERNativeUIFork_SetCustomSliderValues`
 

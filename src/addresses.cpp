@@ -323,6 +323,11 @@ constexpr std::size_t kNativeBackHookablePrologue = 22;
 // The same for the Scaleform visibility setter: everything up to its virtual call
 // (2 + 4 + 3 + 3 + 3), the whole instructions a 14-byte absolute jump covers.
 constexpr std::size_t kScaleformVisibilitySetterHookablePrologue = 15;
+// r156 (Nexus: Nightreign Movement for Convergence hooks this entry and every
+// menu stayed off): text ref help is only called, so a detour on it is fine.
+// Its prologue up to the stack cookie load (3 + 1 + 7 + 8) holds whole
+// instructions that a 5-byte or 14-byte jump covers; the rest is checked.
+constexpr std::size_t kTextRefHelpHookablePrologue = 19;
 
 [[nodiscard]] std::string_view pattern_after_bytes(
     std::string_view pattern,
@@ -1720,8 +1725,8 @@ bool resolve_game_addresses(
             menu_runtime_profile
                 ? menu_runtime_profile->text_ref_help_rva
                 : std::uintptr_t{0},
-            "4C 8B DC 57 48 81 EC 90 00 00 00",
-            FallbackRvaSource::exact_build_profile));
+            kTextRefHelpPattern,
+            FallbackRvaSource::exact_build_profile, kTextRefHelpHookablePrologue));
         output.text_ref_label = reinterpret_cast<TextReferenceFn>(resolve_call_target(
             game,
             "text ref label",

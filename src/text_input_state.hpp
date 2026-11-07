@@ -50,6 +50,15 @@ public:
     }
     [[nodiscard]] bool set_programmatic(std::wstring_view value);
 
+    // Fork r156: a read-only row keeps showing its live value but never opens
+    // the editor. Read when the row is built (each time its page opens).
+    [[nodiscard]] bool read_only() const noexcept {
+        return read_only_.load(std::memory_order_acquire);
+    }
+    void set_read_only(bool value) noexcept {
+        read_only_.store(value, std::memory_order_release);
+    }
+
     // Called only after the native editor has committed to native_value. A
     // changed value is queued for the host worker; an identical confirmation
     // intentionally produces no callback.
@@ -68,6 +77,7 @@ private:
     const std::uint32_t maximum_length_{};
     std::uint64_t revision_{1};
     std::atomic<std::uint64_t> published_revision_{1};
+    std::atomic_bool read_only_{};
     std::deque<std::wstring> committed_changes_{};
 };
 

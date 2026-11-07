@@ -535,27 +535,46 @@ bool install_hooks_and_interfaces(
         tabs_build().timestamp == kNativeTabsBuildProfiles[0].timestamp
         ? entry_matches(kEarlySlotGrowthRva, kEarlySlotGrowth271)
         : entry_matches(kEarlySlotGrowthRva, kEarlySlotGrowth272);
-    const bool slot_growth_interfaces_match =
-        entry_matches(kTopConstructorRva, kTopConstructorEntry) &&
-        early_slot_growth_matches &&
-        entry_matches(
-            kFirstCountPublicationRva, kFirstCountPublication) &&
-        entry_matches(
-            kSelectorGeometryDispatchRva, kSelectorGeometryDispatch) &&
-        entry_matches(
-            kPostGeometryObservationRva, kPostGeometryObservation) &&
-        entry_matches(
-            kCountPropagationDispatchRva, kCountPropagationDispatch) &&
-        entry_matches(
-            kPostConstructorObservationRva,
-            kPostConstructorObservation) &&
-        entry_matches(kCategoryAppendRva, kCategoryAppendEntry) &&
-        entry_matches(
-            kCategoryCountGetterRva, kCategoryCountGetterEntry) &&
-        entry_matches(
-            kSelectorSetActiveCountRva, kSelectorCountSetterEntry) &&
-        entry_matches(
-            kSelectorGeometryEnumeratorRva, kGeometryEnumeratorEntry);
+#endif
+    // Fork r156: every check carries a name so a failure says which interface
+    // differs (Nexus/NPC Test Arena: the log only said "one or more").
+    struct NamedInterfaceCheck {
+        const char* name;
+        bool matches;
+    };
+#if defined(ER_NATIVE_UI_PRODUCTION_TABS)
+    const NamedInterfaceCheck slot_growth_checks[]{
+        {"topConstructor",
+            entry_matches(kTopConstructorRva, kTopConstructorEntry)},
+        {"earlySlotGrowth", early_slot_growth_matches},
+        {"firstCountPublication",
+            entry_matches(
+                kFirstCountPublicationRva, kFirstCountPublication)},
+        {"selectorGeometryDispatch",
+            entry_matches(
+                kSelectorGeometryDispatchRva, kSelectorGeometryDispatch)},
+        {"postGeometryObservation",
+            entry_matches(
+                kPostGeometryObservationRva, kPostGeometryObservation)},
+        {"countPropagationDispatch",
+            entry_matches(
+                kCountPropagationDispatchRva, kCountPropagationDispatch)},
+        {"postConstructorObservation",
+            entry_matches(
+                kPostConstructorObservationRva,
+                kPostConstructorObservation)},
+        {"categoryAppend",
+            entry_matches(kCategoryAppendRva, kCategoryAppendEntry)},
+        {"categoryCountGetter",
+            entry_matches(
+                kCategoryCountGetterRva, kCategoryCountGetterEntry)},
+        {"selectorSetActiveCount",
+            entry_matches(
+                kSelectorSetActiveCountRva, kSelectorCountSetterEntry)},
+        {"selectorGeometryEnumerator",
+            entry_matches(
+                kSelectorGeometryEnumeratorRva, kGeometryEnumeratorEntry)},
+    };
 #endif
 
     const bool pristine_resolve_path_entry_matches =
@@ -603,59 +622,101 @@ bool install_hooks_and_interfaces(
         return false;
     }
 
-    if (!entry_matches(kSelectionCallbackRva, kSelectionEntry) ||
-        !entry_matches(kCompositeFrameRva, kCompositeFrameEntry) ||
-        !selector_select_interface_matches ||
-        !entry_matches(
-            kInputDispatchFrameBeginRva,
-            kInputDispatchFrameBeginBytes) ||
-        !entry_matches(
-            kPointerDispatchResultRva,
-            kPointerDispatchResultBytes) ||
-        !entry_matches(
-            kHorizontalNavigationCommitRva,
-            kHorizontalNavigationCommitBytes) ||
-        !entry_matches(
-            kSelectionDispatchRva,
-            kSelectionDispatchBytes) ||
-        !entry_matches(
-            kPointerCellSampleRva,
-            kPointerCellSampleBytes) ||
-        !entry_matches(kSwitchPanelRva, kSwitchPanelEntry) ||
-        !entry_matches(
-            tabs_build().switch_panel_state_copy_signature,
-            kSwitchPanelStateCopyBytes) ||
-        !entry_matches(
-            kSwitchPanelStateCopyResumeRva,
-            kSwitchPanelStateCopyResumeBytes) ||
-        !entry_matches(
-            tabs_build().switch_panel_visibility_signature,
-            kSwitchPanelVisibilityBytes) ||
-        !resolve_path_interface_matches ||
-        !entry_matches(kValueExistsRva, kValueExistsEntry) ||
-        !entry_matches(kPresentTabRva, kPresentTabEntry) ||
-        !entry_matches(
-            kMakeIconDescriptorRva,
-            kMakeIconDescriptorEntry) ||
-        !entry_matches(texture_lookup_rva, kTextureLookupEntry) ||
-        !entry_matches(image_bind_rva, kImageBindEntry) ||
-        !entry_matches(
-            kImageBindCallRva - kImageBindArguments.size(),
-            kImageBindArguments) ||
-        !entry_matches(
-            image_bind_rva + 0x282,
-            kImageBindReturnsTrue) ||
-        !entry_matches(
-            image_bind_rva + 0x293,
-            kImageBindReturnsFalse) ||
-        !entry_matches(kRefreshTitleRva, kRefreshTitleEntry) ||
-        !constructor_entry_matches ||
-        !shape_helper_entries_match ||
-        !destructor_entry_matches
+    const NamedInterfaceCheck interface_checks[]{
+        {"selectionCallback",
+            entry_matches(kSelectionCallbackRva, kSelectionEntry)},
+        {"compositeFrame",
+            entry_matches(kCompositeFrameRva, kCompositeFrameEntry)},
+        {"selectorSelect", selector_select_interface_matches},
+        {"inputDispatchFrameBegin",
+            entry_matches(
+                kInputDispatchFrameBeginRva,
+                kInputDispatchFrameBeginBytes)},
+        {"pointerDispatchResult",
+            entry_matches(
+                kPointerDispatchResultRva,
+                kPointerDispatchResultBytes)},
+        {"horizontalNavigationCommit",
+            entry_matches(
+                kHorizontalNavigationCommitRva,
+                kHorizontalNavigationCommitBytes)},
+        {"selectionDispatch",
+            entry_matches(
+                kSelectionDispatchRva,
+                kSelectionDispatchBytes)},
+        {"pointerCellSample",
+            entry_matches(
+                kPointerCellSampleRva,
+                kPointerCellSampleBytes)},
+        {"switchPanel", entry_matches(kSwitchPanelRva, kSwitchPanelEntry)},
+        {"switchPanelStateCopy",
+            entry_matches(
+                tabs_build().switch_panel_state_copy_signature,
+                kSwitchPanelStateCopyBytes)},
+        {"switchPanelStateCopyResume",
+            entry_matches(
+                kSwitchPanelStateCopyResumeRva,
+                kSwitchPanelStateCopyResumeBytes)},
+        {"switchPanelVisibility",
+            entry_matches(
+                tabs_build().switch_panel_visibility_signature,
+                kSwitchPanelVisibilityBytes)},
+        {"resolvePath", resolve_path_interface_matches},
+        {"valueExists", entry_matches(kValueExistsRva, kValueExistsEntry)},
+        {"presentTab", entry_matches(kPresentTabRva, kPresentTabEntry)},
+        {"makeIconDescriptor",
+            entry_matches(
+                kMakeIconDescriptorRva,
+                kMakeIconDescriptorEntry)},
+        {"textureLookup",
+            entry_matches(texture_lookup_rva, kTextureLookupEntry)},
+        {"imageBind", entry_matches(image_bind_rva, kImageBindEntry)},
+        {"imageBindArguments",
+            entry_matches(
+                kImageBindCallRva - kImageBindArguments.size(),
+                kImageBindArguments)},
+        {"imageBindReturnsTrue",
+            entry_matches(
+                image_bind_rva + 0x282,
+                kImageBindReturnsTrue)},
+        {"imageBindReturnsFalse",
+            entry_matches(
+                image_bind_rva + 0x293,
+                kImageBindReturnsFalse)},
+        {"refreshTitle",
+            entry_matches(kRefreshTitleRva, kRefreshTitleEntry)},
+        {"scaleformConstructor", constructor_entry_matches},
+        {"scaleformShapeHelpers", shape_helper_entries_match},
+        {"scaleformDestructor", destructor_entry_matches},
+    };
+    std::array<char, 1024> failed_checks{};
+    std::size_t failed_length = 0;
+    const auto collect_failures =
+        [&](const NamedInterfaceCheck* first, std::size_t count) noexcept {
+            for (std::size_t index = 0; index < count; ++index) {
+                if (first[index].matches) continue;
+                const int written = _snprintf_s(
+                    failed_checks.data() + failed_length,
+                    failed_checks.size() - failed_length,
+                    _TRUNCATE,
+                    "%s%s",
+                    failed_length ? "," : "",
+                    first[index].name);
+                if (written < 0) {
+                    failed_length = failed_checks.size() - 1U;
+                    return;
+                }
+                failed_length += static_cast<std::size_t>(written);
+            }
+        };
+    collect_failures(interface_checks, std::size(interface_checks));
 #if defined(ER_NATIVE_UI_PRODUCTION_TABS)
-        || !slot_growth_interfaces_match
+    collect_failures(slot_growth_checks, std::size(slot_growth_checks));
 #endif
-        ) {
+    if (failed_length != 0) {
+        log_line(
+            "ERROR: viewport interfaces differ from the validated executable: %s",
+            failed_checks.data());
         log_line(
             "ERROR: one or more viewport interfaces differ from the validated executable; no hooks installed (resolvePath={pristine:%u hostOwned:%u accepted:%u} selectorSelect={pristine:%u solidApproved:%u accepted:%u})",
             pristine_resolve_path_entry_matches ? 1U : 0U,

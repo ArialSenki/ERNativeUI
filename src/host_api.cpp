@@ -718,6 +718,17 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetCustomSliderValue
     return erui::host::registry().set_custom_slider_values(provider, row, values, count);
 }
 
+// Fork r156: a TextInput row that shows its value (set_text_input_value, live)
+// but never opens the editor; read_only 0 makes it editable again. Works before
+// or after commit and while its page is open.
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetTextInputReadOnly(
+    ERUI_ProviderHandle provider,
+    ERUI_RowHandle row,
+    std::uint32_t read_only) {
+    if (const ERUI_Result state = callable_state(); state != ERUI_OK) return state;
+    return erui::host::registry().set_text_input_read_only(provider, row, read_only != 0);
+}
+
 extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_SetSubmenuText(
     ERUI_ProviderHandle provider,
     ERUI_PageHandle page,

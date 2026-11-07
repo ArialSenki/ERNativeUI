@@ -551,7 +551,7 @@ if(_ernativeui_need_native_core)
         # feeds the VERSIONINFO in src/ernativeui.rc (only this target
         # compiles it) and kForkBuild in src/host_dllmain.cpp (log banner and
         # ERNativeUI-status.txt).
-        set(ERNATIVEUI_FORK_BUILD 154)
+        set(ERNATIVEUI_FORK_BUILD 156)
         file(CONFIGURE
             OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/ernativeui_version_rc.h"
             CONTENT [=[
