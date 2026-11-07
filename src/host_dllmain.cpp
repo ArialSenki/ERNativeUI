@@ -17,6 +17,7 @@
 #include "steam_dlc.hpp"
 #include "steam_language.hpp"
 #include "tab_configuration.hpp"
+#include "talk_menu.hpp"
 
 #include "runtime.hpp"
 #include "resource.h"
@@ -1046,6 +1047,16 @@ DWORD run_host() noexcept {
                 "build knows (probably a new game patch). The mod menus stay "
                 "off and the game runs unchanged. Update NativeTweaks / "
                 "ERNativeUI, or report the exe timestamp above.");
+        }
+        // Fork (r157): the shared talk menu ([TalkMenu] Key, F11 by
+        // default), on known builds.
+        if (known_game_build &&
+            read_ini(ini, L"TalkMenu", L"Enable", 1) != 0) {
+            const std::wstring talk_key =
+                read_ini_text(ini, L"TalkMenu", L"Key", L"F11");
+            erui::talk::start(
+                read_ini(ini, L"TalkMenu", L"TestProvider", 0) != 0,
+                talk_key.c_str());
         }
         // r148: a layout adoption decides every native address this run;
         // say so once, at warning level, whatever the verbosity.

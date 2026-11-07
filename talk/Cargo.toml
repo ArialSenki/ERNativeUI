@@ -1,0 +1,37 @@
+[package]
+name = "erui-talk"
+version = "1.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# The shared talk menu of the NativeTweaks fork of ERNativeUI (Ctrl+F11): the
+# game's own talk-list dialog, as a merchant's, listing every mod that
+# registered a row through the ERNativeUIFork_Talk* exports (src/talk_menu.cpp).
+# Linked into ERNativeUI.dll as a static library. fromsoftware-rs is the copy
+# vendored in the Multiple Spirit Ashes repository next to NativeTweaks.
+[dependencies]
+eldenring = { path = "../../../MultipleSpiritAshes/project/vendor/fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../MultipleSpiritAshes/project/vendor/fromsoftware-rs/crates/shared" }
+pelite = "0.10"
+
+[dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[lib]
+name = "erui_talk"
+crate-type = ["staticlib", "rlib"]
+
+[profile.release]
+debug = 2
+strip = "none"
+panic = "unwind"

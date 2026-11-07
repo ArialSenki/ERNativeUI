@@ -544,8 +544,26 @@ if(_ernativeui_need_native_core)
             src/localization_config.cpp
             src/logger.cpp
             src/steam_language.cpp
+            src/talk_menu.cpp
             src/ernativeui.rc)
         add_library(ERNativeUI::Host ALIAS ERNativeUIHost)
+
+        # Fork (r157): the shared talk menu (talk\, Rust) is linked in as a
+        # static library; cargo builds it before the host links. The system
+        # libraries are the ones rustc reports with --print native-static-libs.
+        set(ERUI_TALK_TARGET_DIR "$ENV{LOCALAPPDATA}/ERNativeUI-talk-build" CACHE PATH
+            "Cargo target directory for the talk-menu library")
+        set(ERUI_TALK_LIB "${ERUI_TALK_TARGET_DIR}/x86_64-pc-windows-msvc/release/erui_talk.lib")
+        file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/talk/build.cmd" ERUI_TALK_BUILD)
+        file(TO_NATIVE_PATH "${ERUI_TALK_TARGET_DIR}" ERUI_TALK_TARGET_DIR_NATIVE)
+        add_custom_target(erui_talk
+            COMMAND ${CMAKE_COMMAND} -E env "ERUI_TALK_TARGET_DIR=${ERUI_TALK_TARGET_DIR_NATIVE}" cmd /c "${ERUI_TALK_BUILD}"
+            BYPRODUCTS "${ERUI_TALK_LIB}"
+            COMMENT "Building the talk menu (talk)"
+            VERBATIM)
+        add_dependencies(ERNativeUIHost erui_talk)
+        target_link_libraries(ERNativeUIHost PRIVATE "${ERUI_TALK_LIB}"
+            ntdll userenv ws2_32 dbghelp bcrypt)
 
         # Fork (r148): the fork build number, the one place to bump it. It
         # feeds the VERSIONINFO in src/ernativeui.rc (only this target

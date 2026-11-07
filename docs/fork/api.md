@@ -29,6 +29,7 @@ The implementations live in `src/host_api.cpp`, `src/host_dllmain.cpp`
 | [`ERNativeUIFork_SetHighlightEnabled`](#ernativeuifork_sethighlightenabled) | Turn the changed-value label colours on or off, live |
 | [`ERNativeUIFork_SetHostLanguage`](#ernativeuifork_sethostlanguage) | Switch the host's own texts to another language |
 | [`ERNativeUIFork_SetHudLayout`](#ernativeuifork_sethudlayout) | Ultrawide HUD/menu layout and HUD scale |
+| [`ERNativeUIFork_Talk*`](#talk-menu-f11) | Rows and pages in the shared talk menu (F11) |
 
 ## Threading and timing
 
@@ -267,6 +268,85 @@ the definitive answer.
 | `ERUI_OK` | Stored |
 | `ERUI_INVALID_ARGUMENT` | `scale_percent` outside 50-150, or unknown `flags` bits |
 | `ERUI_NOT_SUPPORTED` | The runtime GFX hook is not installed (`[GFX] EnableRuntimePatching = 0` or the older `RuntimePatch = 0`, a failed install, an unknown game version, a passive copy, or a call before the host thread installed it); nothing is stored |
+
+## Talk menu (F11)
+
+r157. **F11** (or the `[TalkMenu] Key` below), in a game with no other menu
+open, opens the game's own
+talk-list dialog (as a merchant's): one row per
+registered provider, a **Mod Settings** row that opens the Configuration
+screen, and **Leave**. Choosing a provider's row opens that provider's own
+pages. Typedefs are in `include/ernativeui/erui_fork_talk.h`; the dialog is a
+Rust static library (`talk/`) linked into `ERNativeUI.dll`, the exports are in
+`src/talk_menu.cpp`.
+
+The presence of `ERNativeUIFork_TalkRegister` means the host owns the
+talk-menu key: a mod with its own talk-menu hotkey (NPC Spawner's Ctrl+F11)
+should register a row instead of listening to a key.
+
+```c
+ERUI_Result ERNativeUIFork_TalkRegister(const ERUI_Utf16View* name,
+    ERUI_TalkBuildFn build, ERUI_TalkChooseFn choose, void* user,
+    ERUI_TalkEntryHandle* out);                 /* any thread, any time */
+ERUI_Result ERNativeUIFork_TalkUnregister(ERUI_TalkEntryHandle entry);
+
+/* callbacks, on the game thread */
+void build(void* user, ERUI_TalkMenu* menu, uint32_t page);       /* 0 = first page */
+void choose(void* user, ERUI_TalkMenu* menu, uint32_t page, uint32_t row);
+
+/* inside build only */
+ERUI_Result ERNativeUIFork_TalkAddRow(ERUI_TalkMenu* menu, uint32_t row,
+    const ERUI_Utf16View* text);
+/* inside build or choose */
+ERUI_Result ERNativeUIFork_TalkOpenPage(ERUI_TalkMenu* menu, uint32_t page);    /* push */
+ERUI_Result ERNativeUIFork_TalkReplacePage(ERUI_TalkMenu* menu, uint32_t page); /* swap */
+ERUI_Result ERNativeUIFork_TalkBack(ERUI_TalkMenu* menu);
+ERUI_Result ERNativeUIFork_TalkClose(ERUI_TalkMenu* menu);
+
+/* any thread */
+ERUI_Result ERNativeUIFork_TalkOpen(ERUI_TalkEntryHandle entry); /* 0: the top list */
+uint32_t    ERNativeUIFork_TalkIsOpen(void);
+```
+
+- Pages are numbers of your own; the first one is 0. Row ids are yours too
+  and come back in `choose`.
+- `build` adds up to 63 rows (`ERUI_QUEUE_FULL` after that); the host adds a
+  **Back** row after them. Texts longer than 159 UTF-16 units are cut.
+- After `choose` without a navigation call, the same page is built and shown
+  again, so a row like "Toggle: on" shows its new value at once.
+- `OpenPage` pushes a page (Back returns to this one), `ReplacePage` shows
+  another page in place of this one (next/previous pages of a list), `Back`
+  goes up one level (from your first page, to the top list), `Close` closes
+  the menu. A navigation call inside `build` is followed instead of showing
+  the page.
+- **Esc** on one of your pages goes up one level; on the top list it closes
+  the menu.
+- `ERUI_TalkMenu*` is only valid during the callback it was given to; other
+  calls return `ERUI_INVALID_HANDLE`.
+- Callbacks must be quick and must not throw or unwind across the boundary.
+  The registry is not locked while they run; they may call any export.
+  To open a game menu (a shop, for instance), call `Close` and open it from
+  `choose` or later.
+- Up to 48 providers.
+
+Texts are served by a hook on the game's message lookup that is only in place
+while the menu is open (ids 1991000000-1991000063); when another mod has
+changed that function's bytes the menu does not open and the log says so.
+
+`ERNativeUI.ini`:
+
+```ini
+[TalkMenu]
+Enable=1        ; 0 turns the key and the exports' menu off
+Key=F11         ; F1-F24, Home, End, Insert, Delete, PageUp, PageDown, Pause,
+                ; ScrollLock, with optional Ctrl+ / Alt+ / Shift+ (e.g. Ctrl+Home)
+TestProvider=0  ; 1 adds an "ERNativeUI test" row (counter, toggle, long list)
+```
+
+Supported game versions: those of fromsoftware-rs (WW 2.7.0.0, 2.7.1.0,
+2.7.2.0, JP 2.7.0.1, 2.7.1.1, 2.7.2.1) and of ERNativeUI. The Mod Settings
+row's code is found by bytes (`talk/src/settings.rs`); without it, the row is
+left out and the log says why.
 
 ## Example
 
