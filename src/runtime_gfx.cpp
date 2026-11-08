@@ -662,8 +662,8 @@ std::wstring runtime_gfx_ready(bool spanish) noexcept {
 // for the menus with a layout table (never scaled); scale_percent
 // (50-150) resizes them around their corner. Applies the next time the game
 // loads the HUD. Callable at any time, also before the API is ready.
-// ERUI_NOT_SUPPORTED while the OpenFile hook is not installed ([Gfx]
-// RuntimePatch = 0, a failed installation, or a call before the host thread
+// ERUI_NOT_SUPPORTED while the OpenFile hook is not installed ([GFX]
+// EnableRuntimePatching = 0, a failed installation, or a call before the host thread
 // installs it): nothing would apply the layout, so it is not stored. The hook
 // is installed before the host API becomes ready, so a client that connected
 // gets the definitive answer.

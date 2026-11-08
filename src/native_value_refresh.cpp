@@ -505,12 +505,24 @@ void reset_native_value_refresh() noexcept {
 
 void mark_native_value_dirty(const volatile std::uint8_t* bound) noexcept {
     if (!bound || !g_active.load(std::memory_order_acquire)) return;
+    bool queued = false;
     for (auto& dirty : g_dirty) {
         const volatile std::uint8_t* expected = nullptr;
-        if (dirty.load(std::memory_order_relaxed) == bound) break;
-        if (dirty.compare_exchange_strong(expected, bound, std::memory_order_acq_rel)) break;
+        if (dirty.load(std::memory_order_relaxed) == bound ||
+            dirty.compare_exchange_strong(expected, bound, std::memory_order_acq_rel)) {
+            queued = true;
+            break;
+        }
     }
     g_any_dirty.store(true, std::memory_order_release);
+    // Fork: say once when the queue was full (that change repaints on the
+    // next page build instead of at once).
+    static std::atomic_bool full_logged{false};
+    if (!queued && !full_logged.exchange(true, std::memory_order_relaxed)) {
+        erui::detail::logf(erui::LogLevel::warning,
+            "Live value refresh: more than %u values changed at once; the rest show on the next page build",
+            static_cast<unsigned>(kDirtyCount));
+    }
 }
 
 void set_native_value_highlight(bool enabled) noexcept {
@@ -529,7 +541,16 @@ void set_native_value_default(const volatile std::uint8_t* bound,
         }
     }
     const std::size_t index = g_default_total.load(std::memory_order_acquire);
-    if (index >= kDefaultCount) return;
+    if (index >= kDefaultCount) {
+        // Fork: say once; such rows get no changed-value colour.
+        static std::atomic_bool full_logged{false};
+        if (!full_logged.exchange(true, std::memory_order_relaxed)) {
+            erui::detail::logf(erui::LogLevel::warning,
+                "Changed-value colour: more than %u rows with a default; the rest are not coloured",
+                static_cast<unsigned>(kDefaultCount));
+        }
+        return;
+    }
     g_defaults[index].value.store(default_index, std::memory_order_relaxed);
     g_defaults[index].inverted.store(inverted, std::memory_order_relaxed);
     g_defaults[index].bound.store(bound, std::memory_order_release);

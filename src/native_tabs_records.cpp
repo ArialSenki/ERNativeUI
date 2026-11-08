@@ -2482,13 +2482,6 @@ void reset_runtime() noexcept {
     (void)freeze_active_two_phase_rgba8_transaction(
         "runtime reset while transaction was active");
     reset_pointer_dwell(nullptr);
-    // A scheduled probe owns no AS value, but its menu coordinates are valid
-    // only for the current Configuration epoch.
-    g_deferred_bitmapdata_probe = {};
-    // The BitmapData property itself is movie-owned and is intentionally left
-    // alone. Only discard native verification coordinates when that movie
-    // epoch ends; never dereference or clear the remembered payload here.
-    g_bitmapdata_property_verification = {};
     g_in_place_rgba8_rebind_transaction = {};
     g_runtime = {};
     g_mutating_viewport = false;

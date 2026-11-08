@@ -105,7 +105,6 @@ version = "1.0.0"
 dependencies = [
  "eldenring",
  "fromsoftware-shared",
- "pelite",
  "windows",
 ]
 

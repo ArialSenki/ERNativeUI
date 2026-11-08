@@ -559,17 +559,6 @@ inline constexpr std::uint32_t kMaximumPointerDwellLogs = 1024;
 inline constexpr std::uint64_t kPointerPollReportMs = 1000;
 inline constexpr std::int32_t kProbeBitmapWidth = 32;
 inline constexpr std::int32_t kProbeBitmapHeight = 32;
-// A single post-native-composite BitmapData.setPixel32 call deterministically
-// blackened the renderer even though Invoke returned true, no SEH was raised,
-// and the exact rooted object survived the following frame. Keep the failed
-// gate in the research source, but make deployed builds return to the proven
-// ownership-only baseline until a different pixel-upload boundary is isolated.
-inline constexpr bool kEnableBitmapDataPixelMutationProbe = false;
-// The ownership-only BitmapData lifecycle is proven, and the passive VM probe
-// found both its DrawableImage context and provider null. Keep that experiment
-// available as research history, but do not construct another BitmapData while
-// the next gate characterizes a known-good immutable native image resource.
-inline constexpr bool kEnableBitmapDataOwnershipProbe = false;
 inline constexpr bool kEnableRawImageLifecycleProbe = true;
 inline constexpr bool kEnableNativeImageResourceLifecycleProbe = true;
 
@@ -672,8 +661,6 @@ inline constexpr char kInjectedIconProperties[2][48]{
     "__ernativeui_tab_viewport_probe_icon_a",
     "__ernativeui_tab_viewport_probe_icon_b",
 };
-inline constexpr char kInjectedBitmapDataProperty[] =
-    "__ernativeui_tab_viewport_probe_bitmap_data";
 inline constexpr char kAuthoredIconProperties[2][56]{
     "__ernativeui_tab_viewport_probe_authored_icon_a",
     "__ernativeui_tab_viewport_probe_authored_icon_b",
@@ -1357,54 +1344,6 @@ struct NativePointerSample {
     unsigned long seh_code{};
 };
 
-struct DeferredBitmapDataProbe {
-    bool scheduled{};
-    void* top{};
-    TabLayer layer{TabLayer::none};
-    std::size_t physical{invalid_tab_index};
-    std::size_t expected_logical{invalid_tab_index};
-    std::uint64_t mapping_generation{};
-    std::uint64_t scheduled_after_frame{};
-    std::uint32_t scheduling_thread{};
-};
-
-enum class BitmapDataPropertyVerificationPhase : std::uint8_t {
-    none = 0,
-    pre_mutation_identity,
-    post_mutation_identity,
-};
-
-const char* bitmapdata_property_verification_phase_name(
-    BitmapDataPropertyVerificationPhase phase) noexcept;
-
-struct BitmapDataPropertyVerification {
-    BitmapDataPropertyVerificationPhase phase{
-        BitmapDataPropertyVerificationPhase::none};
-    void* top{};
-    TabLayer layer{TabLayer::none};
-    std::size_t physical{invalid_tab_index};
-    std::size_t expected_logical{invalid_tab_index};
-    std::uint64_t mapping_generation{};
-    std::uint64_t created_frame{};
-    std::uint64_t phase_armed_frame{};
-    std::uint32_t creation_thread{};
-    void* expected_payload{};
-    // Passive diagnostics only. These are scalar addresses sampled from the
-    // exact AS3 MovieRoot at creation; no VM-owned wrapper crosses the frame.
-    std::uintptr_t vm_address{};
-    std::uintptr_t drawable_image_context_address{};
-    std::uintptr_t drawable_image_provider_address{};
-};
-
-struct BitmapDataVmContextSnapshot {
-    std::uintptr_t vm_address{};
-    std::uintptr_t drawable_image_context_address{};
-    std::uintptr_t drawable_image_provider_address{};
-    bool vm_read{};
-    bool drawable_image_context_read{};
-    bool drawable_image_provider_read{};
-};
-
 extern HMODULE g_module;
 extern HANDLE g_log_file;
 extern SRWLOCK g_log_lock;
@@ -1514,8 +1453,6 @@ extern std::atomic_uint32_t g_rgba8_bind_log_count;
 extern std::atomic_uint32_t g_rgba8_lifecycle_log_count;
 extern std::atomic_bool g_value_invoke_probe_attempted;
 extern std::atomic_bool g_value_invoke_probe_validated;
-extern std::atomic_bool g_bitmapdata_constructor_probe_attempted;
-extern std::atomic_bool g_bitmapdata_pixel_mutation_probe_attempted;
 extern std::atomic_bool g_raw_image_lifecycle_probe_attempted;
 extern std::atomic_bool g_rgba8_publication_disabled;
 // Readers may run from native presentation callbacks. Individual pointer
@@ -1586,14 +1523,6 @@ extern std::array<std::atomic_uint32_t, kCustomTabCount>
 
 #endif
 extern InjectedMovieFingerprint g_injected_movie_fingerprint;
-// A managed GFx::Value is linked into its ObjectInterface while alive. Every
-// wrapper used by this fault-isolation gate therefore lives in process-heap
-// storage. A fully successful operation destroys and frees it; an uncertain
-// native failure retains at most these three blocks for the process lifetime
-// rather than leaving an intrusive-list link in dead stack storage.
-extern void* g_retained_bitmapdata_wrapper;
-extern void* g_retained_bitmapdata_same_frame_wrapper;
-extern void* g_retained_bitmapdata_next_frame_wrapper;
 extern thread_local bool g_mutating_viewport;
 extern thread_local TabSelectionSource g_tab_selection_source;
 extern thread_local PointerCellSampleTrace g_pointer_cell_sample_trace;
@@ -1612,9 +1541,6 @@ extern thread_local bool g_initial_target_repaint;
 extern thread_local PendingAliasedIcon g_pending_aliased_icon;
 extern thread_local InPlaceRgba8RebindTransaction
     g_in_place_rgba8_rebind_transaction;
-extern thread_local DeferredBitmapDataProbe g_deferred_bitmapdata_probe;
-extern thread_local BitmapDataPropertyVerification
-    g_bitmapdata_property_verification;
 extern thread_local std::uint64_t g_composite_frame_sequence;
 
 inline constexpr std::size_t kNoRgba8Asset = invalid_tab_index;
@@ -1824,12 +1750,6 @@ std::uint8_t repaint_icon_property_bank() noexcept;
 
 void reset_pointer_dwell(
     const char* reason = nullptr) noexcept;
-void run_deferred_bitmapdata_constructor_probe(
-    void* top,
-    std::uint64_t frame_sequence) noexcept;
-void run_bitmapdata_property_survival_verification(
-    void* top,
-    std::uint64_t frame_sequence) noexcept;
 void run_raw_image_lifecycle_probe(void* top) noexcept;
 bool validate_top(void* top) noexcept;
 bool guarded_release_scaleform_image_resource(
@@ -1991,11 +1911,6 @@ void** __fastcall texture_lookup_detour(
     void* repository,
     void** out_resource,
     const wchar_t* resource_name) noexcept;
-
-void schedule_deferred_bitmapdata_constructor_probe(
-    void* top,
-    TabLayer layer,
-    std::size_t physical) noexcept;
 
 bool __fastcall image_bind_detour(
     void* scaleform_value,

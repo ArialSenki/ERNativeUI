@@ -510,6 +510,7 @@ private:
     void note_activity_locked() noexcept;
 
     mutable std::mutex mutex_{};
+    std::atomic_bool any_pending_write_{false};  // fork: see apply_pending_values
     bool custom_tabs_backend_available_{};
     bool mod_settings_as_tab_{};
     bool title_screen_text_backend_available_{};

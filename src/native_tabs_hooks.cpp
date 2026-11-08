@@ -1027,7 +1027,7 @@ bool install_hooks_and_interfaces(
 #endif
 
     log_line(
-        "STRESS startup hooks installed: protocol=GraphicsCarrierV2 selection=eldenring.exe+0x%llX source={frame:+0x%llX pointer:+0x%llX horizontal:+0x%llX dispatch:+0x%llX cellSample:+0x%llX} nativePoll={status:%s position:+0x%llX hit:+0x%llX select:+0x%llX} compositeFrame=+0x%llX panelStateIsolation=+0x%llX->+0x%llX rowsCarrier=category8/selector11 parking=category5 textureLookup=+0x%llX imageBind=+0x%llX cross=%ls overflow=%ls alias=%ls; logical=%zu physical=%zu margin=%zu dwell={initial:%llums repeat:%llums decay:%llums minimum:%llums} imageProbe={nativeResource:dynamic-shape-rgba8 rawImageLifecycle:%s nativeResourceLifecycle:%s bitmapDataOwnership:%s pixelMutation:%s}",
+        "STRESS startup hooks installed: protocol=GraphicsCarrierV2 selection=eldenring.exe+0x%llX source={frame:+0x%llX pointer:+0x%llX horizontal:+0x%llX dispatch:+0x%llX cellSample:+0x%llX} nativePoll={status:%s position:+0x%llX hit:+0x%llX select:+0x%llX} compositeFrame=+0x%llX panelStateIsolation=+0x%llX->+0x%llX rowsCarrier=category8/selector11 parking=category5 textureLookup=+0x%llX imageBind=+0x%llX cross=%ls overflow=%ls alias=%ls; logical=%zu physical=%zu margin=%zu dwell={initial:%llums repeat:%llums decay:%llums minimum:%llums} imageProbe={nativeResource:dynamic-shape-rgba8 rawImageLifecycle:%s nativeResourceLifecycle:%s}",
         static_cast<unsigned long long>(kSelectionCallbackRva),
         static_cast<unsigned long long>(kInputDispatchFrameBeginRva),
         static_cast<unsigned long long>(kPointerDispatchResultRva),
@@ -1060,9 +1060,7 @@ bool install_hooks_and_interfaces(
         static_cast<unsigned long long>(
             g_pointer_dwell_timing.minimum_repeat_delay_ms),
         kEnableRawImageLifecycleProbe ? "enabled" : "disabled",
-        kEnableNativeImageResourceLifecycleProbe ? "enabled" : "disabled",
-        kEnableBitmapDataOwnershipProbe ? "enabled" : "disabled",
-        kEnableBitmapDataPixelMutationProbe ? "enabled" : "disabled");
+        kEnableNativeImageResourceLifecycleProbe ? "enabled" : "disabled");
     return true;
 }
 

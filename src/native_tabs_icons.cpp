@@ -2186,16 +2186,6 @@ bool __fastcall image_bind_detour(
         1;
     ShapeAttachProbeResult attachment{};
     if (exact_attachment_bridge) {
-        if (pending.kind == VectorIconKind::cross &&
-            kEnableBitmapDataOwnershipProbe) {
-            // Capture only stable logical coordinates here. The later frame
-            // reacquires a fresh parent wrapper and derives its current Movie;
-            // no raw Scaleform object or movie pointer crosses frame boundaries.
-            schedule_deferred_bitmapdata_constructor_probe(
-                g_repaint_context.top,
-                g_repaint_context.layer,
-                g_repaint_context.physical);
-        }
         // BitmapData creation is deliberately excluded here. Runtime tests
         // proved that even constructor-only BitmapData work performed from
         // this image-binding callback can poison Scaleform presentation for

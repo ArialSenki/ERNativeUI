@@ -280,18 +280,6 @@ make_rgba8_probe_icon_checksums() noexcept {
     return true;
 }
 
-const char* bitmapdata_property_verification_phase_name(
-    BitmapDataPropertyVerificationPhase phase) noexcept {
-    switch (phase) {
-    case BitmapDataPropertyVerificationPhase::pre_mutation_identity:
-        return "pre-mutation-identity";
-    case BitmapDataPropertyVerificationPhase::post_mutation_identity:
-        return "post-mutation-identity";
-    default:
-        return "none";
-    }
-}
-
 HMODULE g_module{};
 HANDLE g_log_file{INVALID_HANDLE_VALUE};
 SRWLOCK g_log_lock = SRWLOCK_INIT;
@@ -389,8 +377,6 @@ std::atomic_uint32_t g_rgba8_bind_log_count{};
 std::atomic_uint32_t g_rgba8_lifecycle_log_count{};
 std::atomic_bool g_value_invoke_probe_attempted{};
 std::atomic_bool g_value_invoke_probe_validated{};
-std::atomic_bool g_bitmapdata_constructor_probe_attempted{};
-std::atomic_bool g_bitmapdata_pixel_mutation_probe_attempted{};
 std::atomic_bool g_raw_image_lifecycle_probe_attempted{};
 std::atomic_bool g_rgba8_publication_disabled{};
 std::atomic_bool g_rgba8_catalogue_ready{};
@@ -430,9 +416,6 @@ std::array<std::atomic_uint32_t, kCustomTabCount>
 
 #endif
 InjectedMovieFingerprint g_injected_movie_fingerprint{};
-void* g_retained_bitmapdata_wrapper{};
-void* g_retained_bitmapdata_same_frame_wrapper{};
-void* g_retained_bitmapdata_next_frame_wrapper{};
 thread_local bool g_mutating_viewport{};
 thread_local TabSelectionSource g_tab_selection_source{
     TabSelectionSource::unknown};
@@ -446,9 +429,6 @@ thread_local bool g_initial_target_repaint{};
 thread_local PendingAliasedIcon g_pending_aliased_icon{};
 thread_local InPlaceRgba8RebindTransaction
     g_in_place_rgba8_rebind_transaction{};
-thread_local DeferredBitmapDataProbe g_deferred_bitmapdata_probe{};
-thread_local BitmapDataPropertyVerification
-    g_bitmapdata_property_verification{};
 thread_local std::uint64_t g_composite_frame_sequence{};
 
 [[nodiscard]] std::size_t active_physical_tab_count() noexcept {

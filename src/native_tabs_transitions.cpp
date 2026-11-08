@@ -1055,10 +1055,6 @@ void __fastcall composite_frame_detour(
                 static_cast<unsigned long long>(
                     g_runtime.viewport.mapping_generation()));
         }
-        run_bitmapdata_property_survival_verification(
-            post_top, frame_sequence);
-        run_deferred_bitmapdata_constructor_probe(
-            post_top, frame_sequence);
     }
 }
 

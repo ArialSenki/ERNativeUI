@@ -593,7 +593,7 @@ if(_ernativeui_need_native_core)
             WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
         target_include_directories(ERNativeUIHost PRIVATE src include)
         target_link_libraries(ERNativeUIHost PRIVATE ERNativeUI::Core
-            ERNativeUI::GfxPatch minhook)
+            ERNativeUI::GfxPatch minhook safetyhook::safetyhook)
         target_compile_features(ERNativeUIHost PRIVATE cxx_std_20)
         target_compile_definitions(ERNativeUIHost PRIVATE
             ERUI_HOST_EXPORTS

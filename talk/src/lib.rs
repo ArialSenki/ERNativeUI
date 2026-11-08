@@ -11,8 +11,7 @@
 //!
 //! The dialog is driven through TalkScript (fromsoftware-rs, as in its
 //! examples/invoke-esd and NPC Spawner's dialog.rs), with our own texts
-//! served by a hook on the game's message lookup that is only in place while
-//! the menu is open (texts.rs).
+//! served by a chained hook on the game's message lookup (texts.rs).
 
 mod hotkey;
 mod mem;
@@ -65,7 +64,7 @@ const CHECK_SPECIFIC_PERSON_GENERIC_DIALOG_IS_OPEN: i32 = 58;
 const CHECK_SPECIFIC_PERSON_MENU_IS_OPEN: i32 = 59;
 /// The game's own "Leave" text (localized).
 const MSG_LEAVE: i32 = 20000009;
-/// Most providers listed (the top page also has Mod Settings and Leave).
+/// Most rows on the top list (it also has Leave).
 const MAX_ENTRIES: usize = 48;
 /// Rows of a provider page (one more slot is its Back row).
 const MAX_ROWS: usize = texts::SLOTS - 1;
@@ -116,6 +115,9 @@ static ENTRIES: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// Open request from erui_talk_open: u64::MAX none, 0 top list, else entry.
 static PENDING_OPEN: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Frames an open request waits for the game (another menu still closing,
+/// a loading screen) before it is dropped: about one second.
+const REQUEST_FRAMES: u32 = 60;
 /// Called on the game thread before the top list is built, so the C++ side
 /// can add rows for providers committed since (talk_menu.cpp).
 type BeforeOpenFn = unsafe extern "C" fn();
@@ -166,9 +168,13 @@ fn current(ctx: *mut Ctx) -> Option<&'static mut Ctx> {
 pub extern "C" fn erui_talk_start(
     log: Option<LogFn>,
     before_open: Option<BeforeOpenFn>,
+    install_text_hook: Option<texts::InstallFn>,
     key: *const u16,
     key_len: usize,
 ) -> u32 {
+    if let Some(f) = install_text_hook {
+        texts::set_installer(f);
+    }
     if let Some(f) = log {
         LOG.store(f as usize, Ordering::Release);
     }
@@ -196,8 +202,7 @@ pub extern "C" fn erui_talk_start(
 }
 
 fn start_task() {
-    // The message lookup is found by its bytes; another mod may have it
-    // hooked for a moment, so the frame task tries again before each open.
+    // The message lookup is found now (or before an open, if not yet).
     texts::install();
     let start = std::time::Instant::now();
     let task = loop {
@@ -357,6 +362,10 @@ struct Menu {
     stack: Vec<Level>,
     rows: Vec<Row>,
     key_prev: bool,
+    /// An open request (erui_talk_open) waiting for its frame, and how many
+    /// frames it may still wait.
+    request: u64,
+    request_frames: u32,
 }
 
 // Only touched from the game's frame task.
@@ -387,13 +396,13 @@ fn top_menu_job() -> Option<usize> {
 fn frame(_: &FD4TaskData) {
     if std::panic::catch_unwind(AssertUnwindSafe(frame_inner)).is_err() {
         log_error("talk menu: panic in the frame task (caught); menu closed");
-        texts::unhook();
         IS_OPEN.store(false, Ordering::Release);
-        if let Ok(mut g) = MENU.lock() {
-            if let Some(m) = g.as_mut() {
-                m.state = State::Idle;
-                m.stack.clear();
-            }
+        let mut g = MENU.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(m) = g.as_mut() {
+            m.state = State::Idle;
+            m.stack.clear();
+            m.rows.clear();
+            m.request = u64::MAX;
         }
     }
 }
@@ -406,14 +415,28 @@ fn frame_inner() {
         stack: Vec::new(),
         rows: Vec::new(),
         key_prev: false,
+        request: u64::MAX,
+        request_frames: 0,
     });
 
     let down = HOTKEY
         .get()
-        .is_some_and(|h| game_in_front() && key_down(h.key) && h.modifiers.iter().all(|m| key_down(*m)));
+        .is_some_and(|h| key_down(h.key) && h.modifiers.iter().all(|m| key_down(*m)) && game_in_front());
     let pressed = down && !m.key_prev;
     m.key_prev = down;
-    let request = PENDING_OPEN.swap(u64::MAX, Ordering::AcqRel);
+    let new_request = PENDING_OPEN.swap(u64::MAX, Ordering::AcqRel);
+    if new_request != u64::MAX && m.state == State::Idle {
+        // (a request while the menu is open is dropped, as it always was)
+        m.request = new_request;
+        m.request_frames = REQUEST_FRAMES;
+    } else if m.request != u64::MAX {
+        m.request_frames = m.request_frames.saturating_sub(1);
+        if m.request_frames == 0 {
+            log_info("talk menu: an open request was dropped (the game was busy for a second)");
+            m.request = u64::MAX;
+        }
+    }
+    let request = m.request;
 
     let Ok(world) = (unsafe { WorldChrMan::instance() }) else {
         close(m);
@@ -428,13 +451,19 @@ fn frame_inner() {
     if m.state == State::Idle && (pressed || request != u64::MAX) {
         let top = top_menu_job();
         if top.is_some_and(|j| j != 0) {
-            log_info(&format!("talk menu: not opened, another menu is open (top menu job {:#X})", top.unwrap_or(0)));
+            // once per press or request, not on every frame a request waits
+            if pressed || m.request_frames == REQUEST_FRAMES {
+                log_info(&format!("talk menu: not opened, another menu is open (top menu job {:#X})", top.unwrap_or(0)));
+            }
             return;
         }
         if !texts::install() {
-            log_warn("talk menu: not opened, the game's message lookup was not found (another mod may have changed it)");
+            // (a scan of the game's code: not again on every waiting frame)
+            m.request = u64::MAX;
+            log_warn("talk menu: not opened, the game's message lookup was not found");
             return;
         }
+        m.request = u64::MAX;
         m.stack = vec![Level::Top];
         if request != u64::MAX && request != 0 {
             m.stack.push(Level::Provider { entry: request, page: 0 });
@@ -469,7 +498,6 @@ fn close(m: &mut Menu) {
         m.stack.clear();
         m.rows.clear();
     }
-    texts::unhook();
     IS_OPEN.store(false, Ordering::Release);
 }
 
@@ -516,6 +544,7 @@ fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
     // A provider's build may navigate (Back, another page...): follow it a
     // few times at most.
     let mut rows: Vec<(Row, Vec<u16>)> = Vec::new();
+    let mut built = false;
     for _ in 0..8 {
         let Some(level) = m.stack.last().copied() else {
             close(m);
@@ -529,6 +558,7 @@ fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
                     rows.push((Row::Entry(e.id), e.name));
                 }
                 rows.push((Row::Leave, Vec::new()));
+                built = true;
                 break;
             }
             Level::Provider { entry: id, page } => {
@@ -554,12 +584,18 @@ fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
                     rows.push((Row::Provider(row), text));
                 }
                 rows.push((Row::Back, "Back".encode_utf16().collect()));
+                built = true;
                 break;
             }
         }
     }
+    if !built {
+        log_warn("talk menu: a page kept navigating while it was built; closed");
+        close(m);
+        return Ok(());
+    }
     if !texts::hook() {
-        log_warn("talk menu: our texts cannot be shown (message lookup changed); closed");
+        log_warn("talk menu: our texts cannot be shown; closed");
         close(m);
         return Ok(());
     }

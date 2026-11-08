@@ -57,8 +57,11 @@ InstallResult fail_install(InstallError error) noexcept {
     erui::native::remove_native_menu_hooks();
     erui::native::reset_native_text_inputs();
     detail::runtime_state().menu_published.store(false, std::memory_order_release);
-    detail::runtime_state().tab_catalogue.reset();
-    detail::runtime_state().menu.reset();
+    // Fork: the menu hooks are off, but a text-resolver detour already
+    // running may still read the compiled menu's texts; keep it (a one-off
+    // leak on a failed install) rather than free it under that call.
+    (void)detail::runtime_state().tab_catalogue.release();
+    (void)detail::runtime_state().menu.release();
     detail::runtime_state().installed.store(false, std::memory_order_release);
     return InstallResult{error};
 }

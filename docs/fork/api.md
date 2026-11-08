@@ -267,7 +267,7 @@ the definitive answer.
 |---|---|
 | `ERUI_OK` | Stored |
 | `ERUI_INVALID_ARGUMENT` | `scale_percent` outside 50-150, or unknown `flags` bits |
-| `ERUI_NOT_SUPPORTED` | The runtime GFX hook is not installed (`[GFX] EnableRuntimePatching = 0` or the older `RuntimePatch = 0`, a failed install, an unknown game version, a passive copy, or a call before the host thread installed it); nothing is stored |
+| `ERUI_NOT_SUPPORTED` | The runtime GFX hook is not installed (`[GFX] EnableRuntimePatching = 0`, a failed install, an unknown game version, a passive copy, or a call before the host thread installed it); nothing is stored |
 
 ## Talk menu (F11)
 
@@ -339,11 +339,18 @@ uint32_t    ERNativeUIFork_TalkIsOpen(void);
   The registry is not locked while they run; they may call any export.
   To open a game menu (a shop, for instance), call `Close` and open it from
   `choose` or later.
+- `TalkOpen` while the menu is closed waits up to about one second for a
+  frame where it may open (another menu still closing, no player yet), then
+  is dropped; while the menu is open it is ignored. `Close` + `TalkOpen`
+  from `choose` reopens the menu on the next frame.
 - Up to 48 providers.
 
-Texts are served by a hook on the game's message lookup that is only in place
-while the menu is open (ids 1991000000-1991000063); when another mod has
-changed that function's bytes the menu does not open and the log says so.
+Texts are served by a chained SafetyHook inline hook on the game's message
+lookup (`MsgRepositoryImp::LookupEntry`), put in the first time the menu opens
+and kept; it answers ids 1991000000-1991000063 and passes every other call on,
+so it works with mods that hook the same function before or after it
+(Glorious Merchant). The function is found by its bytes or, if another mod
+hooked it first, through the item-name getters that call it.
 
 `ERNativeUI.ini`:
 

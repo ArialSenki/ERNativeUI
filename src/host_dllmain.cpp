@@ -1016,11 +1016,10 @@ DWORD run_host() noexcept {
         erui::native::set_hook_perf_enabled(perf_log);
         const bool diagnostics = read_ini(
             ini, L"Diagnostics", L"EnableDiagnostics", 0) != 0;
-        // [GFX] EnableRuntimePatching (upstream) and the fork's older
-        // [Gfx] RuntimePatch name both turn every in-memory GFX change off.
+        // [GFX] EnableRuntimePatching = 0 turns every in-memory GFX change
+        // off (the fork's older RuntimePatch name is no longer read, r157).
         const bool runtime_gfx_patching_enabled =
-            read_ini(ini, L"GFX", L"EnableRuntimePatching", 1) != 0 &&
-            read_ini(ini, L"GFX", L"RuntimePatch", 1) != 0;
+            read_ini(ini, L"GFX", L"EnableRuntimePatching", 1) != 0;
         const bool logging_ready = logging_enabled &&
             log::initialize(directory / L"ERNativeUI.log");
         log::set_diagnostics_enabled(diagnostics);
@@ -1186,7 +1185,7 @@ DWORD run_host() noexcept {
         const auto quiet_ms = static_cast<std::uint64_t>(std::clamp(
             read_ini(ini, L"Runtime", L"RegistrationQuietMs", 750), 100, 15000));
         const auto max_wait_ms = static_cast<std::uint64_t>(std::clamp(
-            read_ini(ini, L"Runtime", L"RegistrationMaxWaitMs", 5000),
+            read_ini(ini, L"Runtime", L"RegistrationMaxWaitMs", 15000),  // as the shipped ini (r157: NativeTweaks may load 6-7 s late)
             static_cast<int>(quiet_ms), 15000));
         const auto steam_language_wait_ms = static_cast<std::uint64_t>(
             std::clamp(read_ini(

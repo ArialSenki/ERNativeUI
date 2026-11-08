@@ -1851,6 +1851,7 @@ ERUI_Result Registry::set_numeric_slider_value(
         static_cast<std::uint64_t>(row.numeric_slider.step_scaled_value));
     row.pending_value.store(index, std::memory_order_release);
     row.pending_write.store(true, std::memory_order_release);
+    any_pending_write_.store(true, std::memory_order_release);
     row.public_value.store(index, std::memory_order_release);
     return ERUI_OK;
 }
@@ -1999,6 +2000,7 @@ ERUI_Result Registry::set_custom_slider_index(
     const std::uint8_t native_index = static_cast<std::uint8_t>(index);
     row.pending_value.store(native_index, std::memory_order_release);
     row.pending_write.store(true, std::memory_order_release);
+    any_pending_write_.store(true, std::memory_order_release);
     row.public_value.store(native_index, std::memory_order_release);
     return ERUI_OK;
 }
@@ -2454,6 +2456,7 @@ ERUI_Result Registry::set_row_value(
     } else return ERUI_INVALID_ARGUMENT;
     row.pending_value.store(value, std::memory_order_release);
     row.pending_write.store(true, std::memory_order_release);
+    any_pending_write_.store(true, std::memory_order_release);
     row.public_value.store(value, std::memory_order_release);
     return ERUI_OK;
 }
@@ -2562,6 +2565,9 @@ ERUI_Result Registry::set_row_text(
                 if (has_help) menu->texts.replace(compiled.help_id, help_text);
             }
         }
+        // Fork (r157): the talk menu reads the source row.
+        if (has_label) row.label = std::move(label_text);
+        if (has_help) row.help = std::move(help_text);
         return ERUI_OK;
     } catch (const std::bad_alloc&) {
         return ERUI_OUT_OF_MEMORY;
@@ -2618,6 +2624,12 @@ ERUI_Result Registry::set_custom_slider_values(
                     return ERUI_HOST_NOT_READY;
                 }
             }
+        }
+        // Fork (r157): the talk menu reads the source row. Element by
+        // element (same size), so the vector's storage never moves under
+        // value_bridge, which reads its size without the lock.
+        for (std::size_t index = 0; index < texts.size(); ++index) {
+            row.slider_value_texts[index] = std::move(texts[index]);
         }
         return ERUI_OK;
     } catch (const std::bad_alloc&) {
@@ -2688,6 +2700,9 @@ ERUI_Result Registry::set_submenu_text(
                 }
             }
         }
+        // Fork (r157): the talk menu reads the submenu row's label.
+        if (has_label) opener->label = std::move(label_text);
+        if (has_help) opener->help = std::move(help_text);
         return ERUI_OK;
     } catch (const std::bad_alloc&) {
         return ERUI_OUT_OF_MEMORY;
@@ -3011,6 +3026,9 @@ ERUI_Result Registry::enqueue_alert(
 }
 
 void Registry::apply_pending_values() noexcept {
+    // Fork: nothing to scan (and no lock taken) unless a setter queued a
+    // write since the last pass; every setter raises the flag after its row's.
+    if (!any_pending_write_.exchange(false, std::memory_order_acq_rel)) return;
     std::lock_guard lock(mutex_);
     for (const auto& provider_item : providers_) {
         for (const auto& row_item : provider_item.second->rows) {
@@ -3046,7 +3064,7 @@ std::uint32_t talk_slider_count(const erui::SliderSpec& slider) noexcept {
 } // namespace
 
 std::vector<Registry::TalkProviderView> Registry::talk_providers() const {
-    std::vector<std::pair<std::uint64_t, TalkProviderView>> found;
+    std::vector<std::pair<const Provider*, TalkProviderView>> found;
     {
         std::lock_guard lock(mutex_);
         for (const auto& item : providers_) {
@@ -3066,14 +3084,21 @@ std::vector<Registry::TalkProviderView> Registry::talk_providers() const {
                 }
             }
             if (shown == ERUI_INVALID_PAGE) continue;
-            // Mod Settings order: the Hub (NativeTweaks) first.
-            const std::uint64_t order = provider.id == "er-mod-settings-hub"
-                ? 0u : provider.ordinal + 1u;
-            found.push_back({order, {provider.handle, provider.display_name, shown}});
+            found.push_back({&provider, {provider.handle, provider.display_name, shown}});
         }
+        // Mod Settings order (freeze_and_build_locked): the Hub
+        // (NativeTweaks) first, then priority, id, registration order.
+        std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
+            const Provider& left = *a.first;
+            const Provider& right = *b.first;
+            const bool left_hub = left.id == "er-mod-settings-hub";
+            const bool right_hub = right.id == "er-mod-settings-hub";
+            if (left_hub != right_hub) return left_hub;
+            if (left.priority != right.priority) return left.priority < right.priority;
+            if (left.id != right.id) return left.id < right.id;
+            return left.ordinal < right.ordinal;
+        });
     }
-    std::sort(found.begin(), found.end(),
-        [](const auto& a, const auto& b) { return a.first < b.first; });
     std::vector<TalkProviderView> out;
     out.reserve(found.size());
     for (auto& item : found) out.push_back(std::move(item.second));
@@ -3213,6 +3238,10 @@ ERUI_Result Registry::talk_set_value(ERUI_ProviderHandle provider_handle,
     // next poll reports it to the provider. public_value is updated at once
     // so the talk page shows the new value when it is rebuilt.
     const auto byte = static_cast<std::uint8_t>(value);
+    // A provider write still waiting for the worker (apply_pending_values,
+    // also under mutex_) would put its value back silently: the player's
+    // choice is the newer one.
+    row.pending_write.store(false, std::memory_order_release);
     row.public_value.store(byte, std::memory_order_release);
     row.native_value = byte;
     erui::native::mark_native_value_dirty(&row.native_value);
@@ -3240,9 +3269,18 @@ ERUI_Result Registry::talk_press(ERUI_ProviderHandle provider_handle,
 void Registry::button_bridge(void* user_data) noexcept {
     auto* row = static_cast<Row*>(user_data);
     if (!row) return;
+    // Fork (r157): set_row_text may relabel the row after the freeze (the
+    // talk menu reads row.label), so the label is copied under the lock;
+    // try_lock, as this runs from game callbacks.
+    std::wstring label{};
+    try {
+        std::unique_lock lock(registry().mutex_, std::try_to_lock);
+        if (lock.owns_lock()) label = row->label;
+    } catch (...) {
+    }
     erui::detail::logf(erui::LogLevel::info,
         "Provider button activated: \"%ls\" (row=%llu, callback=%s)",
-        row->label.c_str(),
+        label.c_str(),
         static_cast<unsigned long long>(row->handle),
         row->button_callback ? "yes" : "none");
     invoke_button_callback(row->button_callback, row->user_data);

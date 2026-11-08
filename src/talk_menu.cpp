@@ -18,6 +18,8 @@
 
 #include <Windows.h>
 
+#include <safetyhook.hpp>
+
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -33,8 +35,10 @@
 extern "C" {
 using erui_talk_log_fn = void (*)(std::uint32_t level, const char* text, std::size_t length);
 using erui_talk_before_open_fn = void (*)();
+using erui_talk_install_fn = std::uint32_t (*)(std::uintptr_t at);
 std::uint32_t erui_talk_start(erui_talk_log_fn log, erui_talk_before_open_fn before_open,
-    const std::uint16_t* key, std::size_t key_length);
+    erui_talk_install_fn install_text_hook, const std::uint16_t* key, std::size_t key_length);
+const std::uint16_t* erui_talk_text(std::int32_t id);
 std::uint32_t erui_talk_register(const std::uint16_t* name, std::size_t length,
     ERUI_TalkBuildFn build, ERUI_TalkChooseFn choose, void* user, std::uint64_t* out);
 std::uint32_t erui_talk_register_settings(const std::uint16_t* name, std::size_t length,
@@ -59,6 +63,49 @@ void log_sink(std::uint32_t level, const char* text, std::size_t length) {
     const LogLevel mapped = level >= 2 ? LogLevel::error
         : level == 1 ? LogLevel::warning : LogLevel::info;
     host::log::write(mapped, "%.*s", static_cast<int>(length), text);
+}
+
+// ---- the message lookup (talk/src/texts.rs)
+
+// MsgRepositoryImp::LookupEntry(repo, bank, category, id) -> text. A chained
+// inline hook, put in the first time the menu opens and kept: our ids get our
+// texts, every other call goes on to whatever was there (the game, or another
+// mod's hook such as Glorious Merchant's).
+using LookupEntryFn = const std::uint16_t* (*)(void* repo, std::uint32_t bank,
+    std::uint32_t category, std::int32_t id);
+SafetyHookInline g_lookup_hook{};
+std::atomic<LookupEntryFn> g_lookup_original{};
+
+const std::uint16_t* lookup_detour(void* repo, std::uint32_t bank, std::uint32_t category,
+    std::int32_t id) {
+    if (const std::uint16_t* ours = erui_talk_text(id)) return ours;
+    const LookupEntryFn original = g_lookup_original.load(std::memory_order_acquire);
+    return original ? original(repo, bank, category, id) : nullptr;
+}
+
+std::uint32_t install_text_hook(std::uintptr_t at) {
+    if (g_lookup_hook) return 1;
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(at);
+    auto result = SafetyHookInline::create(reinterpret_cast<void*>(at),
+        reinterpret_cast<void*>(&lookup_detour), SafetyHookInline::StartDisabled);
+    if (!result) {
+        host::log::write(LogLevel::error,
+            "talk menu: message lookup hook failed (SafetyHook error type %u, first bytes %02X %02X %02X %02X %02X)",
+            static_cast<unsigned>(result.error().type), bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]);
+        return 0;
+    }
+    g_lookup_hook = std::move(*result);
+    g_lookup_original.store(g_lookup_hook.original<LookupEntryFn>(), std::memory_order_release);
+    if (auto enabled = g_lookup_hook.enable(); !enabled) {
+        host::log::write(LogLevel::error,
+            "talk menu: message lookup hook could not be enabled (SafetyHook error type %u)",
+            static_cast<unsigned>(enabled.error().type));
+        return 0;
+    }
+    host::log::write("talk menu: message lookup hook in place (entry was %s)",
+        bytes[0] == 0xE9 || (bytes[0] == 0xFF && bytes[1] == 0x25) ? "already hooked by another mod"
+                                                                   : "the game's own");
+    return 1;
 }
 
 // ---- Mod Settings pages as talk pages (game thread only)
@@ -130,7 +177,7 @@ void pagination(Bridge& bridge, ERUI_TalkMenu* menu, std::vector<Action>& shown,
     }
 }
 
-void ERUI_CALL bridge_build(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
+void build_page(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
     Bridge& bridge = *static_cast<Bridge*>(user);
     if (id >= bridge.pages.size()) {
         (void)erui_talk_back(menu);
@@ -175,7 +222,6 @@ void ERUI_CALL bridge_build(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
             action = {Act::press, row.handle, 0, 0};
             break;
         case Registry::TalkRowKind::submenu:
-            if (text.size() < 3 || text.compare(text.size() - 3, 3, L"...") != 0) text += L"...";
             action = {Act::submenu, row.handle, 0, intern(bridge, row.child_page, ERUI_INVALID_ROW, 0)};
             break;
         case Registry::TalkRowKind::toggle:
@@ -199,7 +245,7 @@ void ERUI_CALL bridge_build(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
     pagination(bridge, menu, shown, at, total, false);
 }
 
-void ERUI_CALL bridge_choose(void* user, ERUI_TalkMenu* menu, std::uint32_t id, std::uint32_t row) {
+void choose_row(void* user, ERUI_TalkMenu* menu, std::uint32_t id, std::uint32_t row) {
     Bridge& bridge = *static_cast<Bridge*>(user);
     const auto shown = bridge.shown.find(id);
     if (shown == bridge.shown.end() || row >= shown->second.size()) return;
@@ -244,6 +290,26 @@ void ERUI_CALL bridge_choose(void* user, ERUI_TalkMenu* menu, std::uint32_t id, 
     }
 }
 
+// The callbacks the Rust side calls: no C++ exception may cross into it.
+void ERUI_CALL bridge_build(void* user, ERUI_TalkMenu* menu, std::uint32_t id) noexcept {
+    try {
+        build_page(user, menu, id);
+    } catch (...) {
+        host::log::write(LogLevel::error, "talk menu: a Mod Settings page could not be built");
+        (void)erui_talk_back(menu);
+    }
+}
+
+void ERUI_CALL bridge_choose(void* user, ERUI_TalkMenu* menu, std::uint32_t id,
+    std::uint32_t row) noexcept {
+    try {
+        choose_row(user, menu, id, row);
+    } catch (...) {
+        host::log::write(LogLevel::error, "talk menu: a Mod Settings choice failed");
+        (void)erui_talk_back(menu);
+    }
+}
+
 // Before the top list is built: a row for every provider committed since.
 void sync_providers() {
     for (Registry::TalkProviderView& provider : host::registry().talk_providers()) {
@@ -262,6 +328,9 @@ void sync_providers() {
         if (result != ERUI_OK) {
             host::log::write(LogLevel::warning, "talk menu: no row for \"%s\" (%u)", name,
                 static_cast<unsigned>(result));
+            // tried again at the next open (the bridge was never handed out)
+            g_bridged.erase(provider.handle);
+            g_bridges.pop_back();
         }
     }
 }
@@ -282,7 +351,7 @@ bool passive() noexcept {
 
 void start(const wchar_t* key) noexcept {
     if (g_started.exchange(true)) return;
-    const std::uint32_t result = erui_talk_start(&log_sink, &before_open,
+    const std::uint32_t result = erui_talk_start(&log_sink, &before_open, &install_text_hook,
         reinterpret_cast<const std::uint16_t*>(key), key ? std::wcslen(key) : 0u);
     if (result != ERUI_OK) {
         host::log::write(LogLevel::error, "talk menu: start failed (%u)",
