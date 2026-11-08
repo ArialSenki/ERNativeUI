@@ -6624,9 +6624,13 @@ HookInstallStatus install_native_menu_hooks(
         color_picker_installed = true;
     }
     if (color_picker_requested && !color_picker_installed) {
-        reset_hooks();
-        remove_native_dialog_transport();
-        return HookInstallStatus::hook_failed;
+        // Fork r157: only the colour rows go. install_color_picker leaves no
+        // hook behind on failure, and a colour row then refuses to open
+        // (request_color_picker: ERUI_NOT_SUPPORTED). Before, this took the
+        // whole menu down.
+        erui::detail::logf(
+            erui::LogLevel::error,
+            "Color Picker is off: its rows show their value but do not open; the rest of the menu keeps working");
     }
 
     const bool title_path_bridge_requested =
@@ -6639,6 +6643,10 @@ HookInstallStatus install_native_menu_hooks(
         g_mod_settings_tab_hooks_ready.load(std::memory_order_acquire) &&
         addresses.scaleform_path_resolver;
     bool exact_path_ownership_required{};
+    // Fork r157: a custom-tab requirement that cannot be met turns only the
+    // custom tabs off (install_native_tabs then fails closed: it needs the
+    // proven path bridge and the validated Graphics carrier), not the menu.
+    bool custom_tabs_off{};
 #if defined(ER_NATIVE_UI_CUSTOM_TABS_BACKEND)
     exact_path_ownership_required = runtime.menu &&
         !runtime.menu->tab_page_indices.empty();
@@ -6663,13 +6671,12 @@ HookInstallStatus install_native_menu_hooks(
                     find_foreign_hook_owner(path_hook_target);
                 erui::detail::logf(
                     erui::LogLevel::error,
-                    "Shared Scaleform path target changed after native-tab preflight%s%s%s; refusing to chain or expose process-lifetime custom-tab hooks",
+                    "Shared Scaleform path target changed after native-tab preflight%s%s%s; custom tabs are off, the path bridge is chained for the rest of the menu",
                     owner.hooked ? " (entry hooked by " : "",
                     owner.hooked ? owner.name : "",
                     owner.hooked ? ")" : "");
-                reset_hooks();
-                remove_native_dialog_transport();
-                return HookInstallStatus::hook_failed;
+                exact_path_ownership_required = false;
+                custom_tabs_off = true;
             }
             auto path_result = SafetyHookMid::create(
                 path_hook_target,
@@ -6716,16 +6723,17 @@ HookInstallStatus install_native_menu_hooks(
                     }
                 }
                 if (exact_path_ownership_required && !exact_ownership) {
+                    // The unproven hook was taken out above, so features
+                    // that need the path bridge are off with the tabs.
                     set_color_picker_widget_path_bridge_available(false);
                     erui::detail::logf(
                         erui::LogLevel::error,
-                        "Shared Scaleform path bridge could not prove exact target ownership; custom-tab hooks were not exposed");
-                    reset_hooks();
-                    remove_native_dialog_transport();
-                    return HookInstallStatus::hook_failed;
+                        "Shared Scaleform path bridge could not prove exact target ownership; custom tabs and path-dependent presentation are off, the rest of the menu keeps working");
+                    custom_tabs_off = true;
+                } else {
+                    set_color_picker_widget_path_bridge_available(
+                        color_picker_installed);
                 }
-                set_color_picker_widget_path_bridge_available(
-                    color_picker_installed);
                 erui::detail::logf(
                     erui::LogLevel::info,
                     "Shared Scaleform path bridge installed (titles=%d colorWidget=%d diagnostics=%d hubPanel=%d exactOwnership=%d)",
@@ -6764,17 +6772,20 @@ HookInstallStatus install_native_menu_hooks(
     // fallible menu-hook stage has completed. If either carrier enable is
     // ambiguous, its unarmed pass-through hooks and the complete runtime are
     // retained rather than rolling back executable trampolines in flight.
-    if (runtime.menu && !runtime.menu->tab_page_indices.empty()) {
+    if (runtime.menu && !runtime.menu->tab_page_indices.empty() &&
+        !custom_tabs_off) {
         g_reusable_route = native_graphics_route();
         if (!install_tab_content_carrier_hooks(addresses)) {
+            // Fork r157: any carrier hook already exposed stays an unarmed
+            // pass-through, and install_native_tabs refuses without the
+            // validated carrier, so only the custom tabs are off.
             erui::detail::logf(
                 erui::LogLevel::error,
-                "Custom tabs require the validated category-8 selector-11 Graphics carrier");
-            reset_hooks();
-            return HookInstallStatus::hook_failed;
+                "Custom tabs require the validated category-8 selector-11 Graphics carrier; custom tabs are off, the rest of the menu keeps working");
         }
     }
 #endif
+    (void)custom_tabs_off;
 
     erui::detail::logf(
         erui::LogLevel::info,

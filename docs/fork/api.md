@@ -288,7 +288,9 @@ may open a game menu), a text input shows its value. Long pages are split
 into pages of 60 rows. A value is changed as a player edit in the
 Configuration screen would change it, so the provider's change callback runs
 on the ERNativeUI worker within about 50 ms and saving works as usual.
-Disabled rows are shown but do nothing. These rows come first in the list,
+Disabled rows are shown but do nothing. On/Off, `(current)`, the page
+counters and **Back** follow the host language (`ERNativeUIFork_SetHostLanguage`
+or the Steam language; 15 languages built in). These rows come first in the list,
 in Mod Settings order; a provider that also registers talk pages
 (`ERNativeUIFork_TalkRegister`) under the same name keeps only those.
 

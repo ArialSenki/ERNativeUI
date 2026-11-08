@@ -328,6 +328,22 @@ constexpr std::size_t kScaleformVisibilitySetterHookablePrologue = 15;
 // Its prologue up to the stack cookie load (3 + 1 + 7 + 8) holds whole
 // instructions that a 5-byte or 14-byte jump covers; the rest is checked.
 constexpr std::size_t kTextRefHelpHookablePrologue = 19;
+// Fork r157 (audit): the three entries every menu needs. Another mod's
+// inline hook on one of them turned every menu off; like the entries above,
+// a recognised hook jump over whole prologue instructions, followed by the
+// untouched rest of the pattern, is accepted (both builds' bytes checked in
+// the 2.7.0.0, 2.7.1.0, 2.7.1.1, 2.7.2.0 and 2.7.2.1 executables).
+// Text resolver: mov [rsp+8],rcx / push rdi / sub rsp,40h / mov [rsp+38h],-2
+// (5 + 1 + 4 + 9).
+constexpr std::size_t kTextResolverHookablePrologue = 19;
+// Game Options and subpage handlers: push rbp, rsi, rdi, r12-r15 / lea rbp
+// (2 + 1 + 1 + 2 + 2 + 2 + 2 + 8).
+constexpr std::size_t kMenuHandlerHookablePrologue = 20;
+// kGameOptionsHandlerPattern ends with the prologue; this adds its next
+// instructions (sub rsp,0E20h / mov [rsp+70h],-2) as the checked body.
+constexpr std::string_view kGameOptionsHandlerValidation =
+    "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 E0 F2 FF FF "
+    "48 81 EC 20 0E 00 00 48 C7 44 24 70 FE FF FF FF";
 
 [[nodiscard]] std::string_view pattern_after_bytes(
     std::string_view pattern,
@@ -658,7 +674,8 @@ std::uint8_t* resolve_text_resolver(
         fallback_rva,
         kTextResolverPrologue,
         // r148: the only caller passes shared_menu_profile->text_resolver_rva.
-        FallbackRvaSource::exact_build_profile);
+        FallbackRvaSource::exact_build_profile,
+        kTextResolverHookablePrologue);
 }
 
 
@@ -1359,8 +1376,9 @@ bool resolve_game_addresses(
                 shared_menu_profile
                     ? shared_menu_profile->game_options_handler_rva
                     : std::uintptr_t{0},
-                kGameOptionsHandlerPattern,
-                FallbackRvaSource::exact_build_profile));
+                kGameOptionsHandlerValidation,
+                FallbackRvaSource::exact_build_profile,
+                kMenuHandlerHookablePrologue));
         output.option_setting_tab_frame_dispatch = resolve_optional_direct(
             game,
             "Configuration tab frame dispatch",
@@ -1620,7 +1638,8 @@ bool resolve_game_addresses(
                         ? shared_menu_profile->sub_handler_rva
                         : std::uintptr_t{0},
                     kSubHandlerPattern,
-                    FallbackRvaSource::exact_build_profile));
+                    FallbackRvaSource::exact_build_profile,
+                    kMenuHandlerHookablePrologue));
             output.open_sub_page = reinterpret_cast<OpenSubPageFn>(resolve_direct(
                 game,
                 "open subpage",

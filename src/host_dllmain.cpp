@@ -1519,18 +1519,37 @@ DWORD run_host() noexcept {
         std::error_code hub_file_error{};
         const bool hub_file_here = std::filesystem::exists(
             directory / L"NativeTweaks.dll", hub_file_error);
+        // r157 (08-11): with Steam slow to answer, the game started
+        // NativeTweaks' own thread 11 s after readiness; it connected at
+        // +12.4 s and registered at +15.1 s, 0.1 s after maxWait had closed
+        // registration. maxWait counts from readiness, not from NativeTweaks,
+        // so once NativeTweaks.dll is loaded it gets a longer, still bounded
+        // wait (three times maxWait, at most 45 s).
+        const std::uint64_t hub_max_wait_ms =
+            (std::min)(max_wait_ms * 3u, std::uint64_t{45000});
         bool awaiting_logged = false;
+        bool extension_logged = false;
         while (!g_stop.load(std::memory_order_acquire)) {
             const bool hub_loaded = GetModuleHandleW(L"NativeTweaks.dll") != nullptr;
             const bool await_hub = hub_loaded || hub_file_here;
             if (await_hub && !awaiting_logged) {
                 log::write(hub_loaded
-                    ? "NativeTweaks.dll is loaded: registration stays open until it registers (maxWait still applies)"
-                    : "NativeTweaks.dll is next to ERNativeUI.dll but not loaded yet: registration stays open until it registers (maxWait still applies)");
+                    ? "NativeTweaks.dll is loaded: registration stays open until it registers (up to %llu ms)"
+                    : "NativeTweaks.dll is next to ERNativeUI.dll but not loaded yet: registration stays open until it registers (maxWait still applies)",
+                    static_cast<unsigned long long>(hub_max_wait_ms));
                 awaiting_logged = true;
             }
+            const std::uint64_t wait_ms = hub_loaded ? hub_max_wait_ms : max_wait_ms;
+            if (hub_loaded && !extension_logged && hub_max_wait_ms > max_wait_ms &&
+                GetTickCount64() - opened_at >= max_wait_ms) {
+                log::write(erui::LogLevel::warning,
+                    "NativeTweaks has not registered after maxWait (%llu ms); still waiting for it, up to %llu ms",
+                    static_cast<unsigned long long>(max_wait_ms),
+                    static_cast<unsigned long long>(hub_max_wait_ms));
+                extension_logged = true;
+            }
             if (auto menu = registry().try_freeze_and_build(
-                    opened_at, quiet_ms, max_wait_ms,
+                    opened_at, quiet_ms, wait_ms,
                     await_hub ? std::string_view("er-mod-settings-hub") : std::string_view())) {
                 g_menu = std::move(menu);
                 break;

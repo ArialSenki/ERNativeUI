@@ -118,7 +118,7 @@ static PENDING_OPEN: AtomicU64 = AtomicU64::new(u64::MAX);
 /// Frames an open request waits for the game (another menu still closing,
 /// a loading screen) before it is dropped: about one second.
 const REQUEST_FRAMES: u32 = 60;
-/// Called on the game thread before the top list is built, so the C++ side
+/// Called on the game thread before a page is built, so the C++ side
 /// can add rows for providers committed since (talk_menu.cpp).
 type BeforeOpenFn = unsafe extern "C" fn();
 static BEFORE_OPEN: AtomicUsize = AtomicUsize::new(0);
@@ -339,6 +339,22 @@ pub extern "C" fn erui_talk_open(id: u64) -> u32 {
     ERUI_OK
 }
 
+/// The Back row's text (talk_menu.cpp, in the host's language; "Back" until
+/// set). Called on the game thread before a page is built.
+#[unsafe(no_mangle)]
+pub extern "C" fn erui_talk_set_back_text(text: *const u16, len: usize) {
+    if let Some(t) = text_of(text, len).filter(|t| !t.is_empty()) {
+        *BACK_TEXT.lock().unwrap_or_else(|e| e.into_inner()) = t;
+    }
+}
+
+static BACK_TEXT: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+
+fn back_text() -> Vec<u16> {
+    let t = BACK_TEXT.lock().unwrap_or_else(|e| e.into_inner());
+    if t.is_empty() { "Back".encode_utf16().collect() } else { t.clone() }
+}
+
 /// 1 while the menu is open.
 #[unsafe(no_mangle)]
 pub extern "C" fn erui_talk_is_open() -> u32 {
@@ -447,7 +463,15 @@ fn frame_inner() {
         return;
     };
     let handle = player.chr_ins.field_ins_handle;
+    let alive = player.chr_ins.modules.data.hp > 0;
 
+    if m.state == State::Idle && (pressed || request != u64::MAX) && !alive {
+        // not while dying or dead (a request waits, as for another menu)
+        if pressed {
+            log_info("talk menu: not opened, the player is dead");
+        }
+        return;
+    }
     if m.state == State::Idle && (pressed || request != u64::MAX) {
         let top = top_menu_job();
         if top.is_some_and(|j| j != 0) {
@@ -483,7 +507,7 @@ fn frame_inner() {
     talk.npc_talk.base.field_ins_handle = handle;
     let result = match m.state {
         State::Enter => enter(m),
-        State::Open => poll(m),
+        State::Open => poll(m, alive),
         State::Idle => Ok(()),
     };
     if let Err(e) = result {
@@ -543,6 +567,8 @@ fn call(build: bool, e: &Entry, page: u32, row: u32) -> Ctx {
 fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
     // A provider's build may navigate (Back, another page...): follow it a
     // few times at most.
+    // New Mod Settings rows and the host's words (Back) before any page.
+    before_open();
     let mut rows: Vec<(Row, Vec<u16>)> = Vec::new();
     let mut built = false;
     for _ in 0..8 {
@@ -553,7 +579,6 @@ fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
         rows.clear();
         match level {
             Level::Top => {
-                before_open();
                 for e in top_entries() {
                     rows.push((Row::Entry(e.id), e.name));
                 }
@@ -583,7 +608,7 @@ fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
                 for (row, text) in ctx.rows {
                     rows.push((Row::Provider(row), text));
                 }
-                rows.push((Row::Back, "Back".encode_utf16().collect()));
+                rows.push((Row::Back, back_text()));
                 built = true;
                 break;
             }
@@ -627,7 +652,7 @@ fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
 }
 
 /// Waits for the player's choice and acts on it.
-fn poll(m: &mut Menu) -> Result<(), EzStateInvokeError> {
+fn poll(m: &mut Menu, alive: bool) -> Result<(), EzStateInvokeError> {
     let talk = m.talk.as_mut().expect("talk script");
     let menu: i32 = talk
         .env((
@@ -642,6 +667,14 @@ fn poll(m: &mut Menu) -> Result<(), EzStateInvokeError> {
     let r: i32 = talk.env(GET_TALK_LIST_MENU_RESULT)?.into();
     let chosen = (r >= 1).then(|| m.rows.get(r as usize - 1).copied()).flatten();
     let level = m.stack.last().copied();
+    // Closed without a choice because the player died: close instead of
+    // going up a level, which would show the list again. (Not the top menu
+    // job: the talk list's own job may still be closing after Esc.)
+    if chosen.is_none() && !alive {
+        log_info("talk menu: closed, the player died");
+        close(m);
+        return Ok(());
+    }
     let next = match (chosen, level) {
         (Some(Row::Entry(id)), _) => Nav::Enter(id),
         (Some(Row::Provider(row)), Some(Level::Provider { entry: id, page })) => match entry(id) {

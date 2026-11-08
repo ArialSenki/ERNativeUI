@@ -89,7 +89,43 @@ constexpr BuiltinLocale kBuiltinLocales[] = {
         L"Trang sau", L"Mở trang cài đặt tiếp theo."},
 };
 
+// Fork r157: the talk menu's words (On, Off, "(current)", Back); English is
+// the MenuLocalization default.
+struct TalkLocale {
+    const char* identifier;
+    const wchar_t* on;
+    const wchar_t* off;
+    const wchar_t* current;
+    const wchar_t* back;
+};
+
+constexpr TalkLocale kTalkLocales[] = {
+    {"arabic", L"تشغيل", L"إيقاف", L"(الحالي)", L"رجوع"},
+    {"brazilian", L"Ligado", L"Desligado", L"(atual)", L"Voltar"},
+    {"french", L"Activé", L"Désactivé", L"(actuel)", L"Retour"},
+    {"german", L"An", L"Aus", L"(aktuell)", L"Zurück"},
+    {"italian", L"Attivo", L"Disattivo", L"(attuale)", L"Indietro"},
+    {"japanese", L"オン", L"オフ", L"（現在）", L"戻る"},
+    {"koreana", L"켜기", L"끄기", L"(현재)", L"뒤로"},
+    {"latam", L"Activado", L"Desactivado", L"(actual)", L"Volver"},
+    {"polish", L"Włączone", L"Wyłączone", L"(obecnie)", L"Wstecz"},
+    {"russian", L"Вкл.", L"Выкл.", L"(текущее)", L"Назад"},
+    {"schinese", L"开启", L"关闭", L"（当前）", L"返回"},
+    {"spanish", L"Activado", L"Desactivado", L"(actual)", L"Volver"},
+    {"tchinese", L"開啟", L"關閉", L"（目前）", L"返回"},
+    {"thai", L"เปิด", L"ปิด", L"(ปัจจุบัน)", L"กลับ"},
+    {"vietnamese", L"Bật", L"Tắt", L"(hiện tại)", L"Quay lại"},
+};
+
 void apply_builtin(std::string_view identifier, erui::MenuLocalization& text) {
+    for (const TalkLocale& locale : kTalkLocales) {
+        if (identifier != locale.identifier) continue;
+        text.talk_on = locale.on;
+        text.talk_off = locale.off;
+        text.talk_current = locale.current;
+        text.talk_back = locale.back;
+        break;
+    }
     for (const BuiltinLocale& locale : kBuiltinLocales) {
         if (identifier != locale.identifier) continue;
         const auto set = [](const wchar_t* value, std::wstring& destination) {

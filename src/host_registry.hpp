@@ -336,6 +336,15 @@ public:
         std::uint32_t index) noexcept;
     // Runs a button row's callback (outside the registry lock).
     ERUI_Result talk_press(ERUI_ProviderHandle provider, ERUI_RowHandle row) noexcept;
+    // The host's words in its current language (ERNativeUIFork_SetHostLanguage
+    // or the Steam language): Previous/Next page, "(current)", Back.
+    struct TalkWords {
+        std::wstring previous_page{};
+        std::wstring next_page{};
+        std::wstring current{};
+        std::wstring back{};
+    };
+    [[nodiscard]] TalkWords talk_words() const;
 
 private:
     enum class RowKind : std::uint8_t {

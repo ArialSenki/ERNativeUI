@@ -70,6 +70,11 @@ struct MenuLocalization {
     std::wstring previous_help{L"Return to the preceding settings page."};
     std::wstring next_label{L"Next Page"};
     std::wstring next_help{L"Open the next settings page."};
+    // Fork r157: the talk menu's Mod Settings pages (talk_menu.cpp).
+    std::wstring talk_on{L"On"};
+    std::wstring talk_off{L"Off"};
+    std::wstring talk_current{L"(current)"};
+    std::wstring talk_back{L"Back"};
 };
 
 enum class TabIconSource : std::uint8_t {

@@ -52,6 +52,7 @@ std::uint32_t erui_talk_back(ERUI_TalkMenu* menu);
 std::uint32_t erui_talk_close(ERUI_TalkMenu* menu);
 std::uint32_t erui_talk_open(std::uint64_t entry);
 std::uint32_t erui_talk_is_open();
+void erui_talk_set_back_text(const std::uint16_t* text, std::size_t length);
 }
 
 namespace erui::talk {
@@ -159,20 +160,20 @@ void add(ERUI_TalkMenu* menu, std::vector<Action>& shown, const std::wstring& te
     }
 }
 
-std::wstring page_counter(const wchar_t* what, std::uint32_t number, std::uint32_t count) {
-    return std::wstring(what) + L" (" + std::to_wstring(number) + L"/" + std::to_wstring(count) + L")";
+std::wstring page_counter(const std::wstring& what, std::uint32_t number, std::uint32_t count) {
+    return what + L" (" + std::to_wstring(number) + L"/" + std::to_wstring(count) + L")";
 }
 
 void pagination(Bridge& bridge, ERUI_TalkMenu* menu, std::vector<Action>& shown,
-    const BridgePage& at, std::uint32_t total, bool before) {
+    const BridgePage& at, std::uint32_t total, bool before, const Registry::TalkWords& words) {
     const std::uint32_t pages = (total + kPerPage - 1) / kPerPage;
     const std::uint32_t number = at.offset / kPerPage + 1;
     if (before && at.offset > 0) {
-        add(menu, shown, page_counter(L"Previous page", number - 1, pages),
+        add(menu, shown, page_counter(words.previous_page, number - 1, pages),
             {Act::turn, 0, 0, intern(bridge, at.page, at.values_row, at.offset - kPerPage)});
     }
     if (!before && at.offset + kPerPage < total) {
-        add(menu, shown, page_counter(L"Next page", number + 1, pages),
+        add(menu, shown, page_counter(words.next_page, number + 1, pages),
             {Act::turn, 0, 0, intern(bridge, at.page, at.values_row, at.offset + kPerPage)});
     }
 }
@@ -187,6 +188,7 @@ void build_page(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
     std::vector<Action>& shown = bridge.shown[id];
     shown.clear();
     Registry& registry = host::registry();
+    const Registry::TalkWords words = registry.talk_words();
 
     if (at.values_row != ERUI_INVALID_ROW) {
         std::wstring label;
@@ -197,12 +199,12 @@ void build_page(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
             return;
         }
         const auto total = static_cast<std::uint32_t>(texts.size());
-        pagination(bridge, menu, shown, at, total, true);
+        pagination(bridge, menu, shown, at, total, true, words);
         for (std::uint32_t i = at.offset; i < total && i < at.offset + kPerPage; ++i) {
-            add(menu, shown, i == current ? texts[i] + L"  (current)" : texts[i],
+            add(menu, shown, i == current ? texts[i] + L"  " + words.current : texts[i],
                 {Act::set, at.values_row, i, 0});
         }
-        pagination(bridge, menu, shown, at, total, false);
+        pagination(bridge, menu, shown, at, total, false, words);
         return;
     }
 
@@ -212,7 +214,7 @@ void build_page(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
         return;
     }
     const auto total = static_cast<std::uint32_t>(rows.size());
-    pagination(bridge, menu, shown, at, total, true);
+    pagination(bridge, menu, shown, at, total, true, words);
     for (std::uint32_t i = at.offset; i < total && i < at.offset + kPerPage; ++i) {
         const Registry::TalkRowView& row = rows[i];
         std::wstring text = row.label;
@@ -242,7 +244,7 @@ void build_page(void* user, ERUI_TalkMenu* menu, std::uint32_t id) {
         if (!row.enabled) action = {};
         add(menu, shown, text, action);
     }
-    pagination(bridge, menu, shown, at, total, false);
+    pagination(bridge, menu, shown, at, total, false, words);
 }
 
 void choose_row(void* user, ERUI_TalkMenu* menu, std::uint32_t id, std::uint32_t row) {
@@ -338,6 +340,9 @@ void sync_providers() {
 void before_open() {
     try {
         sync_providers();
+        // the Back row of every page, in the host's language
+        const std::wstring back = host::registry().talk_words().back;
+        erui_talk_set_back_text(reinterpret_cast<const std::uint16_t*>(back.data()), back.size());
     } catch (...) {
         host::log::write(LogLevel::error, "talk menu: listing the Mod Settings pages failed");
     }

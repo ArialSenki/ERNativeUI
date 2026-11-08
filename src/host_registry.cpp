@@ -3053,9 +3053,6 @@ void Registry::apply_pending_values() noexcept {
 
 namespace {
 
-const wchar_t* const kTalkOff = L"Off";
-const wchar_t* const kTalkOn = L"On";
-
 std::uint32_t talk_slider_count(const erui::SliderSpec& slider) noexcept {
     if (slider.step <= 0 || slider.maximum < slider.minimum) return 1;
     return static_cast<std::uint32_t>((slider.maximum - slider.minimum) / slider.step) + 1u;
@@ -3130,7 +3127,7 @@ bool Registry::talk_page(ERUI_ProviderHandle provider_handle, ERUI_PageHandle pa
             case RowKind::toggle:
                 view.kind = TalkRowKind::toggle;
                 view.current = value ? 1u : 0u;
-                view.value = value ? kTalkOn : kTalkOff;
+                view.value = value ? pagination_locale_.talk_on : pagination_locale_.talk_off;
                 break;
             case RowKind::slider:
                 view.kind = TalkRowKind::values;
@@ -3179,7 +3176,7 @@ bool Registry::talk_values(ERUI_ProviderHandle provider_handle, ERUI_RowHandle r
     const std::uint8_t value = row.public_value.load(std::memory_order_acquire);
     switch (row.kind) {
     case RowKind::toggle:
-        texts = {kTalkOff, kTalkOn};
+        texts = {pagination_locale_.talk_off, pagination_locale_.talk_on};
         current = value ? 1u : 0u;
         return true;
     case RowKind::slider: {
@@ -3246,6 +3243,12 @@ ERUI_Result Registry::talk_set_value(ERUI_ProviderHandle provider_handle,
     row.native_value = byte;
     erui::native::mark_native_value_dirty(&row.native_value);
     return ERUI_OK;
+}
+
+Registry::TalkWords Registry::talk_words() const {
+    std::lock_guard lock(mutex_);
+    return {pagination_locale_.previous_label, pagination_locale_.next_label,
+        pagination_locale_.talk_current, pagination_locale_.talk_back};
 }
 
 ERUI_Result Registry::talk_press(ERUI_ProviderHandle provider_handle,
