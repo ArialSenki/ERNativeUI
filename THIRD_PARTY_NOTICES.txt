@@ -11,6 +11,30 @@ ERNativeUI links the following open-source components into the host:
 - Zydis v4.1.0: https://github.com/zyantific/zydis
 - Zycore: https://github.com/zyantific/zycore-c
 
+NativeTweaks fork: the talk menu (`talk/`) is a Rust static library linked
+into the host. It uses fromsoftware-rs (the `eldenring` and
+`fromsoftware-shared` crates, v0.14.0, MIT OR Apache-2.0):
+https://github.com/vswarte/eldenring-rs
+
+and these crates.io crates, all linked into the same library (the licence
+each publishes in its Cargo manifest):
+
+- arrayvec 0.7.6, bitfield 0.19.5, bitflags 2.13.1, bumpalo 3.20.2,
+  cfg-if 1.0.4, equivalent 1.0.2, from-singleton 3.0.1, fxhash 0.2.1,
+  glam 0.32.1, hashbrown 0.17.1, indexmap 2.14.0, nonmax 0.5.5,
+  smallvec 1.15.1, thiserror 1.0.69, winapi 0.3.9, windows 0.61.3 and its
+  windows-* crates: MIT OR Apache-2.0
+- byteorder 1.5.0, memchr 2.8.0: Unlicense OR MIT
+- dataview 1.0.2, no-std-compat 0.4.1, pelite 0.10.0, vtable-rs 0.1.5: MIT
+- encoding_rs 0.8.35: (Apache-2.0 OR MIT) AND BSD-3-Clause
+- num_enum 0.7.6: BSD-3-Clause OR MIT OR Apache-2.0
+- undname 2.1.2: Apache-2.0 WITH LLVM-exception
+
+Crates used only while building (procedural macros and their parsers such
+as syn, quote, proc-macro2, toml_edit and winnow) are not part of the DLL.
+The licence texts are in each crate's source; for the MIT and Apache-2.0
+licences see also fromsoftware-rs' LICENSE-MIT and LICENSE-ASL2.
+
 Release staging, CMake installation, and CPack packages include the complete
 upstream license texts under the `licenses` directory. Those texts and their
 copyright notices govern the respective third-party components.
