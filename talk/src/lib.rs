@@ -114,7 +114,8 @@ struct Entry {
 static ENTRIES: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// Open request from erui_talk_open: u64::MAX none, 0 top list, else entry.
-static PENDING_OPEN: AtomicU64 = AtomicU64::new(u64::MAX);
+/// With the provider page it opens at (erui_talk_open_at).
+static PENDING_OPEN: Mutex<Option<(u64, u32)>> = Mutex::new(None);
 /// Frames an open request waits for the game (another menu still closing,
 /// a loading screen) before it is dropped: about one second.
 const REQUEST_FRAMES: u32 = 60;
@@ -329,13 +330,24 @@ pub extern "C" fn erui_talk_close(ctx: *mut Ctx) -> u32 {
 /// for 0) on the next frame where it may. Any thread.
 #[unsafe(no_mangle)]
 pub extern "C" fn erui_talk_open(id: u64) -> u32 {
+    erui_talk_open_at(id, 0)
+}
+
+/// erui_talk_open at one of the provider's pages: Back from it goes to the
+/// provider's first page (page 0 opens just that, as erui_talk_open). Any
+/// thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn erui_talk_open_at(id: u64, page: u32) -> u32 {
     if !STARTED.load(Ordering::Acquire) {
         return ERUI_HOST_NOT_READY;
+    }
+    if id == 0 && page != 0 {
+        return ERUI_INVALID_ARGUMENT;
     }
     if id != 0 && entry(id).is_none() {
         return ERUI_NOT_FOUND;
     }
-    PENDING_OPEN.store(id, Ordering::Release);
+    *PENDING_OPEN.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, page));
     ERUI_OK
 }
 
@@ -381,7 +393,14 @@ struct Menu {
     /// An open request (erui_talk_open) waiting for its frame, and how many
     /// frames it may still wait.
     request: u64,
+    request_page: u32,
     request_frames: u32,
+    /// Timing of the shown list, for the log (r157-talk14): frames since it
+    /// was shown, the result read when it was shown, and the frame the
+    /// result first changed while the list was still open.
+    open_frames: u32,
+    open_result: i32,
+    result_frame: Option<u32>,
 }
 
 // Only touched from the game's frame task.
@@ -432,7 +451,11 @@ fn frame_inner() {
         rows: Vec::new(),
         key_prev: false,
         request: u64::MAX,
+        request_page: 0,
         request_frames: 0,
+        open_frames: 0,
+        open_result: 0,
+        result_frame: None,
     });
 
     let down = HOTKEY
@@ -440,10 +463,11 @@ fn frame_inner() {
         .is_some_and(|h| key_down(h.key) && h.modifiers.iter().all(|m| key_down(*m)) && game_in_front());
     let pressed = down && !m.key_prev;
     m.key_prev = down;
-    let new_request = PENDING_OPEN.swap(u64::MAX, Ordering::AcqRel);
-    if new_request != u64::MAX && m.state == State::Idle {
+    let new_request = PENDING_OPEN.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some((id, page)) = new_request.filter(|_| m.state == State::Idle) {
         // (a request while the menu is open is dropped, as it always was)
-        m.request = new_request;
+        m.request = id;
+        m.request_page = page;
         m.request_frames = REQUEST_FRAMES;
     } else if m.request != u64::MAX {
         m.request_frames = m.request_frames.saturating_sub(1);
@@ -491,10 +515,17 @@ fn frame_inner() {
         m.stack = vec![Level::Top];
         if request != u64::MAX && request != 0 {
             m.stack.push(Level::Provider { entry: request, page: 0 });
+            if m.request_page != 0 {
+                m.stack.push(Level::Provider { entry: request, page: m.request_page });
+            }
         }
         log_info(&format!(
             "talk menu: opening ({}; top menu job {:#X})",
-            if pressed { HOTKEY.get().map_or("key", |h| h.name.as_str()) } else { "request" },
+            if pressed {
+                HOTKEY.get().map_or("key".to_string(), |h| h.name.clone())
+            } else {
+                format!("request, waited {} frames", REQUEST_FRAMES - m.request_frames)
+            },
             top.unwrap_or(0)
         ));
         m.state = State::Enter;
@@ -647,6 +678,9 @@ fn enter(m: &mut Menu) -> Result<(), EzStateInvokeError> {
     }
     talk.event((SHOW_SHOP_MESSAGE, [EzStateValue::Int32(1)]))?;
     m.state = State::Open;
+    m.open_frames = 0;
+    m.result_frame = None;
+    m.open_result = talk.env(GET_TALK_LIST_MENU_RESULT).map(i32::from).unwrap_or(0);
     IS_OPEN.store(true, Ordering::Release);
     Ok(())
 }
@@ -661,10 +695,21 @@ fn poll(m: &mut Menu, alive: bool) -> Result<(), EzStateInvokeError> {
         ))?
         .into();
     let generic: i32 = talk.env((CHECK_SPECIFIC_PERSON_GENERIC_DIALOG_IS_OPEN, [EzStateValue::Int32(0)]))?.into();
+    let r: i32 = talk.env(GET_TALK_LIST_MENU_RESULT)?.into();
     if menu == 1 && generic == 0 {
+        m.open_frames += 1;
+        if m.result_frame.is_none() && r != m.open_result {
+            m.result_frame = Some(m.open_frames);
+        }
         return Ok(());
     }
-    let r: i32 = talk.env(GET_TALK_LIST_MENU_RESULT)?.into();
+    // How long the game took to close its list after the choice (Esc may
+    // play a longer close than a choice): measured for the log.
+    log_info(&format!(
+        "talk menu: list closed after {} frames (result {r}, first seen at frame {})",
+        m.open_frames,
+        m.result_frame.map_or_else(|| "-".to_string(), |f| f.to_string())
+    ));
     let chosen = (r >= 1).then(|| m.rows.get(r as usize - 1).copied()).flatten();
     let level = m.stack.last().copied();
     // Closed without a choice because the player died: close instead of

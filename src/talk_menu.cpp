@@ -51,6 +51,7 @@ std::uint32_t erui_talk_replace_page(ERUI_TalkMenu* menu, std::uint32_t page);
 std::uint32_t erui_talk_back(ERUI_TalkMenu* menu);
 std::uint32_t erui_talk_close(ERUI_TalkMenu* menu);
 std::uint32_t erui_talk_open(std::uint64_t entry);
+std::uint32_t erui_talk_open_at(std::uint64_t entry, std::uint32_t page);
 std::uint32_t erui_talk_is_open();
 void erui_talk_set_back_text(const std::uint16_t* text, std::size_t length);
 }
@@ -418,6 +419,12 @@ extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_TalkOpen(
     ERUI_TalkEntryHandle entry) {
     if (erui::talk::passive()) return ERUI_HOST_FAILED;
     return erui_talk_open(entry);
+}
+
+extern "C" ERUI_EXPORT ERUI_Result ERUI_CALL ERNativeUIFork_TalkOpenAt(
+    ERUI_TalkEntryHandle entry, std::uint32_t page) {
+    if (erui::talk::passive()) return ERUI_HOST_FAILED;
+    return erui_talk_open_at(entry, page);
 }
 
 extern "C" ERUI_EXPORT std::uint32_t ERUI_CALL ERNativeUIFork_TalkIsOpen() {

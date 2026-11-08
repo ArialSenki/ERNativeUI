@@ -319,6 +319,7 @@ ERUI_Result ERNativeUIFork_TalkClose(ERUI_TalkMenu* menu);
 
 /* any thread */
 ERUI_Result ERNativeUIFork_TalkOpen(ERUI_TalkEntryHandle entry); /* 0: the top list */
+ERUI_Result ERNativeUIFork_TalkOpenAt(ERUI_TalkEntryHandle entry, uint32_t page); /* r157 */
 uint32_t    ERNativeUIFork_TalkIsOpen(void);
 ```
 
@@ -345,6 +346,10 @@ uint32_t    ERNativeUIFork_TalkIsOpen(void);
   frame where it may open (another menu still closing, no player yet), then
   is dropped; while the menu is open it is ignored. `Close` + `TalkOpen`
   from `choose` reopens the menu on the next frame.
+- `TalkOpenAt` opens at one of your pages (for example the list a choice
+  came from, after `Close` to show a game menu): Back from it goes to your
+  first page. Page 0 is `TalkOpen`; with entry 0, `ERUI_INVALID_ARGUMENT`.
+  Look it up with `GetProcAddress`; an older fork has only `TalkOpen`.
 - Up to 48 providers.
 
 Texts are served by a chained SafetyHook inline hook on the game's message

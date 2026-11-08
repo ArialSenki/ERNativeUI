@@ -53,6 +53,10 @@ typedef ERUI_Result(ERUI_CALL* ERNativeUIFork_TalkClose_Fn)(ERUI_TalkMenu* menu)
 /* Opens the menu on the next frame it may (in a game, no other menu open):
  * at `entry`'s first page, or the top list for ERUI_INVALID_TALK_ENTRY. */
 typedef ERUI_Result(ERUI_CALL* ERNativeUIFork_TalkOpen_Fn)(ERUI_TalkEntryHandle entry);
+/* As TalkOpen, at `page` of `entry` (r157): Back from it goes to the
+ * entry's first page; page 0 is TalkOpen. */
+typedef ERUI_Result(ERUI_CALL* ERNativeUIFork_TalkOpenAt_Fn)(
+    ERUI_TalkEntryHandle entry, uint32_t page);
 /* 1 while the talk menu is open, else 0. */
 typedef uint32_t(ERUI_CALL* ERNativeUIFork_TalkIsOpen_Fn)(void);
 
